@@ -544,6 +544,27 @@ pub struct TextAttrs {
     /// back. Kept for a free text, a text box and a label (a directive label hides the choice: `DIALOG_LABEL_PROPERTIES`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The text's own pen (`EDA_TEXT::GetTextThickness`, `(thickness ..)` in `(font ..)`): the Properties panel's Auto Thickness unticked
+    /// (`SetAutoThickness( false )`: the pen it was drawn with, `GetEffectiveTextPenWidth()`), `Some(0)` ticked on a bold text (whose pen is otherwise the
+    /// bold one `SetBold` gives it), `None` the pen KiCad gives the text for its size and weight. A change of bold drops it, as `SetBold` sets the stroke font's
+    /// pen anew. Kept for a free text, a label and a text box. Additive (UI-LEFT-3 S3-32).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
+    pub thickness_nm: Option<Nm>,
+}
+
+impl TextAttrs {
+    /// `EDA_TEXT::GetAutoThickness` of a text whose bold is `bold`: no pen of its own (a bold text has the bold one `SetBold` gave it, so it is not automatic).
+    pub fn auto_thickness(&self, bold: bool) -> bool {
+        match self.thickness_nm {
+            Some(t) => t == Nm::ZERO,
+            None => !bold,
+        }
+    }
+
+    /// The pen the text is drawn with when it has one of its own (`GetTextThickness() > 1`).
+    pub fn own_pen(&self) -> Option<Nm> {
+        self.thickness_nm.filter(|t| *t > Nm::new(1))
+    }
 }
 
 /// See [`SchExtras::sheet_props`]: Sheet Properties' Style (`m_borderWidth`, `m_borderSwatch`, `m_backgroundSwatch`) and Attributes (the four checks).

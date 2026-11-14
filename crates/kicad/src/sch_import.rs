@@ -731,7 +731,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
     // each label's font colour and face, parallel to `labels` (`SchExtras::text_attrs`, r7 M5)
-    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>)> = Vec::new();
+    let mut label_colors: Vec<(Option<eda_model::sch_extras::SchColor>, Option<String>, Option<Nm>)> = Vec::new();
     // each label's field places when they are not autoplaced, parallel to `labels` (`field_layout` under the label's id, `eda_engine::label_fields`)
     let mut label_field_places: Vec<Option<Vec<eda_model::ir::FieldPlacement>>> = Vec::new();
     // each label's own fields (`parseSchText`'s properties), parallel to `labels`
@@ -766,7 +766,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
             let attrs = crate::sch_extras_io::read_text_attrs(l);
-            label_colors.push((attrs.color, attrs.font));
+            label_colors.push((attrs.color, attrs.font, attrs.thickness_nm));
             label_fields_read.push(crate::label_fields::read_label_fields(l, tag == "global_label"));
             label_isr_looks.push(if tag == "global_label" { crate::label_fields::read_intersheet_refs_look(l) } else { None });
             label_field_looks.push(crate::label_fields::read_label_field_looks(l, tag == "global_label"));
@@ -1057,7 +1057,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         // no entry.
         let attrs = sch.texts.iter().map(|t| t.id.clone()).zip(text_attrs)
             .chain(sch.extras.graphics.iter().map(|g| g.id.clone()).zip(graphic_attrs))
-            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font)| eda_model::sch_extras::TextAttrs { color, font, ..Default::default() })));
+            .chain(sch.labels.iter().map(|l| l.id.clone()).zip(label_colors.into_iter().map(|(color, font, thickness_nm)| eda_model::sch_extras::TextAttrs { color, font, thickness_nm, ..Default::default() })));
         for (id, a) in attrs.filter(|(id, a)| !id.is_empty() && !a.is_default()).collect::<Vec<_>>() {
             sch.extras.text_attrs.insert(id, a);
         }

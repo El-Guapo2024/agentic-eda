@@ -395,6 +395,19 @@ const LABEL_SIZE_NM = 1_270_000;
 const TEXT_PROPS = "Text Properties";
 const SHAPE_PROPS = "Shape Properties";
 
+/** `EDA_TEXT::GetAutoThickness` of a text with its own pen `own` (`TextAttrs::thickness_nm`) and bold `bold`: no pen of its own; with none kept, a bold text's
+ *  is the bold one `SetBold` gave it, so it is not automatic. */
+export function autoThickness(own: number | null | undefined, bold: boolean): boolean {
+  return own === null || own === undefined ? !bold : own === 0;
+}
+
+/** `SetAutoThickness( false )`: the pen it keeps, `GetEffectiveTextPenWidth()` with no default -- a fifth of the size once bold, else an eighth, clamped to a quarter
+ *  (`GetPenSizeForBold`, `GetPenSizeForNormal`, `ClampTextPenSize`), in eeschema's units. */
+export function ownPenOf(size: number, bold: boolean): number {
+  const pen = bold ? kiRound(size / 5 / 100) * 100 : kiRound(size / 8 / 100) * 100;
+  return Math.min(pen, kiRound((size * 0.25) / 100) * 100);
+}
+
 function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   const pm = new PropertyManager<SchItem, SchCtx, Cmd>();
   const add = (def: PD, group = "") => pm.addProperty(def, group);
@@ -636,8 +649,27 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   );
   /** Bold, the way each kind keeps it. */
   const boldOf = (i: SchItem): boolean => !!(i.text?.bold ?? i.label?.bold ?? (isTextBox(i) ? textBox(i).bold : false));
-  // "Auto Thickness": a schematic text has no pen of its own here -- KiCad's for its size, `GetPenSizeForBold` once bold (`EDA_TEXT::SetBold`).
-  add({ owner: "EDA_TEXT", name: "Auto Thickness", kind: "bool", get: (i) => !boldOf(i), readOnlyReason: "A schematic text keeps no pen of its own here: KiCad's for its size (a bold one's is GetPenSizeForBold)." }, TEXT_PROPS);
+  // "Auto Thickness" (`EDA_TEXT::GetAutoThickness` / `SetAutoThickness`; `SCH_TEXT_DESC` and `SCH_TEXTBOX_DESC` mask the Thickness row, not this one): a free text's,
+  // a label's or a text box's own pen (`TextAttrs::thickness_nm`). Unticked, the text keeps the pen it is drawn with (`SetTextThickness(
+  // GetEffectiveTextPenWidth() )`); ticked, none of its own. A bold text has the bold pen `SetBold` gave it, so it is not automatic until ticked.
+  const ownPen = (i: SchItem, c: SchCtx): number | null | undefined => i.text?.thickness_nm ?? i.label?.thickness_nm ?? (isTextBox(i) ? graphicAttrs(i, c)?.thickness_nm : undefined);
+  const textSizeOf = (i: SchItem): number => (i.text?.size_nm ?? i.label?.size_nm ?? (isTextBox(i) ? textBox(i).size_nm : 0)) || 1_270_000;
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Auto Thickness",
+      kind: "bool",
+      get: (i, c) => autoThickness(ownPen(i, c), boldOf(i)),
+      writeable: (i, c) => (!!i.text || !!i.label || isTextBox(i)) && !c.locked.has(i.id),
+      readOnlyReason: (i) => (i.text || i.label || isTextBox(i) ? LOCKED : "Only a free text, a label or a text box keeps a pen of its own here."),
+      set: (i, v, c) => {
+        const on = Boolean(v);
+        if (autoThickness(ownPen(i, c), boldOf(i)) === on) return [];
+        return [{ op: "sch_edit", verb: "set_text_attrs", ids: [i.id], thickness_nm: on ? 0 : ownPenOf(textSizeOf(i), boldOf(i)) } as Cmd];
+      },
+    },
+    TEXT_PROPS
+  );
   add({ owner: "EDA_TEXT", name: "Thickness", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
   const flag = (name: "Italic" | "Bold", key: "italic" | "bold"): void => {
     add(
@@ -659,8 +691,9 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   };
   flag("Italic", "italic");
   flag("Bold", "bold");
-  // A text box has the row (`SCH_TEXTBOX_DESC` masks the width, height and pen, not the mirror); no schematic text is mirrored here.
-  add({ owner: "EDA_TEXT", name: "Mirrored", kind: "bool", get: () => false, readOnlyReason: "A schematic text box is not mirrored here." }, TEXT_PROPS);
+  // A text box has the row (`SCH_TEXTBOX_DESC` masks the width, height and pen, not the mirror). **Differs**: read-only, as KiCad's reader drops it
+  // (`parseEDA_TEXT`: "Do not set mirror property for schematic text elements"), so a mirror set here would not reach the file kicad-cli plots.
+  add({ owner: "EDA_TEXT", name: "Mirrored", kind: "bool", get: () => false, readOnlyReason: "KiCad does not keep a schematic text's mirror in its file (its reader drops it), so it is not set here." }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Visible", kind: "bool", get: () => true, available: () => false }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Width", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
   add({ owner: "EDA_TEXT", name: "Height", kind: "int", display: "size", get: () => 0 }, TEXT_PROPS);
@@ -1153,8 +1186,8 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
   pm.inheritsAfter("SCH_RULE_AREA", "SCH_SHAPE");
   pm.inheritsAfter("SCH_RULE_AREA", "SCH_ITEM");
   pm.inheritsAfter("SCH_RULE_AREA", "EDA_SHAPE");
-  pm.overrideWriteability("SCH_RULE_AREA", "EDA_SHAPE", "Fill", () => false, "A rule area is drawn as an outline here: its fill is not edited.");
-  pm.overrideWriteability("SCH_RULE_AREA", "EDA_SHAPE", "Fill Color", () => false, "A rule area is drawn as an outline here: its fill is not edited.");
+  // its Fill and Fill Color are `EDA_SHAPE_DESC`'s, as a shape's (`SCH_RULE_AREA_DESC` inherits them): drawn in the fill colour, else `LAYER_RULE_AREAS`
+  // (`SCH_PAINTER::getRenderColor`), written in its polyline's `(fill ..)`
   const rule = (i: SchItem): Extract<SchGraphicShape, { type: "rule_area" }> => i.graphic!.shape as Extract<SchGraphicShape, { type: "rule_area" }>;
   const ruleFlag = (name: string, key: "exclude_from_board" | "exclude_from_sim" | "exclude_from_bom" | "dnp"): void => {
     add(
@@ -1284,7 +1317,11 @@ function symbolFieldNames(i: SchItem): string[] {
     const names = i.symbol.fields?.map((f) => f.name) ?? ["Reference", "Value", "Footprint", "Datasheet"];
     return names.some((n) => n.toLowerCase() === "description") ? names : [...names, "Description"];
   }
-  return i.power?.fields?.map((f) => f.name) ?? ["Reference", "Value"];
+  // a power symbol is an `SCH_SYMBOL` too: its five mandatory fields (its Footprint, Datasheet and Description are `SchExtras::power_props`', the Description a user
+  // field of that name there) and its user fields
+  const user = (i.power?.props?.fields ?? []).map((f) => f.name);
+  const names = ["Reference", "Value", "Footprint", "Datasheet", ...user];
+  return names.some((n) => n.toLowerCase() === "description") ? names : [...names, "Description"];
 }
 
 const sheetFieldNames = (i: SchItem): string[] => i.sheet!.fields?.map((f) => f.name) ?? ["Sheetname", "Sheetfile"];
@@ -1295,7 +1332,24 @@ function symbolFieldText(i: SchItem, name: string): string {
   if (f) return f.text;
   if (i.symbol && name === "Footprint") return i.symbol.footprint ?? "";
   if (i.symbol && name === "Datasheet") return i.symbol.datasheet ?? "";
+  if (i.power && name === "Footprint") return i.power.props?.footprint ?? "";
+  if (i.power && name === "Datasheet") return i.power.props?.datasheet ?? "";
+  if (i.power) return i.power.props?.fields?.find((x) => x.name === name)?.text ?? "";
   return "";
+}
+
+/**
+ * `SCH_SYMBOL_FIELD_PROPERTY::setter` on a power symbol (UI-LEFT-3 S3-32): its Footprint and Datasheet are its `set_power_props`' own, any other field (the
+ * Description among them) one of its user fields (the whole list, `set_power_props`), added hidden when it has none (`AddField`: a new field is not shown). Its
+ * Reference and Value are the Basic rows' (the Value the net it asserts).
+ */
+function powerFieldCmds(p: PowerSymbol, name: string, text: string): Cmd[] {
+  if (name === "Footprint" || name === "Datasheet") return [{ op: "sch_edit", verb: "set_power_props", id: p.id, [name.toLowerCase()]: text } as unknown as Cmd];
+  const fields = [...(p.props?.fields ?? [])].map((f) => ({ name: f.name, text: f.text, visible: f.visible ?? true, italic: !!f.italic }));
+  const k = fields.findIndex((f) => f.name === name);
+  if (k >= 0) fields[k] = { ...fields[k]!, text };
+  else fields.push({ name, text, visible: false, italic: false });
+  return [{ op: "sch_edit", verb: "set_power_props", id: p.id, fields } as unknown as Cmd];
 }
 
 /** `SCH_SYMBOL_FIELD_PROPERTY`: a field of the selected symbols as a row of "Fields"; setting it on a symbol that lacks the field adds it (`AddField`). */
@@ -1306,12 +1360,13 @@ function symbolFieldProperty(name: string): PD {
     kind: "string",
     get: (i) => symbolFieldText(i, name),
     available: () => currentSymbolFields.has(name),
-    writeable: (i) => !!i.symbol,
-    readOnlyReason: "A power symbol's fields are its Reference and Value.",
+    writeable: (i) => !!i.symbol || (!!i.power && name !== "Reference"),
+    readOnlyReason: "A power symbol's reference is not edited: its value is the net it stands for.",
     set: (i, v, c) => {
-      const s = i.symbol!;
       const text = String(v);
       if (symbolFieldText(i, name) === text) return [];
+      if (i.power) return powerFieldCmds(i.power, name, text);
+      const s = i.symbol!;
       // a field's text in the current variant (`SCH_SYMBOL_FIELD_PROPERTY::setter` -> `SetFieldText( .., GetCurrentVariant() )`); the Reference is no variant's
       const inVariant = name === "Reference" ? null : variantEdit(c, s.id, { field: [name, text] });
       if (inVariant) return inVariant;

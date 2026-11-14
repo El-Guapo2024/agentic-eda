@@ -412,7 +412,7 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
     let (m, d) = board(s);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string), font: None, exclude_from_sim: None };
+    let attrs = |ids_: &[&str], bold, italic, color, href: Option<&str>| SchCmd::SetTextAttrs { ids: ids(ids_), bold, italic, color, href: href.map(str::to_string), font: None, exclude_from_sim: None, thickness_nm: None };
     ok(&mut b, attrs(&["txt_a"], Some(true), None, Some(red()), Some(" https://kicad.org ")));
     let a = &sch_of(&b).extras.text_attrs["txt_a"];
     assert_eq!((a.bold, a.italic, a.color, a.href.as_deref()), (true, false, Some(red()), Some("https://kicad.org")));
@@ -425,6 +425,33 @@ fn set_text_attrs_keeps_a_free_texts_bold_italic_colour_and_hyperlink_and_a_labe
     assert_eq!(err(&mut b, attrs(&["lbl_l"], Some(true), None, None, None)), "ops_bad_text", "a label's bold is Label Properties'");
     assert_eq!(err(&mut b, attrs(&["nope"], None, None, Some(red()), None)), "ops_unknown_item");
     assert_eq!(err(&mut b, attrs(&["txt_a"], Some(false), None, None, None)), "ops_nothing_to_change");
+}
+
+/// UI-LEFT-3 S3-32: Auto Thickness (`EDA_TEXT::SetAutoThickness`): unticked, the text keeps a pen of its own; ticked, none (a bold text keeps the mark, its bold
+/// pen being otherwise implied); a change of bold drops it (`SetBold` sets the stroke font's pen anew); a label's too.
+#[test]
+fn auto_thickness_keeps_a_texts_own_pen_and_a_change_of_bold_drops_it() {
+    let mut s = text_sheet();
+    s.labels.push(NetLabel { id: "lbl_l".into(), net: "A".into(), at: p(mm(5.08), Nm::ZERO), kind: LabelKind::Local });
+    let (m, d) = board(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let pen = |id: &str, t: Nm| SchCmd::SetTextAttrs { ids: ids(&[id]), bold: None, italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: Some(t) };
+    let bold = |on: bool| SchCmd::SetTextAttrs { ids: ids(&["txt_a"]), bold: Some(on), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None };
+    ok(&mut b, pen("txt_a", mm(0.3)));
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(mm(0.3)));
+    assert!(!sch_of(&b).extras.text_attrs["txt_a"].auto_thickness(false));
+    ok(&mut b, pen("txt_a", Nm::ZERO));
+    assert!(!sch_of(&b).extras.text_attrs.contains_key("txt_a"), "ticked on a text that is not bold: nothing of its own");
+    ok(&mut b, pen("txt_a", mm(0.3)));
+    ok(&mut b, bold(true));
+    let a = &sch_of(&b).extras.text_attrs["txt_a"];
+    assert_eq!((a.bold, a.thickness_nm), (true, None), "SetBold: the bold pen");
+    assert!(!a.auto_thickness(true));
+    ok(&mut b, pen("txt_a", Nm::ZERO));
+    assert_eq!(sch_of(&b).extras.text_attrs["txt_a"].thickness_nm, Some(Nm::ZERO), "ticked on a bold text");
+    assert!(sch_of(&b).extras.text_attrs["txt_a"].auto_thickness(true));
+    ok(&mut b, pen("lbl_l", mm(0.2)));
+    assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].thickness_nm, Some(mm(0.2)));
 }
 
 #[test]
@@ -469,7 +496,7 @@ fn set_exclude_from_pos_files_marks_every_placed_unit_of_the_reference() {
 // ------------------------------------------------------------------- Text, Label and Text Box Properties' looks (UI-LEFT S6, task-u3-schtext)
 
 fn text_attrs_cmd(ids_: &[&str], font: Option<&str>, href: Option<&str>, exclude: Option<bool>, color: Option<SchColor>) -> SchCmd {
-    SchCmd::SetTextAttrs { ids: ids(ids_), bold: None, italic: None, color, href: href.map(str::to_string), font: font.map(str::to_string), exclude_from_sim: exclude }
+    SchCmd::SetTextAttrs { ids: ids(ids_), bold: None, italic: None, color, href: href.map(str::to_string), font: font.map(str::to_string), exclude_from_sim: exclude, thickness_nm: None }
 }
 
 #[test]
@@ -493,7 +520,7 @@ fn the_text_dialogs_font_link_and_simulation_exclusion_are_kept_and_default_font
     // a text box takes a font, a colour, a link and the exclusion; its bold is its shape's
     ok(&mut b, text_attrs_cmd(&["shp_tb"], Some("DejaVu Sans"), Some("https://kicad.org"), Some(true), Some(red())));
     assert_eq!(sch_of(&b).extras.text_attrs["shp_tb"].font.as_deref(), Some("DejaVu Sans"));
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["shp_tb"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["shp_tb"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text");
     // a label takes a font and a colour, not a link or the exclusion
     ok(&mut b, text_attrs_cmd(&["lbl_l"], Some("DejaVu Sans"), None, None, None));
     assert_eq!(sch_of(&b).extras.text_attrs["lbl_l"].font.as_deref(), Some("DejaVu Sans"));
@@ -793,7 +820,7 @@ fn a_directive_label_takes_a_font_and_a_colour_and_nothing_else_of_set_text_attr
     assert_eq!((a.font.as_deref(), a.color), (Some("KiCad Font"), Some(red())));
     // its italic, bold and link are (`SCH_DIRECTIVE_LABEL_DESC`, `SCH_LABEL_BASE_DESC`)
     assert_eq!(err(&mut b, text_attrs_cmd(&["dirl_a"], None, Some("#1"), None, None)), "ops_bad_text");
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["dirl_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["dirl_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text");
 }
 
 #[test]
@@ -853,10 +880,10 @@ fn a_sheet_pins_font_and_colour_are_set_text_attrs_and_go_with_the_pin() {
     root.sheets.push(s);
     let m = ConstraintModel::default();
     let mut b = Board::new(design(root), &m, mm(0.1), mm(0.3));
-    ok(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: None, italic: None, color: Some(red()), href: None, font: Some("KiCad Font".into()), exclude_from_sim: None });
+    ok(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: None, italic: None, color: Some(red()), href: None, font: Some("KiCad Font".into()), exclude_from_sim: None, thickness_nm: None });
     let a = &sch_of(&b).extras.text_attrs["spin_a"];
     assert_eq!((a.color, a.font.as_deref()), (Some(red()), Some("KiCad Font")));
-    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None }), "ops_bad_text", "a pin's bold is Sheet Pin Properties' edit_sheet_pin");
+    assert_eq!(err(&mut b, SchCmd::SetTextAttrs { ids: ids(&["spin_a"]), bold: Some(true), italic: None, color: None, href: None, font: None, exclude_from_sim: None, thickness_nm: None }), "ops_bad_text", "a pin's bold is Sheet Pin Properties' edit_sheet_pin");
     ok(&mut b, SchCmd::DeleteSheetPin { id: "spin_a".into() });
     assert!(sch_of(&b).extras.text_attrs.is_empty());
 }

@@ -300,6 +300,10 @@ pub enum SchCmd {
         font: Option<String>,
         #[serde(default)]
         exclude_from_sim: Option<bool>,
+        /// The Properties panel's Auto Thickness (`EDA_TEXT::SetAutoThickness`) of a free text, a label or a text box: 0 ticks it (no pen of its own), any
+        /// other value is the pen it keeps once unticked (`GetEffectiveTextPenWidth()`, which the panel sends). Refused for another item (UI-LEFT-3 S3-32).
+        #[serde(default)]
+        thickness_nm: Option<Nm>,
     },
     /// Sheet Properties' Style and Attributes (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`: `SetBorderWidth`, `SetBorderColor`, `SetBackgroundColor`,
     /// `SetExcludedFromSim`, `SetExcludedFromBOM`, `SetExcludedFromBoard`, `SetDNP`) and the Properties panel's rows of a sheet (`SCH_SHEET_DESC`), kept in
@@ -834,7 +838,7 @@ impl<'a> Board<'a> {
                 }
                 self.apply_sch_edit(&SchCmd::DeleteSheet { id: id.clone() })
             }
-            SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim }),
+            SchCmd::SetTextAttrs { ids, bold, italic, color, href, font, exclude_from_sim, thickness_nm } => self.set_sch_text_attrs(ids, &crate::sch_props::TextAttrsEdit { bold: *bold, italic: *italic, color: *color, href: href.clone(), font: font.clone(), exclude_from_sim: *exclude_from_sim, thickness_nm: *thickness_nm }),
             SchCmd::SetLineEnds { id, start, end } => self.set_sch_line_ends(id, *start, *end),
             SchCmd::SetImageOffset { id, offset } => self.set_image_offset(id, *offset),
             SchCmd::SetExcludeFromPosFiles { ids, exclude } => self.set_exclude_from_pos_files(ids, *exclude),
@@ -1165,6 +1169,12 @@ fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -
     graphic.id = id.to_string();
     if sch.extras.graphics[i] == graphic {
         return Err(vec![CheckResult::fail("ops_graphic_unchanged", id, "the graphic already has these properties")]);
+    }
+    // `EDA_TEXT::SetBold` on a text box: the stroke font's pen is set anew for the weight (its own pen goes, `TextAttrs::thickness_nm`)
+    if let (SchGraphicKind::TextBox { bold: now, .. }, SchGraphicKind::TextBox { bold: was, .. }) = (&graphic.shape, &sch.extras.graphics[i].shape) {
+        if now != was {
+            crate::sch_props::drop_own_pen(sch, id);
+        }
     }
     sch.extras.graphics[i] = graphic;
     Ok(())

@@ -144,7 +144,7 @@ function drawDirective(ctx: CanvasRenderingContext2D, view: ViewTransform, g: Sc
  * `shownText` is `SCH_TEXTBOX::GetShownText` (the server's `graphic_shown`), when a variable changes the stored text. Also draws the text of a placed symbol's library
  * text box (painter.ts `drawRealGraphic`).
  */
-export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string, face?: string | null, defaultPen = SCH_DEFAULT_PEN_NM): void {
+export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, color: string, shownText?: string, face?: string | null, defaultPen = SCH_DEFAULT_PEN_NM, thickness?: number | null): void {
   const s = g.shape;
   if (s.type !== "text_box") return;
   const widthNm = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
@@ -159,6 +159,7 @@ export function drawTextBoxText(ctx: CanvasRenderingContext2D, g: SchGraphic, co
     v: s.v_align ?? "top",
     bold: !!s.bold,
     italic: !!s.italic,
+    thickness_nm: thickness,
   };
   paintKicadText(ctx, schTextBoxDrawSpec(look, resolveFont(face, look.bold, look.italic), defaultPen), face, { color, record: g.id ? { tag: "sch", id: g.id } : undefined });
 }
@@ -172,7 +173,7 @@ export function paintGraphics(
   view: ViewTransform,
   graphics: readonly SchGraphic[],
   selection: ReadonlySet<string>,
-  textAttrs?: Readonly<Record<string, { color?: SchColor; font?: string | null; bold?: boolean }>>,
+  textAttrs?: Readonly<Record<string, { color?: SchColor; font?: string | null; bold?: boolean; thickness_nm?: number | null }>>,
   shown?: Readonly<Record<string, string>>,
   defaultPen = SCH_DEFAULT_PEN_NM
 ): void {
@@ -210,17 +211,11 @@ export function paintGraphics(
       ctx.restore();
     } else if (fill !== "none" && g.shape.type !== "arc" && g.shape.type !== "bezier") {
       tracePath(ctx, g);
-      ctx.fillStyle = fill === "color" && g.fill_color ? rgba(g.fill_color) : fill === "background" ? layerColor("LAYER_NOTES_BACKGROUND") : strokeColor(g, false);
+      // `getRenderColor`'s background layer: the fill colour, else (unspecified) a rule area's `LAYER_RULE_AREAS`, a shape's stroke colour
+      ctx.fillStyle = fill === "color" && g.fill_color && g.fill_color.a > 0 ? rgba(g.fill_color) : fill === "background" ? layerColor("LAYER_NOTES_BACKGROUND") : strokeColor(g, false);
       ctx.fill();
     }
-    // A rule area is always shown with a faint body so it reads as an area (the creation preview's own 0.2 alpha).
-    if (g.shape.type === "rule_area" && fill === "none") {
-      tracePath(ctx, g);
-      ctx.globalAlpha = 0.08;
-      ctx.fillStyle = color;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
+    // (a rule area with no fill is its outline alone, as `SCH_PAINTER::draw( SCH_SHAPE )` draws `NO_FILL`)
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(selected ? widthNm * 1.6 : widthNm, hair * (selected ? 2.5 : 1));
     const dash = g.shape.type === "rule_area" && !g.line_style ? dashPattern("dash", widthNm) : dashPattern(g.line_style, widthNm);
@@ -230,7 +225,7 @@ export function paintGraphics(
     ctx.setLineDash([]);
     // `SCH_PAINTER::getRenderColor` for an `SCH_TEXTBOX`: its own text colour (Text Box Properties' Color) wins over `LAYER_NOTES`
     const own = textAttrs?.[g.id]?.color;
-    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id], textAttrs?.[g.id]?.font, defaultPen);
+    if (g.shape.type === "text_box") drawTextBoxText(ctx, g, selected ? color : own && own.a > 0 && !overrideSchItemColors() ? rgba(own) : layerColor("LAYER_NOTES"), shown?.[g.id], textAttrs?.[g.id]?.font, defaultPen, textAttrs?.[g.id]?.thickness_nm);
     ctx.restore();
   }
 }

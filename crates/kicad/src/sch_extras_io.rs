@@ -104,10 +104,11 @@ pub(crate) fn text_effects_with(size_nm: Nm, j: eda_model::sch_extras::SchTextJu
 /// has one; otherwise as [`text_effects_with`] writes it.
 pub(crate) fn free_text_effects(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir::SchematicText, attrs: &eda_model::sch_extras::TextAttrs) -> String {
     let effects = text_effects_with(t.size_nm, sch.extras.text_justify_of(&t.id), attrs);
-    match sch.extras.text_widths.get(&t.id) {
+    let effects = match sch.extras.text_widths.get(&t.id) {
         Some(w) => effects.replacen(&format!("(size {0} {0})", sch_mm(t.size_nm)), &format!("(size {} {})", sch_mm(t.size_nm), sch_mm(*w)), 1),
         None => effects,
-    }
+    };
+    with_own_pen(effects, Some(attrs))
 }
 
 /// What a free-standing text's `(effects ...)` and `(at x y angle)` say about how it lies: the text's angle made upright (`KeepUpright`: along the sheet or up
@@ -249,7 +250,7 @@ pub(crate) fn write_graphics(out: &mut String, sch: &SchematicSection) {
                     sch_mm(mb),
                     stroke_str(g),
                     fill_str(g),
-                    effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref(), attrs.font.as_deref())
+                    with_own_pen(effects_with(*size_nm, *bold, *italic, *h_align, *v_align, attrs.color, attrs.href.as_deref(), attrs.font.as_deref()), Some(&attrs))
                 );
             }
             SchGraphicKind::Image { at, scale_ppm, data } => {
@@ -351,7 +352,25 @@ pub(crate) fn read_text_attrs(item: &[Sexpr]) -> eda_model::sch_extras::TextAttr
         color,
         // `parseEDA_TEXT`'s `T_face`: the font the text is set in (`SetFont`); none is the default one
         font: effects.and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(String::from),
+        thickness_nm: read_own_pen(item, look.size_nm, look.bold),
     }
+}
+
+/// `parseEDA_TEXT`'s `(thickness t)` (`SetTextThickness`) as the text's own pen ([`eda_model::sch_extras::TextAttrs::thickness_nm`]), but the bold pen a bold text's
+/// `SetBold` gives it (`GetPenSizeForBold`), which the bold flag implies (written back without it, the text is drawn with the same pen).
+fn read_own_pen(item: &[Sexpr], size_nm: Nm, bold: bool) -> Option<Nm> {
+    let t = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(crate::import::sch_mm_to_nm)?;
+    let bold_pen = Nm::new(((size_nm.as_f64() / 100.0 / 5.0).round() as i64) * 100);
+    (t > Nm::ZERO && !(bold && t == bold_pen)).then_some(t)
+}
+
+/// `EDA_TEXT::Format`'s `(thickness t)` after the size, when the text has a pen of its own (`!GetAutoThickness()`; `Some(0)` writes none).
+pub(crate) fn with_own_pen(effects: String, attrs: Option<&eda_model::sch_extras::TextAttrs>) -> String {
+    let Some(t) = attrs.and_then(|a| a.own_pen()) else { return effects };
+    let Some(at) = effects.find("(size ") else { return effects };
+    let Some(end) = effects[at..].find(')') else { return effects };
+    let cut = at + end + 1;
+    format!("{} (thickness {}){}", &effects[..cut], sch_mm(t), &effects[cut..])
 }
 
 pub(crate) fn read_effects(item: &[Sexpr]) -> EffectsLook {

@@ -2492,7 +2492,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     net_of_pin(&pin_net, &reference, &number).map(str::to_string)
                 })
             });
-            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "fields_hand_placed": eda_engine::label_fields::hand_placed(&sch, &l.id), "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color), "font": sch.extras.text_attrs.get(&l.id).and_then(|a| a.font.clone()) })
+            json!({ "id": l.id, "net": l.net, "net_name": traced, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_nm": look.text_size_nm(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate, "fields": fields, "fields_hand_placed": eda_engine::label_fields::hand_placed(&sch, &l.id), "color": sch.extras.text_attrs.get(&l.id).and_then(|a| a.color), "font": sch.extras.text_attrs.get(&l.id).and_then(|a| a.font.clone()), "thickness_nm": sch.extras.text_attrs.get(&l.id).and_then(|a| a.thickness_nm) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -2956,6 +2956,8 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
         "italic": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.italic),
         "color": sch.extras.text_attrs.get(&t.id).and_then(|a| a.color),
         "href": sch.extras.text_attrs.get(&t.id).and_then(|a| a.href.clone()),
+        // its own pen (`TextAttrs::thickness_nm`: Auto Thickness unticked; 0 ticked on a bold text)
+        "thickness_nm": sch.extras.text_attrs.get(&t.id).and_then(|a| a.thickness_nm),
         // the font Text Properties chose (absent: the default) and "Exclude from simulation"
         "font": sch.extras.text_attrs.get(&t.id).and_then(|a| a.font.clone()),
         "exclude_from_sim": sch.extras.text_attrs.get(&t.id).is_some_and(|a| a.exclude_from_sim),

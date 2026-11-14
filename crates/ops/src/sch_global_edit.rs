@@ -524,6 +524,10 @@ fn edit_text_attrs(sch: &mut SchematicSection, id: &str, spec: &GlobalEditSpec, 
             a.italic = i;
         }
         if let Some(b) = spec.bold {
+            // `EDA_TEXT::SetBold`: a stroke font's pen set anew for the weight (the text's own pen goes)
+            if a.bold != b {
+                a.thickness_nm = None;
+            }
             a.bold = b;
         }
     }
@@ -672,6 +676,9 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     l.bold = b;
                 }
                 let mut here = false;
+                if l.bold != before.bold {
+                    crate::sch_props::drop_own_pen(sch, id);
+                }
                 if l != before {
                     here = true;
                     if l.is_default() {
@@ -831,7 +838,11 @@ fn apply_screen(sch: &mut SchematicSection, model: &eda_model::ConstraintModel, 
                     g.fill = if g.fill_color.is_some() { SchFill::Color } else { SchFill::None };
                 }
                 let text_box = matches!(g.shape, SchGraphicKind::TextBox { .. });
+                let rebolded = matches!((&g.shape, &before.shape), (SchGraphicKind::TextBox { bold: a, .. }, SchGraphicKind::TextBox { bold: b, .. }) if a != b);
                 changed |= *g != before;
+                if rebolded {
+                    crate::sch_props::drop_own_pen(sch, id);
+                }
                 if text_box {
                     changed |= edit_text_attrs(sch, id, spec, false);
                 }

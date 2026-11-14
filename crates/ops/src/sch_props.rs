@@ -136,6 +136,28 @@ pub(crate) struct TextAttrsEdit {
     pub href: Option<String>,
     pub font: Option<String>,
     pub exclude_from_sim: Option<bool>,
+    pub thickness_nm: Option<Nm>,
+}
+
+/// `EDA_TEXT::SetBold` of a stroke font's text: the pen is set anew for the new weight, so the text's own pen (Auto Thickness unticked) goes.
+pub(crate) fn drop_own_pen(sch: &mut eda_model::ir::SchematicSection, id: &str) {
+    if let Some(a) = sch.extras.text_attrs.get_mut(id) {
+        a.thickness_nm = None;
+        if a.is_default() {
+            sch.extras.text_attrs.remove(id);
+        }
+    }
+}
+
+/// Whether the free text, label or text box `id` is bold (a free text's in `attrs`, a label's in its look, a text box's in its shape).
+fn text_bold(sch: &eda_model::ir::SchematicSection, id: &str, attrs: &eda_model::sch_extras::TextAttrs) -> bool {
+    if sch.labels.iter().any(|l| l.id == id) {
+        return sch.extras.label_looks.get(id).is_some_and(|l| l.bold);
+    }
+    if let Some(g) = sch.extras.graphics.iter().find(|g| g.id == id) {
+        return matches!(g.shape, eda_model::sch_extras::SchGraphicKind::TextBox { bold: true, .. });
+    }
+    attrs.bold
 }
 
 /// What [`SchCmd::SetSheetProps`](crate::sch_edit::SchCmd::SetSheetProps) changes; a member left out is unchanged.
@@ -228,6 +250,10 @@ impl<'a> Board<'a> {
         }
         if let Some(i) = look.italic {
             now.italic = i;
+        }
+        // `SetBold`: the stroke font's pen set anew for the weight
+        if now.bold != before.bold {
+            drop_own_pen(sch, id);
         }
         if let Some(auto) = look.auto_rotate {
             now.auto_rotate = auto && auto_supported;
@@ -417,6 +443,11 @@ impl<'a> Board<'a> {
             if text_box && (edit.bold.is_some() || edit.italic.is_some()) {
                 return Err(fail("ops_bad_text", id, "a text box's bold and italic are set with its shape"));
             }
+            // Auto Thickness: `EDA_TEXT_DESC`'s row, which `SCH_TEXT_DESC` and `SCH_TEXTBOX_DESC` leave (they mask the Thickness row only); not a sheet pin's or a
+            // directive label's here
+            if (directive || sheet_pin) && edit.thickness_nm.is_some() {
+                return Err(fail("ops_bad_text", id, "only a free text, a label or a text box has an Auto Thickness row"));
+            }
             if sch.extras.is_locked(id) {
                 return Err(fail("ops_locked", id, "the item is locked"));
             }
@@ -425,6 +456,10 @@ impl<'a> Board<'a> {
         for id in ids {
             let mut a = sch.extras.text_attrs.get(id).cloned().unwrap_or_default();
             if let Some(b) = edit.bold {
+                // `EDA_TEXT::SetBold`: a stroke font's pen is set anew for the weight (the text's own pen goes)
+                if a.bold != b {
+                    a.thickness_nm = None;
+                }
                 a.bold = b;
             }
             if let Some(i) = edit.italic {
@@ -432,6 +467,12 @@ impl<'a> Board<'a> {
             }
             if let Some(c) = edit.color {
                 a.color = specified(c);
+            }
+            if let Some(t) = edit.thickness_nm {
+                // `SetAutoThickness( aAuto )`: ticked, no pen of its own (a bold text keeps the mark, its bold pen being otherwise implied); unticked, the pen
+                // it was drawn with
+                let bold = text_bold(sch, id, &a);
+                a.thickness_nm = if t > Nm::ZERO { Some(t) } else if bold { Some(Nm::ZERO) } else { None };
             }
             if let Some(h) = edit.href.as_deref() {
                 a.href = (!h.trim().is_empty()).then(|| h.trim().to_string());

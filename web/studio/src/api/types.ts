@@ -3450,6 +3450,8 @@ export interface BusEntry {
 export interface SchematicLabel {
   /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
   id: string;
+  /** Its own pen (`TextAttrs::thickness_nm`): Auto Thickness unticked; 0 ticked on a bold label; absent KiCad's for its size. */
+  thickness_nm?: Nm | null;
   /** The label's text. */
   net: string;
   /** The net the label is on as the tracer names it (`/sub/X`, `A_EN`), the wire's under it; absent or null for a label on no wire (r3 A3-M4). */
@@ -3528,6 +3530,8 @@ export interface SchematicText {
   size_nm: Nm;
   /** The glyph width when it is not the height (`SchExtras::text_widths`, `EDA_TEXT::GetTextWidth`); absent or null: as wide as it is high. */
   width_nm?: Nm | null;
+  /** Its own pen (`TextAttrs::thickness_nm`, `GetTextThickness`): the Properties panel's Auto Thickness unticked; 0 ticked on a bold text; absent KiCad's for its size. */
+  thickness_nm?: Nm | null;
   vertical?: boolean;
   h?: "left" | "center" | "right";
   v?: "top" | "center" | "bottom";
@@ -3686,7 +3690,7 @@ export interface Schematic {
   /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
   graphics?: SchGraphic[];
   /** A text box's and a directive label's font, colour, link and simulation exclusion (`SchExtras::text_attrs`), by the graphic's id; absent: KiCad's defaults. */
-  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean; bold?: boolean; italic?: boolean }>;
+  graphic_text_attrs?: Record<string, { font?: string; color?: import("./schEditTypes").SchColor; href?: string; exclude_from_sim?: boolean; bold?: boolean; italic?: boolean; thickness_nm?: number | null }>;
   /** An image's transform origin offset by its graphic's id (`REFERENCE_IMAGE::m_transformOriginOffset`, `SchExtras::image_offsets`): the point Scale scales it about, from its
    *  centre; absent: its centre. */
   image_offsets?: Record<string, PointXY>;
