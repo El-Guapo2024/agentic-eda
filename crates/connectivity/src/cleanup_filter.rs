@@ -83,8 +83,11 @@ impl CleanupFilter {
     pub fn protected(&self, design: &Design, model: &ConstraintModel) -> Protected {
         let mut out = Protected::default();
         let Some(rt) = design.routing.as_ref() else { return out };
+        // KiCad 25ec2335 `TRACKS_CLEANER::filterItem`: "A via stack owns its vias and connecting traces, and rebuilds them as a unit, so cleanup must not delete one
+        // out from under it" -- a microvia stack's members are filtered out whatever the filter says (UI-LEFT-3 X3-1)
+        let stacked: BTreeSet<&str> = design.drawings.iter().flat_map(|d| d.board_items.via_stacks.iter().flat_map(|s| s.member_ids.iter().map(String::as_str))).collect();
         for t in &rt.tracks {
-            let skipped = self.skips(design, model, &t.id, &t.net, &t.layer);
+            let skipped = stacked.contains(t.id.as_str()) || self.skips(design, model, &t.id, &t.net, &t.layer);
             if skipped {
                 out.filtered_tracks.insert(t.id.clone());
             }
@@ -93,7 +96,7 @@ impl CleanupFilter {
             }
         }
         for v in &rt.vias {
-            if is_locked(design, &v.id) || self.skips(design, model, &v.id, &v.net, via_top_layer(v, &model.board.layers)) {
+            if is_locked(design, &v.id) || stacked.contains(v.id.as_str()) || self.skips(design, model, &v.id, &v.net, via_top_layer(v, &model.board.layers)) {
                 out.vias.insert(v.id.clone());
             }
         }
@@ -294,6 +297,18 @@ mod tests {
         dr.locked_ids.push("g".into());
         // z1 is locked; w2 is in a locked group, so w1 -- its twin -- is the one that goes
         assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z2"]), ids(&["v1", "w1"])));
+    }
+
+    /// UI-LEFT-3 X3-1: KiCad 25ec2335 `TRACKS_CLEANER::filterItem` -- a microvia stack's vias and traces are never cleaned up; its members' twins still are.
+    #[test]
+    fn a_microvia_stacks_members_are_left_alone() {
+        let (mut design, model) = two_of_everything();
+        let dr = design.drawings.get_or_insert_with(DrawingsSection::default);
+        let mut st = eda_model::via_stack::MicroviaStack::new(Point { x: Nm::ZERO, y: Nm::ZERO });
+        st.id = "vsk_1".into();
+        st.member_ids = ids(&["z1", "v1", "w2"]);
+        dr.board_items.via_stacks.push(st);
+        assert_eq!(nulls_and_vias(&design, &model, &CleanupFilter::default()), (ids(&["z2"]), ids(&["v2", "w1"])));
     }
 
     #[test]

@@ -34,7 +34,8 @@
   const missing = v.detail.filter((d) => d.status === "missing");
   if (missing.length > 0) results.push({ name: `skipped ${missing.length} model(s) this machine's KiCad library lacks`, ok: true, notes: missing.map((d) => `${d.name}: ${d.error ?? "missing"}`) });
   check("every model that was asked for is in (but those the machine lacks)", v.models.requested > 0 && v.models.failed === 0 && v.models.ready > 0 && v.models.ready === v.models.requested - missing.length, v.models);
-  check("every part with models is drawn as its models", v.parts.total > 0 && v.parts.asModels + v.parts.asBoxes === v.parts.total && v.parts.asModels > 0, v.parts);
+  // (a part none of whose models is in is drawn as nothing, or as KiCad's placeholder with "Show parts without 3D model" on: UI-LEFT-3 X3-2)
+  check("every part with models is drawn as its models", v.parts.total > 0 && v.parts.asModels + v.parts.asBoxes + (v.parts.asNothing ?? 0) === v.parts.total && v.parts.asModels > 0, v.parts);
   check("the first real model came in seconds, not minutes", v.firstModelMs !== null && v.firstModelMs < 30000, v.firstModelMs);
   const state0 = __eda.state();
   check("no error was logged", __eda.errors().length === 0, __eda.errors().slice(0, 3));
