@@ -26,13 +26,23 @@ test("OK: a moved field's edit_field by the name it had, before edit_label; the 
   ]);
 });
 
-test("OK: fonts and colours after edit_label, by the field's name then; a new field's H / V Align", () => {
+test("OK: fonts and colours after edit_label, by the field's name then; a new field's place on a label placed by hand only", () => {
   const rows = labelGridRows([isr, nc], AT);
-  const changed = [{ ...rows[0]!, look: { ...rows[0]!.look, color: "#ff0000" } }, { ...rows[1]!, name: "Net Class", look: { ...rows[1]!.look, font: "KiCad Font" } }, { ...newLabelGridRow(9, { name: "Note", text: "x", visible: true, italic: false }), look: { ...newLabelGridRow(9, { name: "Note", text: "x", visible: true, italic: false }).look, h: "right" as const } }];
-  assert.deepEqual(labelLookCmds("g", changed), [
+  const added = newLabelGridRow(9, { name: "Note", text: "x", visible: true, italic: false }, rows[1]!.look);
+  const changed = [{ ...rows[0]!, look: { ...rows[0]!.look, color: "#ff0000" } }, { ...rows[1]!, name: "Net Class", look: { ...rows[1]!.look, font: "KiCad Font" } }, { ...added, look: { ...added.look, h: "right" as const, yMm: 2.54 } }];
+  const looks = [
     { op: "sch_edit", verb: "set_field_looks", ids: ["fld:g:Intersheetrefs"], color: { r: 255, g: 0, b: 0, a: 255 } },
     { op: "sch_edit", verb: "set_field_looks", ids: ["fld:g:Netclass"], font: "KiCad Font" },
-    { op: "sch_edit", verb: "edit_field", id: "fld:g:Note", h: "right", v: "center" },
-  ]);
-  assert.deepEqual(labelPlaceCmds("g", changed), [], "a new row has no place until OK");
+  ];
+  assert.deepEqual(labelLookCmds("g", changed), looks, "autoplaced: AutoplaceFields places the new field after OK");
+  assert.deepEqual(labelLookCmds("g", changed, true), [...looks, { op: "sch_edit", verb: "edit_field", id: "fld:g:Note", local_at: { x: 0, y: 2_540_000 }, local_vertical: false, h: "right", v: "center" }]);
+  assert.deepEqual(labelPlaceCmds("g", changed), [], "a new row is placed after edit_label, by its new name");
+  assert.deepEqual(labelLookCmds("g", [rows[0]!, rows[1]!, added], true), [], "a new row left as added: the server puts it at the anchor");
+});
+
+test("Add Field: the new row at the anchor with the angle and justification of the row before it (UI-LEFT-3 S3-17)", () => {
+  const before = { ...labelGridRows([isr, nc], AT)[1]!.look, vertical: true, h: "right" as const, v: "top" as const };
+  const r = newLabelGridRow(3, { name: "Note", text: "", visible: true, italic: true }, before);
+  assert.deepEqual([r.look.xMm, r.look.yMm, r.look.vertical, r.look.h, r.look.v], [0, 0, true, "right", "top"]);
+  assert.deepEqual([newLabelGridRow(3, { name: "Note", text: "", visible: true, italic: true }, null).look.h, newLabelGridRow(3, { name: "N", text: "", visible: true, italic: true }).look.xMm], ["center", undefined], "none before: centred; a new label's row: no place");
 });

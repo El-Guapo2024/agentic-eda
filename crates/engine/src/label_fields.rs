@@ -11,9 +11,8 @@
 //!
 //! The places of a label whose fields were placed by hand are `SchematicSection::field_layout`'s entry under the label's id: one [`FieldPlacement`] per field
 //! (by its name), its `dx` / `dy` the offset of the field's anchor from the label's on the sheet, its `angle` the text's (0 or 90°), `h` and `v` its
-//! justification. A label with no entry has its fields autoplaced (the file's `(fields_autoplaced yes)`). A field the entry has no place for (one added later)
-//! is put where `AutoplaceFields` would put it; **differs**: KiCad's new `SCH_FIELD` of a label whose fields are not autoplaced is at the sheet's origin
-//! (`SCH_FIELD::SCH_FIELD` sets no position), where it would be lost to the user.
+//! justification. A label with no entry has its fields autoplaced (the file's `(fields_autoplaced yes)`). A field the entry has no place for (one added later
+//! in Label Properties) is at the label's anchor with the angle and justification of the field before it, as KiCad's dialog adds it ([`placed`]).
 
 use eda_model::ir::{FieldPlacement, LabelKind, NetLabel, Point, SchematicSection, TextJustify, TextVAlign};
 use eda_model::kicad_font::{HJustify, VJustify};
@@ -141,11 +140,22 @@ pub fn autoplaced(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bo
 }
 
 /// The fields of `l` where they are: the places the user gave them (`field_layout`'s entry under the label's id), else where `AutoplaceFields` puts them.
+///
+/// A field the entry has no place for is one added since the fields were placed by hand (Label Properties' Add Field): KiCad's new field (`DIALOG_LABEL_PROPERTIES::
+/// OnAddField`: `SCH_FIELD newField( m_currentLabel, .. )`, `newField.SetAttributes( m_fields->at( m_fields->size() - 1 ) )`) has the angle and justification
+/// of the field before it -- the default centre and centre when there is none -- and the grid's place (0, 0), the label's anchor once `TransferDataFromWindow`
+/// offsets it (`field.Offset( m_currentLabel->GetPosition() )`); `positioningChanged` compares the fields the label had only, so the label stays placed by hand
+/// and nothing moves the new field (UI-LEFT-3 S3-17).
 pub fn placed(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) -> Vec<PlacedLabelField> {
     let auto = autoplaced(sch, l, show_intersheet_refs);
     let Some(stored) = sch.field_layout.get(&l.id) else { return auto };
+    let mut before: Option<(bool, HJustify, VJustify)> = None;
     auto.into_iter()
         .map(|mut f| {
+            if !stored.iter().any(|p| p.name == f.name) {
+                let (vertical, h, v) = before.unwrap_or((false, HJustify::Center, VJustify::Center));
+                (f.at, f.vertical, f.h, f.v) = (l.at, vertical, h, v);
+            }
             if let Some(p) = stored.iter().find(|p| p.name == f.name) {
                 f.at = Point { x: l.at.x + p.dx, y: l.at.y + p.dy };
                 f.vertical = p.angle == 90_000;
@@ -160,6 +170,7 @@ pub fn placed(sch: &SchematicSection, l: &NetLabel, show_intersheet_refs: bool) 
                     TextVAlign::Bottom => VJustify::Bottom,
                 };
             }
+            before = Some((f.vertical, f.h, f.v));
             f
         })
         .collect()
@@ -296,6 +307,34 @@ mod tests {
         moved.at.x += Nm::new(1_000_000);
         sch.labels[0] = moved.clone();
         assert_eq!(placed(&sch, &moved, false)[1].at.x, now[1].at.x + Nm::new(1_000_000));
+    }
+
+    /// UI-LEFT-3 S3-17 (`DIALOG_LABEL_PROPERTIES::OnAddField`, `TransferDataFromWindow`): a field added to a label whose fields were placed by hand is at the
+    /// label's anchor with the angle and justification of the field before it, the others staying where they were; with no field before it, centred.
+    #[test]
+    fn a_field_added_to_a_hand_placed_label_is_at_its_anchor_like_the_field_before() {
+        let l = label("lbl_a", LabelKind::Global { shape: LabelShape::Input });
+        let mut sch = section_with(l.clone());
+        let auto = placed(&sch, &l, false);
+        let mut places: Vec<FieldPlacement> = auto.iter().map(|f| placement_of(&l, f)).collect();
+        places[1].dx += Nm::new(2_540_000);
+        places[1].angle = 90_000;
+        places[1].h = TextJustify::Right;
+        places[1].v = TextVAlign::Top;
+        sch.field_layout.insert("lbl_a".into(), places);
+        sch.extras.label_fields.get_mut("lbl_a").unwrap().push(LabelField { name: "Note".into(), text: "x".into(), visible: true, ..Default::default() });
+        let now = placed(&sch, &l, false);
+        assert_eq!(now.len(), 3);
+        assert_eq!(now[1].at, Point { x: auto[1].at.x + Nm::new(2_540_000), y: auto[1].at.y }, "the hand-placed field stays");
+        assert_eq!((now[2].at, now[2].vertical, now[2].h, now[2].v), (l.at, true, HJustify::Right, VJustify::Top), "the new one at the anchor, as the one before");
+        // a local label's only field, added after the label was placed by hand with no field: centred at the anchor
+        let m = label("lbl_m", LabelKind::Local);
+        let mut sch = section_with(m.clone());
+        sch.extras.label_fields.remove("lbl_m");
+        sch.field_layout.insert("lbl_m".into(), Vec::new());
+        sch.extras.label_fields.insert("lbl_m".into(), vec![LabelField { name: "Note".into(), text: "x".into(), visible: true, ..Default::default() }]);
+        let f = &placed(&sch, &m, false)[0];
+        assert_eq!((f.at, f.vertical, f.h, f.v), (m.at, false, HJustify::Center, VJustify::Center));
     }
 
     #[test]
