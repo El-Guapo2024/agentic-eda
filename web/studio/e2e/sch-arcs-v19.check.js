@@ -80,7 +80,7 @@
     await hover(X + mm(5.08), Y - mm(5.08));
     const parts = readout().split(" | ");
     t(parts.length === 3 && parts[0].startsWith("r: ") && parts[1].startsWith("s: ") && /^Δθ: -?180\.0°$/.test(parts[2]), `a half circle: r, s and the sweep (${readout()})`);
-    t(parts[0] === parts[1], `its sagitta is its radius (${readout()})`);
+    t(parts[0].slice(3) === parts[1].slice(3), `its sagitta is its radius (${readout()})`);
   });
 
   await scenario("S3-28: start, direction, end -- the heading as it is, no 45-degree snap, then r and Δθ", async (t) => {

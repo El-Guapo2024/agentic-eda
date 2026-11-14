@@ -909,6 +909,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Move Down (the user fields' order is the order of the unit's stored placements, which they are listed, autoplaced and written in), Angle and Mirror
   (`set_symbol_orientation`) and Embedded Files; OK places an autoplaced symbol's fields again (`autoplace_fields_kept`); **a power symbol's user fields are
   items** (placed, drawn, picked, edited, written where they are, read back) and its dialog has the grid, Unit, Body style, Angle and Mirror.
+- Done (`task-v19-scharcs`, PARITY-sch §103): a placed field keeps its own pen (`FieldFontLook::thickness_nm`: read, written, copied from the library at placement and at a reset of the text effects, drawn, compared); a KiCad 5 legacy pin's `~` is a name (the derived schematic at 20250318, `tilde_text`, the tracer), so its nets are named as kicad-cli names them.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: the fill is KiCad's, and the zone settings
