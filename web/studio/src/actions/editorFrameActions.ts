@@ -20,6 +20,7 @@ import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbo
 import { fpEditTarget, fpHitTest, fpMirrorCmd, fpSelectionTarget, type Snap } from "../kicad-port/fpItems";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
+import { sayPointsNotMirrored } from "../state/footprintEditorStore";
 import { asPickedImage } from "./imageFiles";
 import { fpChooseImage } from "../components/footprint/fpItemTools";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
@@ -163,7 +164,12 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       const id = hoverItem();
       if (!id || !st.name || !st.footprint) return;
       const cmd = fpMirrorCmd(st.footprint, st.name, [id], direction, gridSnap);
-      if (cmd) void ctx.fpApi.cmd(cmd);
+      const fp = st.footprint;
+      // (a hovered point says so too: `BOARD_ITEM::Mirror`'s box, UI-LEFT-3 F3-7)
+      void (async () => {
+        if (cmd) await ctx.fpApi.cmd(cmd);
+        await sayPointsNotMirrored(fp, [id]);
+      })();
     };
     m.set("pcbnew.InteractiveEdit.mirrorHoriontally", mirror("left_right"));
     m.set("pcbnew.InteractiveEdit.mirrorVertically", mirror("top_bottom"));

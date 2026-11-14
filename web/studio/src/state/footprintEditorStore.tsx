@@ -663,7 +663,7 @@ const FpApiContext = createContext<FootprintEditorApi | null>(null);
  * lands in `BOARD_ITEM::Mirror`, which says so in a message box titled with the item's class (`wxMessageBox( wxT( "virtual BOARD_ITEM::Mirror used, should not
  * occur" ), GetClass() )`), once per point, and the point stays where it is (UI-LEFT-2 FF8; UI-LEFT-3 F3-7: it was a toast).
  */
-async function sayPointsNotMirrored(fp: LibraryFootprint, ids: readonly string[]): Promise<void> {
+export async function sayPointsNotMirrored(fp: LibraryFootprint, ids: readonly string[]): Promise<void> {
   const points = new Set((fp.items?.points ?? []).map((p) => p.id));
   for (const id of fpLeaves(fp, [...ids])) {
     if (points.has(id)) await showError("virtual BOARD_ITEM::Mirror used, should not occur", undefined, "PCB_POINT");
