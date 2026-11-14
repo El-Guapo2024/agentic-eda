@@ -892,6 +892,26 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Nm) {
             rotate_sheet(&mut scene.sch.sheets[i], &old, c, ccw);
             // `SCH_SHEET::Rotate`: "AutoplaceFields( nullptr, m_fieldsAutoplaced )" when they were
             let id = scene.sch.sheets[i].id.clone();
+            // ... which places the Sheetname and the Sheetfile only: the user fields stay where they are on the sheet (their offset from the corner, which
+            // moved, taken back); otherwise every field moves with the corner ("Move the fields to the new position because the parent itself has moved")
+            if scene.sch.extras.fields_autoplaced.contains_key(&id) {
+                let moved = Point { x: scene.sch.sheets[i].at.x - old.at.x, y: scene.sch.sheets[i].at.y - old.at.y };
+                if let Some(places) = scene.sch.extras.sheet_field_places.get_mut(&id) {
+                    for p in places.values_mut() {
+                        p.dx -= moved.x;
+                        p.dy -= moved.y;
+                    }
+                }
+                let user: Vec<String> = scene.sch.extras.sheet_fields.get(&id).into_iter().flatten().map(|f| f.name.clone()).collect();
+                let places = scene.sch.extras.sheet_field_places.entry(id.clone()).or_default();
+                for name in user {
+                    places.entry(name).or_insert(eda_model::sch_extras::SheetFieldPlace { dx: -moved.x, dy: -moved.y, ..Default::default() });
+                }
+                places.retain(|_, p| !p.is_default());
+                if places.is_empty() {
+                    scene.sch.extras.sheet_field_places.remove(&id);
+                }
+            }
             scene.replace_fields_if_autoplaced(&id);
         }
         Item::SheetPin(s, p) => {

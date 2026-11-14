@@ -1,5 +1,5 @@
 // Field Properties (`E`, a double-click on a field; `SCH_EDIT_TOOL::EditField` / `editFieldText`, `DIALOG_FIELD_PROPERTIES`): the text of one field of a symbol, a power symbol
-// or a sheet, where it is, how it is set and whether it is shown. OK is one `edit_field` command (kicad-port/schFieldEdit.ts builds it from what changed), so it is one
+// or a sheet (its name, its file, a user field), where it is, how it is set and whether it is shown. OK is one `edit_field` command (kicad-port/schFieldEdit.ts builds it from what changed), so it is one
 // undo step, and nothing is sent when nothing changed.
 //
 // Differences from KiCad's dialog, deliberate: the orientation, the position and the justification are those the field has on the sheet (KiCad's dialog shows the
@@ -14,7 +14,7 @@
 import { schematicWithCarry, useSchCarry } from "../state/schCarryStore";
 import { editCarried } from "../actions/schPlaceActions";
 import { useState } from "react";
-import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
+import { fieldDialogCaption, fieldSizeNm, fieldEditCmd, findField, isSheetMandatoryField, isStandardSymbolField, parseFieldId, FIELD_SIZE_MAX_NM, FIELD_SIZE_MIN_NM, type FieldChanges } from "../kicad-port/schFieldEdit";
 import { mmToNm, nmToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
@@ -36,14 +36,17 @@ const V_ALIGN: Array<{ value: SchField["v"]; label: string }> = [
 
 /** `carried`: a field of the symbol or power symbol a placing tool holds (U, V, F while it rides): read off the page's drawing of it, and OK changes the item in the hand. */
 export function FieldPropertiesDialog({ id, carried }: { id: string; carried?: boolean }) {
-  const base = useStudioState().schematic;
+  const { schematic: base, schVariant } = useStudioState();
   const carry = useSchCarry();
   const sch = carried && base && carry ? schematicWithCarry(base, carry) : base;
   const item = sch ? findField(sch, id) : null;
-  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} /> : null;
+  // a sheet's user field in a design variant: its text is the variant's (KiCad 25ec2335 `DIALOG_FIELD_PROPERTIES`: `aField->GetText( &sheetPath, variant )`, and
+  // `UpdateField`'s `sheet->SetFieldText( name, text, &sheetPath, variantName )` for a field that is not mandatory; UI-LEFT-3 S3-6)
+  const sheetVariant = item?.ownerKind === "sheet" && schVariant !== "" && !isSheetMandatoryField(item.field.name) ? schVariant : "";
+  return item ? <FieldForm key={id} owner={item.ownerKind} field={item.field} carried={!!carried} sheetVariant={sheetVariant} /> : null;
 }
 
-function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean }) {
+function FieldForm({ owner, field, carried, sheetVariant }: { owner: FieldOwnerKind; field: SchField & { id: string }; carried: boolean; sheetVariant: string }) {
   const api = useStudioApi();
   const dispatch = useStudioDispatch();
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
@@ -76,8 +79,10 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
   const canOk = sizeOk && xNm !== null && yNm !== null && textOk;
   const submit = () => {
     if (!canOk) return;
+    // in a variant a sheet user field's text is the variant's record (`set_sheet_variant`), in the OK's one step; the field keeps its own
+    const variantText = sheetVariant !== "" && !textFixed && text !== field.text ? ({ op: "sch_edit", verb: "set_sheet_variant", id: parseFieldId(field.id)!.owner, variant: sheetVariant, fields: { [field.name]: text } } as never) : null;
     const changes: FieldChanges = {
-      ...(textFixed ? {} : { text }),
+      ...(textFixed || sheetVariant !== "" ? {} : { text }),
       at: [xNm!, yNm!],
       vertical,
       h,
@@ -91,7 +96,7 @@ function FieldForm({ owner, field, carried }: { owner: FieldOwnerKind; field: Sc
     const fontChanged = nextFont !== undefined && nextFont !== (field.font ?? "");
     const colorChanged = (color === null) !== !(field.color && field.color.a > 0) || (color !== null && field.color && (color.r !== field.color.r || color.g !== field.color.g || color.b !== field.color.b || color.a !== field.color.a));
     const looks = fontChanged || colorChanged ? ({ op: "sch_edit", verb: "set_field_looks", ids: [field.id], ...(fontChanged ? { font: nextFont } : {}), ...(colorChanged ? { color: color ?? { r: 0, g: 0, b: 0, a: 0 } } : {}) } as never) : null;
-    const cmd = oneStep([fieldEditCmd(field, changes), looks]);
+    const cmd = oneStep([fieldEditCmd(field, changes), looks, variantText]);
     if (!cmd) return close();
     if (carried) {
       // the item in the hand takes the edit (actions/schPlaceActions.ts `editCarried`); its place is Autoplace Fields' once the click puts it down

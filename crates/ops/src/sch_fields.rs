@@ -106,7 +106,7 @@ impl<'m> Scene<'m> {
         let mut placements = ctx.current(&self.sch);
         let Some(i) = ctx.specs.iter().position(|s| s.name == f.name) else { return false };
         edit(&ctx, &self.sch, &mut placements[i]);
-        self.sch.field_layout.insert(f.key.clone(), placements);
+        eda_engine::fields_edit::keep_placements(&mut self.sch, &f.key, placements);
         self.sch.extras.fields_autoplaced.remove(&f.key);
         true
     }
@@ -181,7 +181,7 @@ impl<'m> Scene<'m> {
         let with_wires = self.section_with_wires();
         let Some(ctx) = OwnerCtx::new(&with_wires, self.model, key) else { return };
         let placed = ctx.autoplace(&with_wires, self.model, algo);
-        self.sch.field_layout.insert(key.to_string(), placed);
+        eda_engine::fields_edit::keep_placements(&mut self.sch, key, placed);
     }
 }
 
@@ -319,7 +319,7 @@ impl<'a> Board<'a> {
             return Err(fail("ops_field_unchanged", id, "the field already has these properties"));
         }
         placements[index] = p;
-        sch.field_layout.insert(key_now.clone(), placements);
+        eda_engine::fields_edit::keep_placements(sch, &key_now, placements);
         // a power symbol's user field is shown and italic as the power symbol keeps it (`SchExtras::power_props`)
         sync_power_user_fields(sch, &key_now);
         if edit.keep_autoplaced {
@@ -331,7 +331,7 @@ impl<'a> Board<'a> {
             // fields" is on, and for a sheet's always (`if( m_frame->eeconfig()->m_AutoplaceFields.enable || parentType == SCH_SHEET_T )`)
             let snapshot = sch.clone();
             if let Some(ctx) = OwnerCtx::new(&snapshot, model, &key_now) {
-                sch.field_layout.insert(key_now.clone(), ctx.autoplace(&snapshot, model, algo));
+                eda_engine::fields_edit::keep_placements(sch, &key_now, ctx.autoplace(&snapshot, model, algo));
             }
         }
         Ok(())
@@ -476,6 +476,17 @@ impl<'a> Board<'a> {
                 self.edit_sch_sheet(&ctx.key, None, Some(text))?;
                 Ok(ctx.key.clone())
             }
+            // a user field of the sheet (`SchExtras::sheet_fields`): any text, none included (`SCH_FIELD::SetText`; `DIALOG_FIELD_PROPERTIES::init` gives a
+            // `FIELD_T::SHEET_USER` no validator). (In a design variant the dialog sends the text as the variant's, `set_sheet_variant`: KiCad 25ec2335
+            // `DIALOG_FIELD_PROPERTIES::UpdateField`'s `sheet->SetFieldText( name, text, &sheetPath, variantName )`.)
+            (OwnerKind::Sheet, other) => {
+                let sch = self.schematic_mut()?;
+                let Some(f) = sch.extras.sheet_fields.get_mut(&ctx.key).and_then(|v| v.iter_mut().find(|f| f.name == other)) else {
+                    return Err(fail("ops_unknown_item", &ctx.key, format!("the sheet has no field '{other}'")));
+                };
+                f.text = text.to_string();
+                Ok(ctx.key.clone())
+            }
             _ => Err(fail("ops_field_text_fixed", &ctx.key, format!("the text of '{name}' is not edited"))),
         }
     }
@@ -577,7 +588,7 @@ impl<'a> Board<'a> {
             if placed != before || snapshot.extras.fields_autoplaced.get(&key) != Some(&AutoplaceAlgo::Manual) || !snapshot.field_layout.contains_key(&key) {
                 changed = true;
             }
-            sch.field_layout.insert(key.clone(), placed);
+            eda_engine::fields_edit::keep_placements(sch, &key, placed);
             sch.extras.fields_autoplaced.insert(key, AutoplaceAlgo::Manual);
         }
         if !changed {
@@ -605,7 +616,7 @@ impl<'a> Board<'a> {
             if snapshot.extras.is_locked(&owner_id(&ctx)) {
                 continue;
             }
-            sch.field_layout.insert(key.clone(), ctx.autoplace(&snapshot, model, algo));
+            eda_engine::fields_edit::keep_placements(sch, key, ctx.autoplace(&snapshot, model, algo));
             sync_power_user_fields(sch, key);
         }
         Ok(())

@@ -75,6 +75,13 @@ impl OwnerCtx {
             let specs = crate::label_fields::placed(sch, l, show).into_iter().map(|f| FieldSpec { italic: f.italic, ..FieldSpec::new(&f.name, f.text, f.visible) }).collect();
             return Some(OwnerCtx { kind: OwnerKind::Label, key: key.to_string(), at: l.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: None, label: Some(l.clone()) });
         }
+        // a sheet's fields are placed from its corner on the sheet, whatever file the sheet came from (`SCH_FIELD` of an `SCH_SHEET`: the field's own position);
+        // its user fields (`SchExtras::sheet_fields`) follow Sheetname and Sheetfile, as `SCH_SHEET::GetFields()` holds them (UI-LEFT-3 S3-6)
+        if let Some(s) = sch.sheets.iter().find(|s| s.id == key) {
+            let mut specs = vec![FieldSpec::new("Sheetname", s.name.clone(), true), FieldSpec::new("Sheetfile", s.file.clone(), true)];
+            specs.extend(sch.extras.sheet_fields.get(&s.id).into_iter().flatten().map(|f| FieldSpec { size_nm: f.size_nm, bold: f.bold, italic: f.italic, name_shown: f.name_shown, ..FieldSpec::new(&f.name, f.text.clone(), f.visible) }));
+            return Some(OwnerCtx { kind: OwnerKind::Sheet, key: key.to_string(), at: s.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: Some(s.clone()), label: None });
+        }
         if sch.imported_from_kicad {
             return None;
         }
@@ -96,10 +103,6 @@ impl OwnerCtx {
             // and its user-defined fields (`SchExtras::power_props`), items of the sheet like a symbol's (UI-LEFT-2 SS7)
             specs.extend(fields::power_user_specs(sch, p));
             return Some(OwnerCtx { kind: OwnerKind::Power, key: key.to_string(), at: p.at, rot: p.rot, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: Some(p.clone()), sheet: None, label: None });
-        }
-        if let Some(s) = sch.sheets.iter().find(|s| s.id == key) {
-            let specs = vec![FieldSpec::new("Sheetname", s.name.clone(), true), FieldSpec::new("Sheetfile", s.file.clone(), true)];
-            return Some(OwnerCtx { kind: OwnerKind::Sheet, key: key.to_string(), at: s.at, rot: 0, mirrored: false, width: 0.0, specs, sym: None, geom: None, power: None, sheet: Some(s.clone()), label: None });
         }
         None
     }
@@ -129,7 +132,15 @@ impl OwnerCtx {
             OwnerKind::Sheet => {
                 let auto = fields::sheet_placements(self.sheet.as_ref().expect("a sheet"));
                 let stored = sch.field_layout.get(&self.key);
-                self.specs.iter().map(|sp| stored.and_then(|s| s.iter().find(|p| p.name == sp.name)).or_else(|| auto.iter().find(|p| p.name == sp.name)).cloned().expect("a placement for each sheet field")).collect()
+                let places = sch.extras.sheet_field_places.get(&self.key);
+                self.specs
+                    .iter()
+                    .map(|sp| match auto.iter().find(|p| p.name == sp.name) {
+                        Some(home) => stored.and_then(|s| s.iter().find(|p| p.name == sp.name)).unwrap_or(home).clone(),
+                        // a user field: where Sheet Properties' grid or a move put it (`SchExtras::sheet_field_places`), styled as `sheet_fields` keeps it
+                        None => user_field_placement(sp, places.and_then(|p| p.get(&sp.name)).copied().unwrap_or_default()),
+                    })
+                    .collect()
             }
             OwnerKind::Label => {
                 let l = self.label.as_ref().expect("a label");
@@ -239,10 +250,12 @@ impl OwnerCtx {
                     .iter()
                     .zip(current.iter())
                     .map(|(sp, now)| {
+                        // `SCH_SHEET::AutoplaceFields` places the Sheetname and the Sheetfile only: a user field stays where it is
+                        let Some(home) = home.iter().find(|p| p.name == sp.name) else { return now.clone() };
                         if now.no_autoplace {
                             return now.clone();
                         }
-                        let mut p = home.iter().find(|p| p.name == sp.name).cloned().expect("a home for each sheet field");
+                        let mut p = home.clone();
                         p.visible = now.visible;
                         p.size_nm = now.size_nm;
                         p.bold = now.bold;
@@ -253,6 +266,47 @@ impl OwnerCtx {
                     .collect()
             }
         }
+    }
+}
+
+/// A sheet user field's placement from its place (`SchExtras::sheet_field_places`: the offset from the sheet's corner, the angle, the justification) and its
+/// style (`SchExtras::sheet_fields`: shown, size, bold, italic, shown name).
+fn user_field_placement(sp: &FieldSpec, at: eda_model::sch_extras::SheetFieldPlace) -> FieldPlacement {
+    FieldPlacement { dx: at.dx, dy: at.dy, angle: at.angle, h: at.h, v: at.v, visible: sp.visible, size_nm: sp.size_nm, bold: sp.bold, italic: sp.italic, name_shown: sp.name_shown, ..FieldPlacement::at_origin(&sp.name) }
+}
+
+/// Keep `placements` (one per field of the item `key`, as [`OwnerCtx::current`] gives them) on `sch`: in `SchematicSection::field_layout`, except a sheet's user
+/// fields, whose place is `SchExtras::sheet_field_places` and whose style (shown, size, bold, italic, shown name) is their `SchExtras::sheet_fields` entry --
+/// one home for each, as Sheet Properties' grid reads and writes them (UI-LEFT-3 S3-6).
+pub fn keep_placements(sch: &mut SchematicSection, key: &str, placements: Vec<FieldPlacement>) {
+    if !sch.sheets.iter().any(|s| s.id == key) || !sch.extras.sheet_fields.contains_key(key) {
+        sch.field_layout.insert(key.to_string(), placements);
+        return;
+    }
+    let (own, user): (Vec<FieldPlacement>, Vec<FieldPlacement>) = placements.into_iter().partition(|p| p.name == "Sheetname" || p.name == "Sheetfile");
+    sch.field_layout.insert(key.to_string(), own);
+    if let Some(fields) = sch.extras.sheet_fields.get_mut(key) {
+        for p in &user {
+            if let Some(f) = fields.iter_mut().find(|f| f.name == p.name) {
+                f.visible = p.visible;
+                f.size_nm = p.size_nm;
+                f.bold = p.bold;
+                f.italic = p.italic;
+                f.name_shown = p.name_shown;
+            }
+        }
+    }
+    let places = sch.extras.sheet_field_places.entry(key.to_string()).or_default();
+    for p in user {
+        let place = eda_model::sch_extras::SheetFieldPlace { dx: p.dx, dy: p.dy, angle: p.angle, h: p.h, v: p.v };
+        if place.is_default() {
+            places.remove(&p.name);
+        } else {
+            places.insert(p.name, place);
+        }
+    }
+    if places.is_empty() {
+        sch.extras.sheet_field_places.remove(key);
     }
 }
 

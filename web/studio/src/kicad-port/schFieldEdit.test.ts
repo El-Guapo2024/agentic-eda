@@ -4,7 +4,7 @@ import { applyPatch } from "./schMove";
 import { fixtureTable } from "./tableFixture";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { addUserFieldCmd, autoplaceCmd, editFieldTarget, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeNm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, fieldDialogCaption, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
+import { addUserFieldCmd, autoplaceCmd, editFieldTarget, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeNm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, fieldDialogCaption, isSheetMandatoryField, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
 
 // the width of a text in these tests: 600 um a character at 1270 um, in proportion to the size
 const measure = (text: string, size: number) => text.length * 0.5 * size;
@@ -53,6 +53,21 @@ test("every field of the sheet is listed with the id the backend selects it by",
   const s = sheet();
   s.symbols[0]!.fields![0]!.id = "fld:R1:Reference";
   assert.equal(fieldItems(s).find((i) => i.field.name === "Reference" && i.owner === "R1")?.id, "fld:R1:Reference");
+});
+
+test("a sheet's user fields are items after its Sheetname and Sheetfile, picked and edited as KiCad's SCH_FIELDs of the sheet are (UI-LEFT-3 S3-6)", () => {
+  const s = sheet();
+  s.sheets[0]!.user_fields_drawn = [field("Owner", "Ann", [60_000_000, 22_000_000], { id: "fld:sheet_a:Owner", name_shown: true } as Partial<SchField>), field("Rev", "B", [60_000_000, 24_000_000], { visible: false })];
+  const items = fieldItems(s).filter((i) => i.owner === "sheet_a");
+  assert.deepEqual(items.map((i) => i.id), ["fld:sheet_a:Sheetname", "fld:sheet_a:Owner", "fld:sheet_a:Rev"]);
+  assert.ok(items.every((i) => i.ownerKind === "sheet"));
+  assert.equal(findField(s, "fld:sheet_a:Owner")?.field.text, "Ann");
+  // a click on the shown one finds it; the hidden one is no target
+  assert.equal(hitField(s, 61_000_000, 22_000_000, 100_000, measure), "fld:sheet_a:Owner");
+  assert.equal(hitField(s, 60_500_000, 24_000_000, 100_000, measure), null);
+  // the dialog's caption names the user field as KiCad's does, and only the name and the file are mandatory
+  assert.equal(fieldDialogCaption("Owner", true), "Edit 'Owner' Field");
+  assert.ok(isSheetMandatoryField("Sheetname") && isSheetMandatoryField("Sheetfile") && !isSheetMandatoryField("Owner"));
 });
 
 test("a bold text with its name shown reads as Name: value", () => {
