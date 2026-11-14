@@ -138,7 +138,7 @@
 
   (async () => {
     let toScreen = null;
-    await scenario("A footprint's text box, image, point and barcode come with it in a paste and are drawn with it; a click on one picks the footprint", async (t) => {
+    await scenario("A footprint's text box, image, point and barcode come with it in a paste and are drawn with it -- the image only in the Footprint Editor; a click on one picks the footprint", async (t) => {
       const r = await send({ op: "paste_clipboard", text: clip, at: { x: mm(home[0]), y: mm(home[1]) } });
       t(r.ok !== false, `the paste is taken (${JSON.stringify(r).slice(0, 200)})`);
       const p = await fpk();
@@ -153,13 +153,10 @@
       if (!toScreen) { t(false, "the canvas gave a cursor readout"); return; }
       await E.run("common.InteractiveSelection.clear");
       await sleep(400);
-      t(magentaPixels() > 20, `the canvas paints the footprint's image (${magentaPixels()} magenta pixels)`);
+      // `PCB_PAINTER::Draw`: "Never draw footprint reference images on board" (UI-LEFT-3 P3-31; the Footprint Editor shows it)
+      t(magentaPixels() <= 20, `the board does not paint the footprint's image (${magentaPixels()} magenta pixels)`);
       await click(toScreen, home[0] + 7, home[1] + 3);
       t(E.state().selection.some((s) => s.id === "FPK1"), `a click in the text box picks the footprint (${JSON.stringify(E.state().selection)})`);
-      await E.run("common.InteractiveSelection.clear");
-      await sleep(200);
-      await click(toScreen, home[0] - 6, home[1]);
-      t(E.state().selection.some((s) => s.id === "FPK1"), "a click on the image picks it too");
     });
     if (!toScreen || !(await fpk())) { check.done = true; check.ok = false; return; }
 

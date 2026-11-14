@@ -744,6 +744,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done 2026-11-10 (`task-v4-pp15-swap`, PARITY-pcb section 105, UI-LEFT-2 PP15): Swap (Alt+S) of every kind as `EDIT_TOOL::Swap` does it, one `swap_items` per swap: an arc's and a
   dimension's start alone, a group by its box's centre, tables, text boxes, barcodes, points and images, two items of one type trading layers, two footprints' side and orientation in any selection; two
   pads in the Footprint Editor by `PAD::SwapShapePositions`. Left: tuning patterns, via stitchings, table cells and grid items are not swapped; no Allow free pads setting.
+- Done 2026-11-14 (`task-v19-pcbfp`, PARITY-pcb section 123, UI-LEFT-3 P3-31, P3-33): Swap of tuning patterns and via stitchings (`PCB_GENERATOR`: `m_origin` alone, the layers
+  of two), KiCad 10's grid items, drill maps and drill charts, a group by `BOX2I::GetCenter` of `PCB_GROUP::GetBoundingBox`; a library footprint's groups on the board, a
+  footprint table cell resolved through its footprint, private layers and footprint images not drawn on the board; Delete and Flip of a free pad alone (`removed_pads`,
+  `opposite_side`); Update Footprint on Board's uuids put back and the courtyard lines in Ctrl+E's copy. Left: a table cell is not swapped (the model keeps cells on the grid).
 - Done 2026-11-07 (`task-v3-pcbmisc`, PARITY-pcb section 101, UI-LEFT-2 PP12): a via's per-layer padstack diameters drawn, routed and checked; Draw Via's
   preview at `SnapItem`'s point (C6-7); an allowed violating via placed with "Via location violates DRC." said (C6-6); an unflashed plated pad's hole at the
   copper clearance (C6-4); copper tables, dimensions and barcodes in the via check (C6-5; a text box is skipped, as KiCad skips it); R7-4. Left: the

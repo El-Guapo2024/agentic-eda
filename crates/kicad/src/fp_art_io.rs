@@ -565,7 +565,7 @@ mod tests {
                 let art = read_art(&parse(FIXTURE), Side::Top, 0);
                 let fp = inst(side, rot);
                 let mut text = String::new();
-                write_art(&mut text, &art, &fp);
+                write_art_of(&mut text, &art, &fp, None);
                 let again = read_art(&parse(&format!("(footprint \"x\" {text})")), side, rot);
                 assert_eq!(again, art, "{side:?} {rot}\n{text}");
             }
@@ -576,7 +576,7 @@ mod tests {
     fn a_bottom_side_footprint_is_written_mirrored_on_the_other_layers() {
         let art = read_art(&parse(FIXTURE), Side::Top, 0);
         let mut text = String::new();
-        write_art(&mut text, &art, &inst(Side::Bottom, 0));
+        write_art_of(&mut text, &art, &inst(Side::Bottom, 0), None);
         // x negated, the silkscreen on the back, the fab on the back
         assert!(text.contains("(fp_line (start 2 -1.5) (end -2 -1.5) (stroke (width 0.12) (type solid)) (layer \"B.SilkS\")"), "{text}");
         assert!(text.contains("(fp_circle (center 0 0) (end -0.5 0) (stroke (width 0.1) (type solid)) (fill yes) (layer \"B.Fab\")"), "{text}");
@@ -589,7 +589,7 @@ mod tests {
         assert!(text.contains("(justify left bottom mirror)"), "{text}");
         // and the footprint's turn is the file's, negated, in its angles
         let mut turned = String::new();
-        write_art(&mut turned, &art, &inst(Side::Top, 90_000));
+        write_art_of(&mut turned, &art, &inst(Side::Top, 90_000), None);
         assert!(turned.contains("(fp_text user \"${REFERENCE}\" (at 0 0.5 0) (layer \"F.Fab\")"), "angle 90 on a part turned 90 clockwise on the screen reads 0 in the file: {turned}");
     }
 

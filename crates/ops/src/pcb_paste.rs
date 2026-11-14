@@ -261,6 +261,12 @@ impl Board<'_> {
         // reference, whose pads may be edited) is not what is found.
         let probe = Part { reference: String::new(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.name.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
         let Some(known) = self.model.footprint_of(&probe) else { return edit };
+        // a pad taken off the copied footprint ("Allow free pads"' Delete) stays off the paste (the clipboard holds the footprint as the board had it)
+        let removed = eda_model::fp_edit::removed_between(&known, def);
+        if !removed.is_empty() {
+            edit.get_or_insert_with(|| FootprintEdit::new(&f.reference)).removed_pads = removed.clone();
+        }
+        let known = eda_model::fp_edit::without_removed(&known, &removed);
         for d in eda_model::fp_edit::pad_edits_between(&known, def) {
             let e = edit.get_or_insert_with(|| FootprintEdit::new(&f.reference));
             let mut pad = e.pad(&d.number, d.nth).cloned().unwrap_or_else(|| eda_model::fp_edit::PadEdit::none(&d.number, d.nth));

@@ -982,6 +982,27 @@ pub fn pad_edits_between(base: &Footprint, edited: &Footprint) -> Vec<PadEdit> {
     out
 }
 
+/// The pads of `base` that `edited` has no more ([`FootprintEdit::removed_pads`]): each pad of `edited` is the pad of `base` with its number at its place, else the next
+/// one with its number; a pad of `base` none is is taken off. Empty when `edited` has as many pads as `base` or more, or a pad of `edited` is none of `base`'s.
+pub fn removed_between(base: &Footprint, edited: &Footprint) -> Vec<RemovedPad> {
+    if edited.pads.len() >= base.pads.len() {
+        return Vec::new();
+    }
+    let mut taken = vec![false; base.pads.len()];
+    let mut unplaced = Vec::new();
+    for p in &edited.pads {
+        match base.pads.iter().enumerate().position(|(j, q)| !taken[j] && q.number == p.number && q.at == p.at) {
+            Some(j) => taken[j] = true,
+            None => unplaced.push(p),
+        }
+    }
+    for p in unplaced {
+        let Some(j) = base.pads.iter().enumerate().position(|(j, q)| !taken[j] && q.number == p.number) else { return Vec::new() };
+        taken[j] = true;
+    }
+    taken.iter().enumerate().filter(|(_, t)| !**t).map(|(j, _)| RemovedPad { index: j, number: base.pads[j].number.clone() }).collect()
+}
+
 /// `footprint` with the edits laid on its pads. An edit that names a pad the footprint does not have is skipped.
 pub fn patched_footprint(footprint: &Footprint, edits: &[PadEdit]) -> Footprint {
     let mut out = footprint.clone();
@@ -1112,6 +1133,19 @@ mod tests {
         assert_eq!(parse_pad_id("J1.A.1#3"), Some(("J1".into(), "A.1".into(), 3)));
         assert_eq!(parse_pad_id("J1"), None);
         assert_eq!(parse_pad_id(".3"), None);
+    }
+
+    #[test]
+    fn the_pads_a_footprint_lost_are_found_by_number_and_place() {
+        let base = Footprint { name: "X".into(), pads: vec![pad("1", (Nm::ZERO, Nm::ZERO)), pad("MP", (Nm::new(-3_000_000), Nm::ZERO)), pad("MP", (Nm::new(3_000_000), Nm::ZERO))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let mut edited = base.clone();
+        edited.pads.remove(1);
+        assert_eq!(removed_between(&base, &edited), [RemovedPad { index: 1, number: "MP".into() }], "the first MP, by its place");
+        assert_eq!(without_removed(&base, &removed_between(&base, &edited)).pads, edited.pads);
+        assert!(removed_between(&base, &base).is_empty());
+        let mut other = edited.clone();
+        other.pads[0].number = "9".into();
+        assert!(removed_between(&base, &other).is_empty(), "a pad the base has not: nothing is said");
     }
 
     #[test]

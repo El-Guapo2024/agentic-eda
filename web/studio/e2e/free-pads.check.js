@@ -7,8 +7,8 @@
 // What it checks:
 //   preference   Preferences > PCB Editor > Editing Options has "Allow free pads" live (KiCad's default off), and OK keeps it (`PCBNEW_SETTINGS::m_AllowFreePads`);
 //   off          with it off a selected pad stands for its footprint (`FilterCollectorForFreePads`): Rotate turns J1;
-//   on           with it on Rotate turns the pad alone, M carries it alone and the click drops it there (its footprint stays), Swap trades two pads' places, each one
-//                undo step; Flip still turns the footprint over (the studio holds a pad on its footprint's side);
+//   on           with it on Rotate turns the pad alone, M carries it alone and the click drops it there (its footprint stays), Swap trades two pads' places, Flip
+//                turns the pad over alone (`PAD::Flip`), each one undo step;
 //   free pad     J1.4 alone on its net with the pin type "free" (`PAD::IsFreePad`) is `free` in the state; a route from J1.3 ends in it when the cursor is inside it
 //                (`pickSingleItem`'s free pad) and is committed with no clearance to it (`collideSimple`), and the routing_clearance gate does not fail it.
 // It answers through `window.__freePadsCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
@@ -127,7 +127,7 @@
     t(partOf(st, "J1").rot !== j1.rot, `J1 turned: ${j1.rot} -> ${partOf(st, "J1").rot}`);
   });
 
-  await scenario("on: Rotate turns the pad alone, M carries it alone, Swap trades two pads; Flip still turns the footprint", async (t) => {
+  await scenario("on: Rotate turns the pad alone, M carries it alone, Swap trades two pads, Flip turns it over alone", async (t) => {
     await setFreePadsPref(true);
     let sel = await select(["J1.2"]);
     let n = replies.length;
@@ -178,13 +178,17 @@
     await sleep(700);
     t(snapshot(await state()) === original, "one undo puts it back");
 
-    // Flip: the footprint is turned over (a pad is held on its footprint's side)
+    // Flip: the pad alone is turned over (`PAD::Flip`; pcb-fp-v19.check.js follows an SMD pad to the back), J1 stays on its side
     sel = await select(["J1.2"]);
     n = replies.length;
     await E.run("pcbnew.InteractiveEdit.flip");
     r = await waitReply("cmd", n);
     await quiet();
-    t(!!r && JSON.stringify(r.req).includes('"ids":["J1"]'), `Flip turns J1 over: ${r && JSON.stringify(r.req)}`);
+    t(!!r && JSON.stringify(r.req).includes('"ids":["J1.2"]') && r.body?.ok !== false, `Flip turns the pad over: ${r && JSON.stringify([r.req, r.body?.ok])}`);
+    t(partOf(await state(), "J1").side === j1.side, "J1 stays on its side");
+    await E.run("common.Interactive.undo");
+    await sleep(700);
+    t(snapshot(await state()) === original, "one undo puts it back");
     await setFreePadsPref(false);
   });
 
