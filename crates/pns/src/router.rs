@@ -154,6 +154,22 @@ enum GroupDrag {
 /// `isStartingPointRoutable`'s refusal of a start on a non-plated pad.
 const NPTH_START: &str = "Cannot start routing from a non-plated hole.";
 
+/// The clearances of a pair's preview items ([`Router::diff_pair_clearances`]), which the studio draws their clearance outlines with.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DpClearances {
+    /// P's head (and its fixed legs, drawn at the head's).
+    pub line_a: Nm,
+    /// N's head.
+    pub line_b: Nm,
+    /// The vias the head ends in, in the preview's order.
+    pub vias: Vec<Nm>,
+    /// The vias of the fixed legs.
+    pub fixed_vias: Vec<Nm>,
+    /// What the shove moved: the lines and the vias, in the preview's order.
+    pub displaced: Vec<Nm>,
+    pub displaced_vias: Vec<Nm>,
+}
+
 pub struct Router {
     pub(crate) world: Node,
     layers: LayerMap,
@@ -584,6 +600,34 @@ impl Router {
         Some((head, via))
     }
 
+    /// `ROUTER::movePlacing` for a pair (the pair's preview drawn as a single track's, `PNS_KICAD_IFACE::DisplayItem` with `Clearance( item, nullptr )`), the
+    /// pair's line of the remaining task left by `task-v13-pcbpaint` (UI-LEFT-3 P3-6, PARITY-pcb §115): the clearances of P's and N's head (`m_placer->Traces()`:
+    /// both lines), of the vias the head ends in (each raised to its hole's clearance less its annular ring, as for a single track), of the vias of the fixed
+    /// legs, and `updateView`'s of what the shove moved (`shoved_clearances`), in the order of the preview's lists.
+    pub fn diff_pair_clearances(&self, preview: &crate::dp_placer::DiffPairPreview) -> Option<DpClearances> {
+        let d = self.diff.as_ref()?;
+        let world = d.world();
+        let own = |side: crate::rule_resolver::Side<'_>| world.own_clearance(&self.rules, side);
+        let via = |v: &crate::dp_placer::PreviewVia| {
+            let mut c = own(crate::rule_resolver::Side::Via { net: &v.net, layers: v.layers, pos: v.pos });
+            let hole = own(crate::rule_resolver::Side::ViaHole { net: &v.net, layers: v.layers, pos: v.pos });
+            let annular = Nm::new(((v.diameter - v.drill).get() / 2).max(0));
+            if hole - annular > c {
+                c = hole - annular;
+            }
+            c
+        };
+        let (displaced, displaced_vias) = Self::shoved_clearances_in(world, &self.rules, &preview.displaced_lines, &preview.displaced_vias);
+        Some(DpClearances {
+            line_a: own(crate::rule_resolver::Side::of_line(&preview.head_a)),
+            line_b: own(crate::rule_resolver::Side::of_line(&preview.head_b)),
+            vias: preview.vias.iter().map(via).collect(),
+            fixed_vias: preview.fixed_vias.iter().map(via).collect(),
+            displaced,
+            displaced_vias,
+        })
+    }
+
     /// The world the live preview is drawn from: the route session's (a start split a track) or the router's.
     fn display_world(&self) -> &Node {
         self.session().and_then(|s| s.world.as_ref()).unwrap_or(&self.world)
@@ -592,8 +636,12 @@ impl Router {
     /// `ROUTER::updateView`'s `Clearance( item, nullptr )` of the items a shove moved (`added`), which `DisplayItem` draws their clearance outlines
     /// with (UI-LEFT-3 P3-6): each displaced line's, and each displaced via's (the board via `source_via` names, where the shove put it).
     pub fn shoved_clearances(&self, lines: &[crate::shove::DisplacedLine], vias: &[crate::shove::DisplacedVia]) -> (Vec<Nm>, Vec<Nm>) {
-        let world = self.display_world();
-        let l = lines.iter().map(|d| world.own_clearance(&self.rules, crate::rule_resolver::Side::of_line(&d.line))).collect();
+        Self::shoved_clearances_in(self.display_world(), &self.rules, lines, vias)
+    }
+
+    /// [`Self::shoved_clearances`] of the items moved in `world`.
+    fn shoved_clearances_in(world: &Node, rules: &eda_model::BoardRules, lines: &[crate::shove::DisplacedLine], vias: &[crate::shove::DisplacedVia]) -> (Vec<Nm>, Vec<Nm>) {
+        let l = lines.iter().map(|d| world.own_clearance(rules, crate::rule_resolver::Side::of_line(&d.line))).collect();
         let v = vias
             .iter()
             .map(|d| {
@@ -601,7 +649,7 @@ impl Router {
                     Item::Via(v) if v.source_via.as_deref() == Some(d.source_via.as_str()) => Some(v),
                     _ => None,
                 });
-                via.map_or(Nm::ZERO, |v| world.own_clearance(&self.rules, crate::rule_resolver::Side::Via { net: &v.net, layers: v.layers, pos: d.pos }))
+                via.map_or(Nm::ZERO, |v| world.own_clearance(rules, crate::rule_resolver::Side::Via { net: &v.net, layers: v.layers, pos: d.pos }))
             })
             .collect();
         (l, v)

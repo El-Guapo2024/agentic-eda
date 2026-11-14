@@ -66,6 +66,8 @@ export interface DpDrawState {
   /** Shove mode: what the head would push aside. */
   displaced?: { layer: string; pts: [number, number][] }[];
   displacedVias?: { source_via: string; x: number; y: number }[];
+  /** The clearances of the pair's items for their clearance outlines (`dpClearancesOf`, UI-LEFT-3 P3-6 for a pair). */
+  clearances?: DpClearances;
   /** The active layer when the route started (`ROUTER_TOOL::prepareInteractive`: `m_originalActiveLayer`, then `SetActiveLayer( getStartLayer( .. ) )`):
    * the active layer follows the route while it runs (`syncRouterAndFrameLayer`) and goes back to this one when it ends (`finishInteractive`), R6-R6. */
   originalActiveLayer?: string;
@@ -100,7 +102,33 @@ export function dpStateFromPreview(current: DpDrawState, preview: DiffPairPrevie
     fixedVias: (preview.fixed_vias ?? []).map(viaOf),
     displaced: preview.displaced ?? [],
     displacedVias: preview.displaced_vias ?? [],
+    clearances: dpClearancesOf(preview),
   };
+}
+
+/**
+ * The clearances a pair's preview reply carries for its clearance outlines (UI-LEFT-3 P3-6 for a pair: `ROUTER::movePlacing` displays each line and via of
+ * the pair with `Clearance( item, nullptr )`, `updateView` what the shove moved). Absent from an older server: nothing is outlined.
+ */
+export function dpClearancesOf(preview: DiffPairPreview): DpClearances {
+  return {
+    lineA: preview.clearance_a ?? null,
+    lineB: preview.clearance_b ?? null,
+    vias: preview.via_clearances ?? [],
+    fixedVias: preview.fixed_via_clearances ?? [],
+    displaced: preview.displaced_clearances ?? [],
+    displacedVias: preview.displaced_via_clearances ?? [],
+  };
+}
+
+/** See [`dpClearancesOf`]. */
+export interface DpClearances {
+  lineA: number | null;
+  lineB: number | null;
+  vias: number[];
+  fixedVias: number[];
+  displaced: number[];
+  displacedVias: number[];
 }
 
 /**

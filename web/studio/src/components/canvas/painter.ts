@@ -1952,6 +1952,26 @@ function drawPreviewClearances(ctx: CanvasRenderingContext2D, lines: readonly { 
   }
 }
 
+/**
+ * A pair's clearance outlines (UI-LEFT-3 P3-6 for a pair): `ROUTER::movePlacing` displays each line of the pair's head (`m_placer->Traces()`) and each via it
+ * ends in with its own clearance, as a single route's (P's legs at P's, N's at N's), the fixed legs' vias with theirs, and `updateView` what the shove moved.
+ */
+function drawDiffPairClearance(ctx: CanvasRenderingContext2D, board: BoardState, draw: Extract<DrawState, { kind: "diffpair" }>, mode: TrackClearanceMode): void {
+  const cs = draw.clearances;
+  if (!cs) return;
+  const a = cs.lineA ?? 0;
+  const b = cs.lineB ?? 0;
+  const lines = [
+    ...(draw.runsA ?? []).map((r) => ({ pts: r.pts, width: draw.width, c: a })),
+    ...(draw.runsB ?? []).map((r) => ({ pts: r.pts, width: draw.width, c: b })),
+    { pts: draw.ptsA, width: draw.width, c: a },
+    { pts: draw.ptsB, width: draw.width, c: b },
+  ];
+  const vias = [...(draw.vias ?? []).map((v, i) => ({ x: v.x, y: v.y, d: v.diameter, c: cs.vias[i] ?? 0 })), ...(draw.fixedVias ?? []).map((v, i) => ({ x: v.x, y: v.y, d: v.diameter, c: cs.fixedVias[i] ?? 0 }))];
+  drawPreviewClearances(ctx, lines, vias, mode, false, "route");
+  drawShovedClearances(ctx, board, { displaced: draw.displaced, displacedVias: draw.displacedVias, clearances: { displaced: cs.displaced, displacedVias: cs.displacedVias }, width: draw.width }, mode, false);
+}
+
 /** A drag's clearance outlines (`moveDragging` -> `updateView( .., aDragging = true )`): the dragged line or via, the fanout lines, what the shove moved. */
 function drawDragClearance(ctx: CanvasRenderingContext2D, board: BoardState, draw: Extract<DrawState, { kind: "drag" }>, mode: TrackClearanceMode): void {
   const cs = draw.clearances;
@@ -2029,6 +2049,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     // already coupled, walked or shoved by the router (crates/pns/src/dp_placer.rs); `displaced` is what Shove would push aside.
     const violationColor = "#ff3333";
     const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
+    drawDiffPairClearance(ctx, board, draw, opts.trackClearance ?? "routing_via");
     for (const run of draw.runsA ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     for (const run of draw.runsB ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.ptsA, color, draw.width, false);

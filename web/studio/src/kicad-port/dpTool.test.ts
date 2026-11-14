@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "./dpTool";
+import { dpClearancesOf, dpStateFromPreview, dpViaRequest, type DpDrawState } from "./dpTool";
 import type { DiffPairPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DpDrawState> = {}): DpDrawState {
@@ -81,4 +81,12 @@ test("a_pair_via_takes_the_chosen_via_size (R7-R2: handleLayerSwitch's GetCurren
   assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu", { diameter: 800_000, drill: 400_000 }), { enabled: true, toLayer: "B.Cu", diameter: 800_000, drill: 400_000 });
   assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu", undefined), { enabled: true, toLayer: "B.Cu" }, "the net class's: the server's rules");
   assert.deepEqual(dpViaRequest(baseDraw({ placingVia: true }), "B.Cu", { diameter: 800_000, drill: 400_000 }), { enabled: false, toLayer: "B.Cu" });
+});
+
+test("a pair's preview carries each line's and via's own clearance for their outlines (UI-LEFT-3 P3-6 for a pair: ROUTER::movePlacing)", () => {
+  const preview = basePreview({ clearance_a: 200_000, clearance_b: 250_000, via_clearances: [300_000, 300_000], fixed_via_clearances: [200_000], displaced_clearances: [150_000], displaced_via_clearances: [] });
+  const next = dpStateFromPreview(baseDraw(), preview);
+  assert.deepEqual(next.clearances, { lineA: 200_000, lineB: 250_000, vias: [300_000, 300_000], fixedVias: [200_000], displaced: [150_000], displacedVias: [] });
+  // an older server: nothing is outlined
+  assert.deepEqual(dpClearancesOf(basePreview()), { lineA: null, lineB: null, vias: [], fixedVias: [], displaced: [], displacedVias: [] });
 });

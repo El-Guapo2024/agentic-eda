@@ -673,6 +673,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 8. PCB edit tools
 **Done (2026-10-08, `88c8c0a`; the details 2026-10-10, `task-pcb-edit-details`, not merged).** Hit: every layout session. Blocks: no. Package P6.
+- Done 2026-11-14 (`task-v14-copper`, UI-LEFT-3 P3-32, PARITY-pcb section 117): Draw Via's check takes a backdrilled or post-machined layer's larger hole, footprints' own tables, dimensions and barcodes and a barcode's plotted polygon, splits an arc track as KiCad does, and says its DRC message as an info bar that stays.
 - Done (`PARITY-pcb.md` section 22): `move_items`, `rotate_items` and `flip_items` (`crates/ops/src/pcb_transform.rs`) move, turn and flip footprints, tracks (arcs stay arcs), vias, zones, graphics, text,
   dimensions and groups as KiCad's item classes do, one undo step each, and reach the `.kicad_pcb` kicad-cli reads. Move, drag, Move Individually, Move with Reference, Position Relative, Move Exactly,
   Rotate, Flip, Align and Distribute work for every kind with `FilterCollectorForLockedItems` and KiCad's rotation and flip points; `R` turns counter-clockwise. Duplicate, Copy, Cut and Paste take footprints
@@ -900,6 +901,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 13. Zones: the fill is KiCad's, and the zone settings
 **Done 2026-10-13 on `task-zones` (not merged).** Hit: most boards. Blocks: no. Package P13.
+- Done 2026-11-14 (`task-v14-copper`, UI-LEFT-3 P3-5, PARITY-pcb section 117): the teardrops read kicad-cli's fills (`areItemsInSameZone`: no teardrop on a pad a pour of its net joins to its track while "Prefer zone connection" is on), ask the rule engine for each pair's clearance, and fit to every copper item (texts, footprints' graphics, tables, dimensions, barcodes); a track of no net gets its teardrop.
 - **Decided 2026-10-13: the zone fill is KiCad's, made by kicad-cli, and nobody else's.** `crates/zone-filler` (a port of `ZONE_FILLER` that was within 1% of kicad-cli's area on 198 of 208 fills of 17 QA boards, and
   `PARITY.md`, its measurements; `git show 43f6c09:crates/zone-filler/PARITY.md`) is deleted, with `eda_drc::fill` and the data only it read (the zone, keepout, knockout, copper-graphic and spoke-box fields of
   `DrcBoard`). P13's own plan for it (fill fidelity: courtyards and net ties as knockouts, the hatched zone's thermal rings, `connect_nearby_polys`, mask-only NPTH knockouts; the speed of a fine hatch) is

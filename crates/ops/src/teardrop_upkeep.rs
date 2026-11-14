@@ -6,6 +6,8 @@
 //! Here [`Board::apply`](crate::Board::apply) takes the board's copper before the command ([`eda_connectivity::teardrop::snapshot`]: nothing when the board has no
 //! teardrop and nothing that could have one) and, once the command is applied, hands both states to [`eda_connectivity::teardrop::update_after_edit`], which
 //! finds what changed and updates the teardrops it touches. A [`Cmd::Batch`](crate::Cmd::Batch) is one commit: the update runs once, after its last command.
+//! The update and Add All Teardrops read the zones' fills the board directory hands over ([`Board::with_zone_copper`]: kicad-cli's, which `areItemsInSameZone`
+//! asks, UI-LEFT-3 P3-5).
 //!
 //! The commands KiCad pushes with `SKIP_TEARDROPS` skip it (Edit Teardrops, which rebuilds them all itself: `Cmd::AddAllTeardrops`, `Cmd::RemoveAllTeardrops`;
 //! Lock and Unlock: `Cmd::SetLocked`), as do Board Setup's page (`Cmd::SetTeardropSettings`: in KiCad it changes no item's parameters, which Edit Teardrops
