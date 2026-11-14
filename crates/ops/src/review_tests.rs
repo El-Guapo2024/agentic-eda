@@ -88,6 +88,20 @@ fn delete_all_markers_with_the_exclusions_forgets_every_waived_violation_in_one_
     assert_eq!(Cmd::ClearDrcExclusions.domain(), Domain::Pcb);
 }
 
+/// UI-LEFT-3 B3-1: a finding that names no item (`copper_sliver`) is waived by where its marker may be; the item-less ones of one check share the key
+/// `(check, [])`, and a second one adds its places to the first.
+#[test]
+fn an_item_less_exclusion_is_kept_by_its_places() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let at = |x: i64| [Nm::new(x), Nm::new(x)];
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(2), at(1)], ..exclusion("copper_sliver", &[]) }] }).unwrap();
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(3)], ..exclusion("copper_sliver", &[]) }] }).unwrap();
+    let w = waived(&b);
+    assert_eq!(w.len(), 1);
+    assert_eq!(w[0].positions_nm, vec![at(1), at(2), at(3)]);
+}
+
 #[test]
 fn an_exclusion_that_names_nothing_is_refused_and_stores_nothing() {
     let m = ConstraintModel::default();

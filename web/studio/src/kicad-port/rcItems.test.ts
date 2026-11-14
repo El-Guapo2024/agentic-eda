@@ -211,6 +211,7 @@ test("a violation is waived by its check and the uuids of its items, with the po
   assert.deepEqual(drcExclusionSpec(foreign).ids, ["R1.1", ""]);
   assert.equal(canExclude(one), true);
   assert.equal(canExclude({ items: [] }), false, "a finding that names no item");
+  assert.equal(canExclude({ items: [], marker_nm: [[1_000, 2_000]] }), true, "a finding that names no item but whose marker the report places (copper_sliver)");
   assert.equal(canExclude({ items: [{ description: "x", pos: [0, 0], id: null }] }), false, "a lint finding, or a report from an older server: no uuid");
 });
 

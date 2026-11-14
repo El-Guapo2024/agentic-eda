@@ -83,6 +83,9 @@ mod lib_editors_tests;
 #[path = "review_tests.rs"]
 mod review_tests;
 #[cfg(test)]
+#[path = "review_drc_tests.rs"]
+mod review_drc_tests;
+#[cfg(test)]
 #[path = "rule_editor_tests.rs"]
 mod rule_editor_tests;
 #[cfg(test)]

@@ -491,9 +491,11 @@ export function drcExclusionSpec(v: DrcViolation, comment = ""): DrcExclusionSpe
   return spec;
 }
 
-/** Whether a violation can be waived: it names the items to key the waiver on (a lint finding does not; neither does a report from an older server). */
-export function canExclude(v: Pick<DrcViolation, "items">): boolean {
-  return v.items.length > 0 && v.items.every((i) => (i.uuid ?? "") !== "");
+/** Whether a violation can be waived: it names the items to key the waiver on (a lint finding does not; neither does a report from an older server), or it
+ *  names none and the report says where its marker may be (`copper_sliver`: `DRC_ITEM` with no items, KiCad's exclusion is its marker). */
+export function canExclude(v: Pick<DrcViolation, "items"> & { marker_nm?: DrcViolation["marker_nm"] }): boolean {
+  if (v.items.length === 0) return (v.marker_nm?.length ?? 0) > 0;
+  return v.items.every((i) => (i.uuid ?? "") !== "");
 }
 
 /** The violations of one check, as `ExcludeAll` / `RemoveAll` work on them: the ones not waived yet (to exclude) or the ones that are (to remove). */

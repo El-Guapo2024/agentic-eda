@@ -103,6 +103,18 @@ const ERROR_TYPES: &[(&str, &str)] = &[
     ("tuning_profile_track_geometries", "DRCET_TUNING_PROFILE_IMPLICIT_RULES"),
     ("track_on_post_machined_layer", "DRCET_TRACK_ON_POST_MACHINED_LAYER"),
     ("track_not_centered_on_via", "DRCET_TRACK_NOT_CENTERED_ON_VIA"),
+    // the rest of KiCad 25ec2335's checks with a `DrcErrorType` (`pcbnew/api/api_pcb_enums.cpp`; `via_stitch_overlap` has none, so no record can name it)
+    ("text_on_edge_cuts", "DRCET_TEXT_ON_EDGECUTS"),
+    ("copper_outside_board", "DRCET_COPPER_OUTSIDE_BOARD"),
+    ("malformed_microvia_stack_span", "DRCET_MALFORMED_MICROVIA_STACK_SPAN"),
+    ("microvia_stack_not_filled", "DRCET_MICROVIA_STACK_NOT_FILLED"),
+    ("microvia_stack_depth", "DRCET_MICROVIA_STACK_DEPTH"),
+    ("hole_aspect_ratio", "DRCET_HOLE_ASPECT_RATIO"),
+    ("microvia_crosses_core", "DRCET_MICROVIA_CROSSES_CORE"),
+    ("net_chain_stub_length", "DRCET_NET_CHAIN_STUB_TOO_LONG"),
+    ("net_chain_return_path", "DRCET_NET_CHAIN_RETURN_PATH_BREAK"),
+    ("net_chain_tuning_profiles", "DRCET_NET_CHAIN_TUNING_PROFILES"),
+    ("footprint_scaled_with_pads", "DRCET_FOOTPRINT_SCALED_WITH_PADS"),
 ];
 
 /// The kind of finding the check's marker is (`kiapi.board.DrcErrorType`).
@@ -206,6 +218,8 @@ pub enum Copper {
     Simple { pts: Vec<[i64; 2]> },
     /// `SHAPE_COMPOUND`, never nested.
     Compound(Vec<Copper>),
+    /// `SHAPE_ARC` of an arc track (`PCB_ARC::GetEffectiveShape`): its start, middle and end and its width ([`crate::drc_markers::Arc`]).
+    Arc { start: [i64; 2], mid: [i64; 2], end: [i64; 2], width: i64 },
 }
 
 /// Where KiCad puts the marker of `check` between two copper items, `main` and `aux` in the order the report names them (the marker's own:
@@ -241,7 +255,7 @@ pub fn collide(a: &Copper, b: &Copper) -> Option<(i64, [i64; 2])> {
 }
 
 /// The first of the least `actual`s (`if( actual < currentActual )`), or `None` when one of them is not known.
-fn least(results: impl Iterator<Item = Option<(i64, [i64; 2])>>) -> Option<(i64, [i64; 2])> {
+pub(crate) fn least(results: impl Iterator<Item = Option<(i64, [i64; 2])>>) -> Option<(i64, [i64; 2])> {
     let mut best: Option<(i64, [i64; 2])> = None;
     for r in results {
         let r = r?;
@@ -253,7 +267,7 @@ fn least(results: impl Iterator<Item = Option<(i64, [i64; 2])>>) -> Option<(i64,
 }
 
 /// `collideSingleShapes`: which `Collide( T_a, T_b )` a pair goes to (`CollCase`, `CollCaseReversed`).
-fn collide_single(a: &Copper, b: &Copper) -> Option<(i64, [i64; 2])> {
+pub(crate) fn collide_single(a: &Copper, b: &Copper) -> Option<(i64, [i64; 2])> {
     use Copper::*;
     match (a, b) {
         (Circle { centre: p, radius: r }, Circle { centre: q, radius: s }) => {
@@ -292,7 +306,7 @@ fn rect_outline(p0: [i64; 2], w: i64, h: i64) -> Vec<[i64; 2]> {
 }
 
 /// `SEG::Collide( aSeg, clearance, &dist )`'s `dist`: 0 when they cross or touch, else the integer root of the least end-to-segment square.
-fn seg_dist(a: [[i64; 2]; 2], b: [[i64; 2]; 2]) -> i64 {
+pub(crate) fn seg_dist(a: [[i64; 2]; 2], b: [[i64; 2]; 2]) -> i64 {
     if a[0] == a[1] {
         return isqrt_floor(seg_sq_distance_point(b, a[0]));
     }
@@ -307,7 +321,7 @@ fn seg_dist(a: [[i64; 2]; 2], b: [[i64; 2]; 2]) -> i64 {
 }
 
 /// `isqrt`: the floor of the root.
-fn isqrt_floor(v: i128) -> i64 {
+pub(crate) fn isqrt_floor(v: i128) -> i64 {
     let mut r = (v as f64).sqrt() as i128;
     while r * r > v {
         r -= 1;
@@ -318,7 +332,7 @@ fn isqrt_floor(v: i128) -> i64 {
     r as i64
 }
 
-fn sides(pts: &[[i64; 2]]) -> Vec<[[i64; 2]; 2]> {
+pub(crate) fn sides(pts: &[[i64; 2]]) -> Vec<[[i64; 2]; 2]> {
     (0..pts.len()).map(|i| [pts[i], pts[(i + 1) % pts.len()]]).collect()
 }
 
@@ -326,7 +340,7 @@ fn sides(pts: &[[i64; 2]]) -> Vec<[[i64; 2]; 2]> {
 /// is the place, else `aB`'s first point inside `aA`; else each chain's segments sorted by their start (`seg_sort`: x, then y) and every pair tried, the
 /// least `dist` winning (`a_seg.NearestPoint( b_seg )`), the first of equals, the inner loop left at 0 (the segment index is used only past 32 x 64
 /// segments, and keeps this order: "Candidate IDs restore the legacy order").
-fn chain_chain(a: &[[i64; 2]], b: &[[i64; 2]]) -> (i64, [i64; 2]) {
+pub(crate) fn chain_chain(a: &[[i64; 2]], b: &[[i64; 2]]) -> (i64, [i64; 2]) {
     if let Some(&p) = a.first() {
         if point_inside(b, p) {
             return (0, p);
@@ -361,7 +375,7 @@ fn chain_chain(a: &[[i64; 2]], b: &[[i64; 2]]) -> (i64, [i64; 2]) {
 
 /// `Collide( const SHAPE_RECT&, const SHAPE_LINE_CHAIN_BASE& )` with no radius: the rectangle's centre inside the chain is the place, else each of the
 /// chain's segments against the rectangle (`SHAPE_RECT::Collide( SEG )`), the least winning, the first of equals.
-fn rect_chain(p0: [i64; 2], w: i64, h: i64, pts: &[[i64; 2]]) -> (i64, [i64; 2]) {
+pub(crate) fn rect_chain(p0: [i64; 2], w: i64, h: i64, pts: &[[i64; 2]]) -> (i64, [i64; 2]) {
     let centre = [p0[0] + w / 2, p0[1] + h / 2];
     if point_inside(pts, centre) {
         return (0, centre);
@@ -380,24 +394,24 @@ fn rect_chain(p0: [i64; 2], w: i64, h: i64, pts: &[[i64; 2]]) -> (i64, [i64; 2])
     best
 }
 
-fn sq(v: [i64; 2]) -> i128 {
+pub(crate) fn sq(v: [i64; 2]) -> i128 {
     (v[0] as i128).pow(2) + (v[1] as i128).pow(2)
 }
 
 /// `(int) sqrt( dist_sq )`.
-fn isqrt_trunc(v: i128) -> i64 {
+pub(crate) fn isqrt_trunc(v: i128) -> i64 {
     (v as f64).sqrt() as i64
 }
 
 /// `Collide( const SHAPE_CIRCLE&, const SHAPE_SEGMENT& )`: `SHAPE_CIRCLE::Collide( aSeg.GetSeg(), .. )` -- the segment's nearest point to the centre, or
 /// where the circle crosses it when the centre is on it -- and the segment's half width off the actual.
-fn circle_segment(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2], width: i64) -> Option<(i64, [i64; 2])> {
+pub(crate) fn circle_segment(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2], width: i64) -> Option<(i64, [i64; 2])> {
     let (actual, at) = circle_seg(centre, radius, s);
     Some(((actual - width / 2).max(0), at))
 }
 
 /// `SHAPE_CIRCLE::Collide( const SEG& )`.
-fn circle_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> (i64, [i64; 2]) {
+pub(crate) fn circle_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> (i64, [i64; 2]) {
     let pn = seg_nearest_point(s, centre);
     let dist_sq = sq([pn[0] - centre[0], pn[1] - centre[1]]);
     let mut at = pn;
@@ -410,7 +424,7 @@ fn circle_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> (i64, [i64; 2]
 }
 
 /// `CIRCLE::Intersect( const SEG& )`: `IntersectLine`'s points that the segment contains (`SEG::Contains`, a squared distance of 3 at most).
-fn circle_intersect_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> Vec<[i64; 2]> {
+pub(crate) fn circle_intersect_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> Vec<[i64; 2]> {
     let [a, b] = s;
     let d = [b[0] - a[0], b[1] - a[1]];
     let l_sq = sq(d);
@@ -436,7 +450,7 @@ fn circle_intersect_seg(centre: [i64; 2], radius: i64, s: [[i64; 2]; 2]) -> Vec<
 }
 
 /// `RoundedHypot`: the nearest integer to the length.
-fn rounded_hypot(x: i64, y: i64) -> i64 {
+pub(crate) fn rounded_hypot(x: i64, y: i64) -> i64 {
     let v = sq([x, y]);
     let mut r = (v as f64).sqrt() as i128;
     while r * r > v {
@@ -453,7 +467,7 @@ fn rounded_hypot(x: i64, y: i64) -> i64 {
 }
 
 /// `VECTOR2<int>::Resize( aNewLength )`.
-fn resize(v: [i64; 2], len: i64) -> [i64; 2] {
+pub(crate) fn resize(v: [i64; 2], len: i64) -> [i64; 2] {
     if v == [0, 0] {
         return [0, 0];
     }
@@ -473,7 +487,7 @@ fn resize(v: [i64; 2], len: i64) -> [i64; 2] {
 
 /// `Collide( const SHAPE_RECT&, const SHAPE_SEGMENT& )`: `SHAPE_RECT::Collide( aSeg.GetSeg(), .. )` -- an end inside the box is the place, else the side
 /// nearest the segment (of equals, the one whose point is nearer the segment's start) -- and the segment's half width off the actual.
-fn rect_segment(p0: [i64; 2], w: i64, h: i64, s: [[i64; 2]; 2], width: i64) -> Option<(i64, [i64; 2])> {
+pub(crate) fn rect_segment(p0: [i64; 2], w: i64, h: i64, s: [[i64; 2]; 2], width: i64) -> Option<(i64, [i64; 2])> {
     let contains = |p: [i64; 2]| p[0] >= p0[0] && p[0] <= p0[0] + w && p[1] >= p0[1] && p[1] <= p0[1] + h;
     if contains(s[0]) {
         return Some((0, s[0]));
@@ -501,7 +515,7 @@ fn rect_segment(p0: [i64; 2], w: i64, h: i64, s: [[i64; 2]; 2], width: i64) -> O
 }
 
 /// `Collide( const SHAPE_RECT&, const SHAPE_CIRCLE& )` with no corner radius: the nearest point of the box's sides to the centre (inside or out).
-fn rect_circle(p0: [i64; 2], w: i64, h: i64, c: [i64; 2], r: i64) -> (i64, [i64; 2]) {
+pub(crate) fn rect_circle(p0: [i64; 2], w: i64, h: i64, c: [i64; 2], r: i64) -> (i64, [i64; 2]) {
     let vts = [p0, [p0[0], p0[1] + h], [p0[0] + w, p0[1] + h], [p0[0] + w, p0[1]], p0];
     let mut nearest_sq = i128::MAX;
     let mut nearest = p0;
@@ -521,7 +535,7 @@ fn rect_circle(p0: [i64; 2], w: i64, h: i64, c: [i64; 2], r: i64) -> (i64, [i64;
 
 /// `SHAPE_LINE_CHAIN_BASE::Collide( const SEG& )` on a closed polygon: the segment's start inside it is the place, else the nearest of its sides
 /// (`s.NearestPoint( aSeg )`, the first of equals).
-fn chain_seg(pts: &[[i64; 2]], s: [[i64; 2]; 2]) -> (i64, [i64; 2]) {
+pub(crate) fn chain_seg(pts: &[[i64; 2]], s: [[i64; 2]; 2]) -> (i64, [i64; 2]) {
     if point_inside(pts, s[0]) {
         return (0, s[0]);
     }
@@ -543,7 +557,7 @@ fn chain_seg(pts: &[[i64; 2]], s: [[i64; 2]; 2]) -> (i64, [i64; 2]) {
 
 /// `Collide( const SHAPE_CIRCLE&, const SHAPE_LINE_CHAIN_BASE& )`: the centre inside the polygon is the place, else the side the circle is nearest
 /// (`SHAPE_CIRCLE::Collide( SEG )` on each, the first of equals).
-fn circle_chain(c: [i64; 2], r: i64, pts: &[[i64; 2]]) -> Option<(i64, [i64; 2])> {
+pub(crate) fn circle_chain(c: [i64; 2], r: i64, pts: &[[i64; 2]]) -> Option<(i64, [i64; 2])> {
     if point_inside(pts, c) {
         return Some((0, c));
     }
@@ -561,7 +575,7 @@ fn circle_chain(c: [i64; 2], r: i64, pts: &[[i64; 2]]) -> Option<(i64, [i64; 2])
 }
 
 /// `SHAPE_LINE_CHAIN_BASE::PointInside` (accuracy 0): the crossings of a ray in +x, `rescale` for the crossing's x.
-fn point_inside(pts: &[[i64; 2]], p: [i64; 2]) -> bool {
+pub(crate) fn point_inside(pts: &[[i64; 2]], p: [i64; 2]) -> bool {
     if pts.len() < 3 {
         return false;
     }
@@ -581,7 +595,7 @@ fn point_inside(pts: &[[i64; 2]], p: [i64; 2]) -> bool {
 }
 
 /// `SEG::SquaredDistance( const VECTOR2I& )`: the ends' squares, and inside the Lagrange identity `KiROUND( cross^2 / |ab|^2 )`.
-fn seg_sq_distance_point(s: [[i64; 2]; 2], p: [i64; 2]) -> i128 {
+pub(crate) fn seg_sq_distance_point(s: [[i64; 2]; 2], p: [i64; 2]) -> i128 {
     let [a, b] = s;
     let ab = [(b[0] - a[0]) as i128, (b[1] - a[1]) as i128];
     let ap = [(p[0] - a[0]) as i128, (p[1] - a[1]) as i128];
@@ -599,7 +613,7 @@ fn seg_sq_distance_point(s: [[i64; 2]; 2], p: [i64; 2]) -> i128 {
 }
 
 /// `SEG::SquaredDistance( const SEG& )`: a point's for a zero-length one, 0 when they cross, else the least of the four end distances.
-fn seg_sq_distance(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> i128 {
+pub(crate) fn seg_sq_distance(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> i128 {
     if s[0] == s[1] {
         return seg_sq_distance_point(o, s[0]);
     }
@@ -626,7 +640,15 @@ pub fn rotate_point(p: [i64; 2], degrees: f64) -> [i64; 2] {
     } else if a == 270.0 {
         [-y, x]
     } else {
-        let (s, c) = a.to_radians().sin_cos();
+        // `EDA_ANGLE::Sin`, `Cos`: exact at the diagonals
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let (s, c) = match a {
+            v if v == 45.0 => (h, h),
+            v if v == 135.0 => (h, -h),
+            v if v == 225.0 => (-h, -h),
+            v if v == 315.0 => (-h, h),
+            v => v.to_radians().sin_cos(),
+        };
         [((y as f64) * s + (x as f64) * c).round() as i64, ((y as f64) * c - (x as f64) * s).round() as i64]
     }
 }
@@ -650,6 +672,18 @@ pub struct BoardShapes {
     /// A board-edge shape's `GetEffectiveShape( Edge_Cuts )`: its stroke's segments (`EDA_SHAPE::MakeEffectiveShapes` of a line, a rectangle's four sides
     /// from `GetRectCorners`, a polygon's sides), each as wide as the line.
     pub edges: std::collections::HashMap<String, Copper>,
+    /// Each copper zone's fill by its uuid: the outlines of its `(filled_polygon ..)`s, every layer's (`ZONE::GetFill`), as kicad-cli judged them.
+    pub zone_fills: std::collections::HashMap<String, Vec<Vec<[i64; 2]>>>,
+    /// The copper zones' fills by layer, every zone's polygons together (`DRC_TEST_PROVIDER_SLIVER_CHECKER`'s layer polygons start from them).
+    pub fills_by_layer: std::collections::BTreeMap<String, Vec<Vec<[i64; 2]>>>,
+    /// Each keepout rule area's outline (`ZONE::Outline`), with its uuid.
+    pub keepouts: Vec<(String, Vec<[i64; 2]>)>,
+    /// Each footprint's courtyard corners by its uuid, `[front, back]`: the polygons its `F.CrtYd` / `B.CrtYd` lines, rectangles and polygons make
+    /// (`FOOTPRINT::BuildCourtyardCaches`), each as the list of its corners on the board.
+    pub courtyards: std::collections::HashMap<String, [Vec<Vec<[i64; 2]>>; 2]>,
+    /// Each silkscreen graphic's subshapes by its uuid (`EDA_SHAPE::MakeEffectiveShapes`: a line's segment, a rectangle's or polygon's sides, a filled
+    /// one's `SHAPE_SIMPLE`), the board's and the footprints'.
+    pub silk: std::collections::HashMap<String, Vec<Copper>>,
 }
 
 /// Where KiCad 25ec2335 puts the marker of `check` between the items `main` and `aux` (the report's order) of `board`:
@@ -686,6 +720,36 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
             Some("segment") => {
                 if let (Some(a), Some(b), Some(w), Some(u)) = (find(l, "start").and_then(xy), find(l, "end").and_then(xy), find(l, "width").and_then(|w| nm(txt(w, 1))), uuid(l)) {
                     out.insert(u, Copper::Segment { a, b, width: w });
+                }
+            }
+            Some("arc") => {
+                if let (Some(a), Some(m), Some(b), Some(w), Some(u)) = (find(l, "start").and_then(xy), find(l, "mid").and_then(xy), find(l, "end").and_then(xy), find(l, "width").and_then(|w| nm(txt(w, 1))), uuid(l)) {
+                    out.insert(u, Copper::Arc { start: a, mid: m, end: b, width: w });
+                }
+            }
+            Some("zone") => {
+                let Some(u) = uuid(l) else { continue };
+                let pts_of = |pl: &[crate::sexpr::Sexpr]| -> Vec<[i64; 2]> { find(pl, "pts").map(|ps| find_all(ps, "xy").filter_map(xy).collect()).unwrap_or_default() };
+                if find(l, "keepout").is_some() {
+                    if let Some(poly) = find(l, "polygon") {
+                        shapes.keepouts.push((u, pts_of(poly)));
+                    }
+                } else {
+                    for fp in find_all(l, "filled_polygon") {
+                        let (Some(layer), pts) = (find(fp, "layer").and_then(|y| txt(y, 1)), pts_of(fp)) else { continue };
+                        if pts.len() >= 3 {
+                            shapes.fills_by_layer.entry(layer.to_string()).or_default().push(pts);
+                        }
+                    }
+                    let fills: Vec<Vec<[i64; 2]>> = find_all(l, "filled_polygon").map(pts_of).filter(|p| p.len() >= 3).collect();
+                    if !fills.is_empty() {
+                        shapes.zone_fills.insert(u, fills);
+                    }
+                }
+            }
+            Some("gr_line" | "gr_rect" | "gr_poly") if matches!(find(l, "layer").and_then(|y| txt(y, 1)), Some("F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen")) => {
+                if let (Some(u), Some(parts)) = (uuid(l), graphic_subshapes(l, &|p| p)) {
+                    shapes.silk.insert(u, parts);
                 }
             }
             Some("via") => {
@@ -725,6 +789,36 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                 let Some(at) = find(l, "at") else { continue };
                 let Some(fp_pos) = xy(at) else { continue };
                 let fp_angle = txt(at, 3).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
+                // the footprint's graphics, from its library frame to the board's (`SetLibraryStart`: turned, then moved)
+                let place = |p: [i64; 2]| {
+                    let t = rotate_point(p, fp_angle);
+                    [t[0] + fp_pos[0], t[1] + fp_pos[1]]
+                };
+                let mut courtyard: [Vec<Vec<[i64; 2]>>; 2] = [Vec::new(), Vec::new()];
+                for g in l.iter().skip(1).filter_map(|g| g.as_list()) {
+                    if !matches!(tag(g), Some("fp_line" | "fp_rect" | "fp_poly")) {
+                        continue;
+                    }
+                    let layer = find(g, "layer").and_then(|y| txt(y, 1)).unwrap_or("");
+                    match layer {
+                        "F.CrtYd" | "B.CrtYd" | "F.Courtyard" | "B.Courtyard" => {
+                            if let Some(pts) = graphic_corners(g, &place) {
+                                courtyard[if layer.starts_with('F') { 0 } else { 1 }].push(pts);
+                            }
+                        }
+                        "F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen" => {
+                            if let (Some(u), Some(parts)) = (uuid(g), graphic_subshapes(g, &place)) {
+                                shapes.silk.insert(u, parts);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(u) = uuid(l) {
+                    if courtyard.iter().any(|c| !c.is_empty()) {
+                        shapes.courtyards.insert(u, [chain_courtyard(std::mem::take(&mut courtyard[0])), chain_courtyard(std::mem::take(&mut courtyard[1]))]);
+                    }
+                }
                 for pad in find_all(l, "pad") {
                     let (Some(u), Some(pat)) = (uuid(pad), find(pad, "at")) else { continue };
                     let Some(local) = xy(pat) else { continue };
@@ -782,9 +876,167 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
     shapes
 }
 
+/// The corners of a line, a rectangle or a polygon graphic on the board (`place` takes a footprint's from its library frame): a line's two ends, a
+/// rectangle's `GetRectCorners`, a polygon's points. `None` for a polygon with an arc in it.
+fn graphic_corners(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2]) -> Option<Vec<[i64; 2]>> {
+    use crate::sexpr::{find, find_all, tag, txt};
+    let nm = |t: Option<&str>| -> Option<i64> { t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64) };
+    let xy = |l: &[crate::sexpr::Sexpr]| -> Option<[i64; 2]> { Some([nm(txt(l, 1))?, nm(txt(l, 2))?]) };
+    let pts: Vec<[i64; 2]> = match tag(g) {
+        Some("gr_line" | "fp_line") => vec![find(g, "start").and_then(xy)?, find(g, "end").and_then(xy)?],
+        Some("gr_rect" | "fp_rect") => {
+            if find(g, "radius").is_some_and(|r| nm(txt(r, 1)).unwrap_or(0) > 0) {
+                return None;
+            }
+            let (a, b) = (find(g, "start").and_then(xy)?, find(g, "end").and_then(xy)?);
+            vec![a, [b[0], a[1]], b, [a[0], b[1]]]
+        }
+        _ => {
+            let ps = find(g, "pts")?;
+            if find(ps, "arc").is_some() {
+                return None;
+            }
+            find_all(ps, "xy").filter_map(xy).collect()
+        }
+    };
+    Some(pts.into_iter().map(place).collect())
+}
+
+/// `EDA_SHAPE::MakeEffectiveShapes` of a line, a rectangle or a polygon graphic: a line's `SHAPE_SEGMENT`, a rectangle's or a polygon's sides as wide as
+/// its stroke and, filled, its `SHAPE_SIMPLE`.
+fn graphic_subshapes(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2]) -> Option<Vec<Copper>> {
+    use crate::sexpr::{find, tag, txt};
+    let nm = |t: Option<&str>| -> Option<i64> { t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64) };
+    let width = find(g, "stroke").and_then(|st| find(st, "width")).or_else(|| find(g, "width")).and_then(|w| nm(txt(w, 1))).unwrap_or(0);
+    let filled = find(g, "fill").and_then(|f| txt(f, 1).or_else(|| find(f, "type").and_then(|t| txt(t, 1)))).is_some_and(|f| matches!(f, "yes" | "solid"));
+    let pts = graphic_corners(g, place)?;
+    if matches!(tag(g), Some("gr_line" | "fp_line")) {
+        return Some(vec![Copper::Segment { a: pts[0], b: pts[1], width }]);
+    }
+    let mut out = Vec::new();
+    if filled {
+        out.push(Copper::Simple { pts: pts.clone() });
+    }
+    if width > 0 || !filled {
+        out.extend(sides(&pts).into_iter().map(|s| Copper::Segment { a: s[0], b: s[1], width }));
+    }
+    Some(out)
+}
+
+/// A footprint's courtyard as `FOOTPRINT::BuildCourtyardCaches` makes it: the outline `ConvertOutlineToPolygon` chains (closed rectangles and polygons as
+/// they are, lines end to end into the outlines they close), then `Inflate( -maxError, CHAMFER_ACUTE_CORNERS, maxError )` with `maxError` 0.005 mm --
+/// touching courtyards are legal. The corners of each polygon of the result.
+fn chain_courtyard(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
+    let max_error = 5_000;
+    chain_outlines(parts)
+        .into_iter()
+        .flat_map(|poly| {
+            let outline = poly.iter().map(|p| eda_clipper2::Point64 { x: p[0], y: p[1], z: 0 }).collect();
+            let mut set = eda_shape_poly_set::ShapePolySet::from_outline(outline);
+            set.inflate(-max_error, eda_shape_poly_set::CornerStrategy::ChamferAcuteCorners, max_error as i32, false);
+            set.polys.into_iter().filter_map(|p| p.into_iter().next()).map(|c| c.iter().map(|q| [q.x, q.y]).collect::<Vec<[i64; 2]>>()).collect::<Vec<_>>()
+        })
+        .filter(|p| p.len() >= 3)
+        .collect()
+}
+
+/// `ConvertOutlineToPolygon`'s chaining: closed rectangles and polygons as they are, lines end to end into the outlines they close.
+fn chain_outlines(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
+    let (mut polys, mut lines): (Vec<Vec<[i64; 2]>>, Vec<Vec<[i64; 2]>>) = parts.into_iter().partition(|p| p.len() > 2);
+    while let Some(first) = lines.pop() {
+        let mut chain = first;
+        while let Some(i) = lines.iter().position(|l| l[0] == *chain.last().unwrap_or(&[0, 0]) || l[1] == *chain.last().unwrap_or(&[0, 0])) {
+            let l = lines.remove(i);
+            let next = if l[0] == *chain.last().unwrap_or(&[0, 0]) { l[1] } else { l[0] };
+            if next == chain[0] {
+                break;
+            }
+            chain.push(next);
+        }
+        if chain.len() >= 3 {
+            polys.push(chain);
+        }
+    }
+    polys
+}
+
+/// `BOARD_DESIGN_SETTINGS::m_MaxError` as the studio's projects have it (`max_error`, 0.005 mm): the error a pad's rounded corner is cut to.
+const CHAMFER_MAX_ERROR: i64 = 5_000;
+
+/// `CornerListToPolygon( outline, corners, 0, aError, ERROR_INSIDE )` (KiCad 25ec2335 `convert_basic_shapes_to_polygon.cpp`): a corner with no radius as it
+/// is; a rounded one as its arc -- the start `KiROUND`-free `incoming.Resize( radius / tan( turn / 2 ) )` back from the corner, the centre a radius in from it
+/// (`Perpendicular`), the points `RotatePoint( arcStartOrigin, -angPos )` at `angDelta = 360 / max( 16, GetArcToSegmentCount( radius, aError, 360 ) )`
+/// starting half way into the last step, and the end the start reflected in the corner's diagonal (`SEG::ReflectPoint`).
+fn corner_list_to_polygon(corners: &[([i64; 2], i64)], error: i64) -> Vec<[i64; 2]> {
+    let mut out = Vec::new();
+    let Some(last) = corners.last() else { return out };
+    let mut incoming = [corners[0].0[0] - last.0[0], corners[0].0[1] - last.0[1]];
+    let n = corners.len();
+    for i in 0..n {
+        let (cur, radius) = corners[i];
+        let next = corners[(i + 1) % n].0;
+        let outgoing = [next[0] - cur[0], next[1] - cur[1]];
+        if radius == 0 {
+            out.push(cur);
+        } else {
+            let (end_angle, tan_angle2) = if (incoming[0] == 0 && outgoing[1] == 0) || (incoming[1] == 0 && outgoing[0] == 0) {
+                (90.0f64, 1.0f64)
+            } else {
+                let cos_num = incoming[0] as f64 * outgoing[0] as f64 + incoming[1] as f64 * outgoing[1] as f64;
+                let cos_den = rounded_hypot(incoming[0], incoming[1]) as f64 * rounded_hypot(outgoing[0], outgoing[1]) as f64;
+                let angle = (cos_num / cos_den).acos();
+                (angle.to_degrees(), ((std::f64::consts::PI - angle) / 2.0).tan())
+            };
+            // `GetArcToSegmentCount( radius, aError, FULL_CIRCLE )`
+            let rel = error.max(1) as f64 / radius.max(1) as f64;
+            let inc = (180.0 / std::f64::consts::PI * (1.0 - rel).acos() * 2.0).min(360.0 / 8.0);
+            let segs = ((360.0f64 / inc).round() as i64).max(2).max(16);
+            let delta = 360.0 / segs as f64;
+            let mut last_seg = end_angle;
+            if last_seg > 0.0 {
+                while last_seg > delta {
+                    last_seg -= delta;
+                }
+            } else {
+                while last_seg < -delta {
+                    last_seg += delta;
+                }
+            }
+            let mut pos = if last_seg == 0.0 { delta } else { (delta + last_seg) / 2.0 };
+            // `VECTOR2I::Resize( int )`: the double length turned to an int first
+            let transition = if tan_angle2 > 0.0 { (radius as f64 / tan_angle2) as i64 } else { 0 };
+            let back = resize(incoming, transition);
+            let start = [cur[0] - back[0], cur[1] - back[1]];
+            let perp = resize([-incoming[1], incoming[0]], radius);
+            let centre = [start[0] + perp[0], start[1] + perp[1]];
+            let end = reflect_point([cur, centre], start);
+            let origin = [start[0] - centre[0], start[1] - centre[1]];
+            out.push(start);
+            while pos < end_angle {
+                let p = rotate_point(origin, -pos);
+                out.push([p[0] + centre[0], p[1] + centre[1]]);
+                pos += delta;
+            }
+            out.push(end);
+        }
+        incoming = outgoing;
+    }
+    out
+}
+
+/// `SEG::ReflectPoint`: `aP` mirrored in the line of the segment, the projection by `rescale`.
+fn reflect_point(s: [[i64; 2]; 2], p: [i64; 2]) -> [i64; 2] {
+    let [a, b] = s;
+    let d = [(b[0] - a[0]) as i128, (b[1] - a[1]) as i128];
+    let l_squared = d[0] * d[0] + d[1] * d[1];
+    let t = d[0] * (p[0] - a[0]) as i128 + d[1] * (p[1] - a[1]) as i128;
+    let c = if l_squared == 0 { [p[0] as i128, p[1] as i128] } else { [a[0] as i128 + rescale(t, d[0], l_squared), a[1] as i128 + rescale(t, d[1], l_squared)] };
+    [(2 * c[0] - p[0] as i128) as i64, (2 * c[1] - p[1] as i128) as i64]
+}
+
 /// A chamfered rectangle pad (`PAD_SHAPE::CHAMFERED_RECT`): `TransformRoundChamferedRectToPolygon`'s corner list -- the four corners, each chamfered one
-/// replaced by its two cut points `KiROUND( ratio * shorter side )` along the sides, consecutive duplicates dropped when two chamfers meet -- turned and
-/// moved, one `SHAPE_SIMPLE`. `None` when a corner that is not chamfered is rounded (its arc is approximated to the board's error, not ported).
+/// replaced by its two cut points `KiROUND( ratio * shorter side )` along the sides, consecutive duplicates dropped when two chamfers meet, the corners that
+/// are not chamfered rounded by the pad's radius ([`corner_list_to_polygon`]) -- turned and moved, one `SHAPE_SIMPLE`.
 pub fn chamfered_compound(pos: [i64; 2], size: [i64; 2], angle: f64, rratio: f64, chamfer_ratio: f64, corners_mask: u32) -> Option<Copper> {
     let radius = (size[0].min(size[1]) as f64 * rratio).round() as i64;
     let half = [size[0] / 2, size[1] / 2];
@@ -813,17 +1065,20 @@ pub fn chamfered_compound(pos: [i64; 2], size: [i64; 2], angle: f64, rratio: f64
         corners[pos_i + 1].0[1] += k(2 * cc as i64 - 1) * chamfer;
         pos_i += 2;
     }
-    if corners.iter().any(|(_, r)| *r > 0) {
-        return None;
-    }
-    let mut pts: Vec<[i64; 2]> = corners.into_iter().map(|(p, _)| p).collect();
     if corners_mask.count_ones() > 1 && 2 * chamfer >= shorter {
-        // `CornerListRemoveDuplicates`
-        pts.dedup();
-        while pts.len() > 1 && pts.first() == pts.last() {
-            pts.pop();
+        // `CornerListRemoveDuplicates`: from the last back, a corner at the place of the one after it goes
+        let mut prev = corners[0].0;
+        let mut i = corners.len();
+        while i > 0 {
+            i -= 1;
+            if corners[i].0 == prev {
+                corners.remove(i);
+            } else {
+                prev = corners[i].0;
+            }
         }
     }
+    let pts = corner_list_to_polygon(&corners, CHAMFER_MAX_ERROR);
     let pts = pts.into_iter().map(|p| {
         let t = rotate_point(p, angle);
         [t[0] + pos[0], t[1] + pos[1]]
@@ -939,7 +1194,7 @@ pub fn pad_compound(shape: &str, pos: [i64; 2], size: [i64; 2], angle: f64, rrat
 }
 
 /// `KiROUND( v / 2.0 )`: half of `v`, rounded half away from zero.
-fn ki_round_half(v: i64) -> i64 {
+pub(crate) fn ki_round_half(v: i64) -> i64 {
     if v >= 0 {
         (v + 1) / 2
     } else {
@@ -949,7 +1204,7 @@ fn ki_round_half(v: i64) -> i64 {
 
 /// `rescale( aNumerator, aValue, aDenominator )` (`libs/kimath/src/math/util.cpp`, the `__int128` branch): `aNumerator * aValue / aDenominator`
 /// rounded to the nearest, half away from zero.
-fn rescale(numerator: i128, value: i128, denominator: i128) -> i128 {
+pub(crate) fn rescale(numerator: i128, value: i128, denominator: i128) -> i128 {
     let n = numerator * value;
     if (n < 0) ^ (denominator < 0) {
         (n - denominator / 2) / denominator
@@ -958,12 +1213,12 @@ fn rescale(numerator: i128, value: i128, denominator: i128) -> i128 {
     }
 }
 
-fn cross(u: [i128; 2], v: [i128; 2]) -> i128 {
+pub(crate) fn cross(u: [i128; 2], v: [i128; 2]) -> i128 {
     u[0] * v[1] - u[1] * v[0]
 }
 
 /// `SEG::NearestPoint( const VECTOR2I& aP )` (KiCad 25ec2335 `seg.cpp`).
-fn seg_nearest_point(s: [[i64; 2]; 2], p: [i64; 2]) -> [i64; 2] {
+pub(crate) fn seg_nearest_point(s: [[i64; 2]; 2], p: [i64; 2]) -> [i64; 2] {
     let [a, b] = s;
     let d = [(b[0] - a[0]) as i128, (b[1] - a[1]) as i128];
     let l_squared = d[0] * d[0] + d[1] * d[1];
@@ -982,7 +1237,7 @@ fn seg_nearest_point(s: [[i64; 2]; 2], p: [i64; 2]) -> [i64; 2] {
 
 /// `SEG::NearestPoint( const SEG& aSeg )`: the crossing if they cross, else of the four end-to-segment distances the smallest, its point on this
 /// segment (this segment's own end, or the nearest point of this segment to the other's end), the first of equals.
-fn seg_nearest_to_seg(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> [i64; 2] {
+pub(crate) fn seg_nearest_to_seg(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> [i64; 2] {
     if let Some(p) = seg_intersect(s, o) {
         return p;
     }
@@ -1004,7 +1259,7 @@ fn seg_nearest_to_seg(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> [i64; 2] {
 /// the determinant `dir2.Cross( dir1 )`; parallel segments meet only on one line (`dir1.Cross( offset ) == 0`), where `checkCollinearOverlap` takes the
 /// middle of the overlap on the axis of the longer extent; otherwise both parameters must lie in the segments and the point is
 /// `aSeg.A + rescale( param1, dir2, determinant )`.
-fn seg_intersect(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> Option<[i64; 2]> {
+pub(crate) fn seg_intersect(s: [[i64; 2]; 2], o: [[i64; 2]; 2]) -> Option<[i64; 2]> {
     let [a, b] = s;
     let [c, d] = o;
     if a[0].max(b[0]) < c[0].min(d[0]) || c[0].max(d[0]) < a[0].min(b[0]) || a[1].max(b[1]) < c[1].min(d[1]) || c[1].max(d[1]) < a[1].min(b[1]) {
@@ -1262,7 +1517,10 @@ mod tests {
         // a chamfered square with its top left corner cut: five corners, turned and moved
         let ch = chamfered_compound([1000, 1000], [400, 400], 0.0, 0.0, 0.25, 1).unwrap();
         assert_eq!(ch, Copper::Compound(vec![Copper::Simple { pts: vec![[800, 900], [900, 800], [1200, 800], [1200, 1200], [800, 1200]] }]));
-        assert_eq!(chamfered_compound([0, 0], [400, 400], 0.0, 0.25, 0.25, 1), None, "a rounded corner beside the chamfer is not built");
+        // UI-LEFT-3 B3-1: the corners beside the chamfer rounded (`CornerListToPolygon`, ERROR_INSIDE): radius 100, 16 steps of 22.5 degrees, the first
+        // half way into the last, the arc's end the start reflected in the corner's diagonal
+        let Some(Copper::Compound(parts)) = chamfered_compound([0, 0], [400, 400], 0.0, 0.25, 0.25, 1) else { panic!("built") };
+        assert_eq!(parts, vec![Copper::Simple { pts: vec![[-200, -100], [-100, -200], [100, -200], [138, -192], [171, -171], [192, -138], [200, -100], [200, 100], [192, 138], [171, 171], [138, 192], [100, 200], [-100, 200], [-138, 192], [-171, 171], [-192, 138], [-200, 100]] }]);
     }
 
     #[test]

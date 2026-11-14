@@ -30,7 +30,9 @@ pub(crate) fn add_drc_exclusions(design: &mut Design, exclusions: &[DrcExclusion
         if e.check.trim().is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_drc_exclusion", "check", "an exclusion names the check (`clearance`, ...) that found the violation")]);
         }
-        if e.items.is_empty() || e.items.iter().any(|i| i.trim().is_empty()) {
+        // a marker that names no item (`copper_sliver`) is known by where it may be (`DRC_ITEM` with no `SetItems`, KiCad 25ec2335
+        // `drc_test_provider_sliver_checker.cpp`)
+        if (e.items.is_empty() && e.positions_nm.is_empty()) || e.items.iter().any(|i| i.trim().is_empty()) {
             return Err(vec![CheckResult::fail("ops_bad_drc_exclusion", e.check.as_str(), "an exclusion names the items of the violation (their uuids in the derived board): this one has none")]);
         }
         if !e.ids.is_empty() && e.ids.len() != e.items.len() {
@@ -43,6 +45,15 @@ pub(crate) fn add_drc_exclusions(design: &mut Design, exclusions: &[DrcExclusion
         e.positions_nm.sort_unstable();
         e.positions_nm.dedup();
         match list.iter_mut().find(|x| x.matches(&e.check, &e.items)) {
+            // the item-less markers of one check share the studio's key `(check, [])`: one exclusion holds every place any of them may be, as the
+            // studio cannot tell two of them apart (kicad-cli's report gives neither an item nor a place)
+            Some(slot) if e.items.is_empty() => {
+                let mut at = std::mem::take(&mut slot.positions_nm);
+                at.extend(e.positions_nm);
+                at.sort_unstable();
+                at.dedup();
+                *slot = DrcExclusion { positions_nm: at, ..e };
+            }
             Some(slot) => *slot = e,
             None => list.push(e),
         }

@@ -863,6 +863,23 @@ impl Violation {
                 self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
             }
         }
+        // And every place KiCad's order could pick where it rests on one this port does not have, or on the rule's clearance (an arc, a zone's fill, two
+        // courtyards, two silkscreen graphics, an unflashed via or pad, a keepout: `eda_kicad::drc_markers::candidates`); a record no marker matches is dropped.
+        if self.kind == "copper_sliver" {
+            // no item: the layer the description names (`layerDesc( layer )`), else every copper layer's fills
+            let layer = self.description.rsplit_once('(').and_then(|(_, l)| l.strip_suffix(')')).unwrap_or("").to_string();
+            let layer = if board.fills_by_layer.contains_key(&layer) { layer } else { String::new() };
+            for [x, y] in eda_kicad::drc_markers::candidates(&self.kind, &layer, "", board, None) {
+                self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
+            }
+        }
+        if let Some(main) = self.items.first() {
+            let aux = self.items.get(1).map(|i| i.uuid.as_str()).unwrap_or("");
+            let clearance = eda_kicad::drc_markers::clearance_of(&self.description);
+            for [x, y] in eda_kicad::drc_markers::candidates(&self.kind, &main.uuid, aux, board, clearance) {
+                self.markers_nm.push(Point { x: Nm::new(x), y: Nm::new(y) });
+            }
+        }
         self.markers_nm.sort_unstable();
         self.markers_nm.dedup();
     }
