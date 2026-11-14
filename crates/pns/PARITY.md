@@ -1857,6 +1857,9 @@ transitions still run), `edit_tool.cpp::Remove`, `pns_tool_base.cpp::highlightNe
   `component_drag` `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router`, ops `commit_route_takes_a_lone_pins_net_and_no_net`, slow cli
   `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router_and_for_kicad_cli` (kicad-cli: no clearance, short, crossing or edge violation for either route),
   browser `router-v17` lone-pad.
+- **The Strict switch (coordinator's report).** The router's commits (`/api/route/finish`, `fix`'s, `attempt_finish`, `continue_from_end`, `cancel`, `drag_finish`,
+  the pair's) stepped the board strict whatever the status bar's Strict said; they now take the `"strict"` the studio sends (`api/client.ts` `setRouterStrict`,
+  every `/api/route/*` request) as `/api/cmd` does, strict when absent. Tests: cli `a_drag_commit_follows_the_strict_switch`, browser `router-v17` strict.
 - **Differs (kept):** a multi-track position that is not resolved is previewed as its lines flagged colliding (KiCad shows `m_lastNode`, the world or the
   shove's frame without them); a via `buildInitialLine` cannot push free stays at the cursor, flagged, where KiCad's head has no via (`aViaOk` false); a
   route does not highlight its net (`prepareInteractive`'s `highlightNets`), so only drags set `m_startHighlightNetcodes`.
