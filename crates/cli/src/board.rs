@@ -2562,7 +2562,7 @@ fn cmd_line(c: &Cmd) -> String {
             datasheet.as_ref().map(|d| format!(" --datasheet {d:?}")).unwrap_or_default(),
         ),
         Cmd::RenameSymbol { id, new_id } => format!("schematic rename {id} {new_id}"),
-        Cmd::CarrySymbolFields { id, fields } => format!("schematic carry-fields {id} --fields {}", fields.len()),
+        Cmd::CarrySymbolFields { id, fields, remove } => format!("schematic carry-fields {id} --fields {} --remove {}", fields.len(), remove.len()),
         Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => format!("schematic fields-table --edits {} --add {} --rename {} --remove {}", edits.len(), add_fields.len(), rename_fields.len(), remove_fields.len()),
         Cmd::ReplaceText { search, items, all_sheets } => format!("schematic replace {:?} {:?}{}{}", search.find, search.replace, items.as_ref().map(|i| format!(" --items {}", i.len())).unwrap_or_default(), if *all_sheets { " --all-sheets" } else { "" }),
         Cmd::SetErcPinMapCell { a, b, level } => format!("schematic erc-pin-map {a} {b} {level}"),

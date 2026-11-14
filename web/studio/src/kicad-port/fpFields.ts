@@ -203,33 +203,36 @@ export function mergeDuplicateFields<T extends { name: string; text: string; lay
 const MANDATORY_SYMBOL_FIELDS = ["Reference", "Value", "Footprint", "Datasheet", "Description"] as const;
 
 /**
- * Update Schematic from PCB's "Other fields" for the footprint Footprint Properties' OK leaves (UI-LEFT-2 PP18, UI-LEFT-3 P3-14), as `carry_symbol_fields` takes it, or
- * null when it would change nothing.
+ * The fields Footprint Properties' OK changed, carried to the symbol as Update Schematic from PCB's "Other fields" carries a field (UI-LEFT-2 PP18, UI-LEFT-3 P3-14),
+ * as `carry_symbol_fields` takes them, or null when there is nothing to carry.
  *
- * KiCad's dialog sets the footprint's fields (`TransferDataFromWindow`), and Update Schematic from PCB carries them to the symbol: the board's netlist sends every field
- * of the footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[field->GetCanonicalName()] = field->GetText()`, board-only footprints left out), and
- * `BACK_ANNOTATE::applyChangelist` with "Other fields" (on by default, `m_cbUpdateOtherFields`) skips the Reference and the Value, sets a symbol field that
- * `!HasTextVars()` and whose shown text differs ("Change %s field '%s' value to '%s'."), adds a field the symbol has not, hidden at the symbol ("Add %s field '%s' with
- * value '%s'."), and deletes a field of the symbol that is not mandatory and that the footprint has not ("Delete %s field '%s.'"). The studio carries the Reference and
- * the Value at OK, as that update would, and so carries the other fields the same way: every field the footprint has once OK is pressed (`rows`, the grid as it is
- * kept), against what the symbol has (`part.symbol_fields`: its Datasheet, Description and user fields). Nothing for a footprint no symbol is for (`symbol_fields`
- * absent: "Footprint '%s' has no assigned symbol.") or one marked Not in schematic (`boardOnly`, the new attributes).
+ * KiCad's dialog sets the footprint's fields (`TransferDataFromWindow`) and leaves the symbol alone; Update Schematic from PCB, run on purpose, then carries them
+ * (`BACK_ANNOTATE::applyChangelist` with "Other fields": a symbol field that `!HasTextVars()` and shows another text is set, one the symbol lacks is added hidden, one
+ * the footprint lacks is deleted). The studio carries at OK, as that update would, but only what the dialog changed: a field whose text was edited or that was added
+ * (`fields`) and a field that was deleted (`remove`), each against what the symbol has (`part.symbol_fields`: its Datasheet, Description and user fields). A field the
+ * dialog did not touch stays as the symbol has it, so an OK on a footprint whose own fields differ from its symbol's does not rewrite the symbol unasked. Reference
+ * and Value go their own way. Nothing for a footprint no symbol is for (`symbol_fields` absent: "Footprint '%s' has no assigned symbol.") or one marked Not in
+ * schematic (`boardOnly`, the new attributes).
  */
-export function carryFieldsCmd(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, rows: readonly { name: string; text: string }[]): Cmd | null {
+export function carryFieldsCmd(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, before: ReadonlyMap<string, string>, after: readonly { name: string; text: string }[]): Cmd | null {
   const symbol: Record<string, string> | undefined = part.symbol_fields;
   if (!symbol || boardOnly) return null;
   const fields: Record<string, string> = {};
-  for (const r of rows) fields[r.name.trim()] = r.text;
-  let changes = false;
-  for (const [name, text] of Object.entries(fields)) {
+  const names = new Set<string>();
+  for (const r of after) {
+    const name = r.name.trim();
+    names.add(name);
     if (name === "Reference" || name === "Value") continue;
+    // a field the dialog edited or added
+    if (before.get(name) === r.text) continue;
     const now = symbol[name];
-    // 1. a field whose text differs and names no variable; 2. a field the symbol lacks
-    if (now === undefined || (!now.includes("${") && now !== text)) changes = true;
+    // 1. its text differs and names no variable; 2. the symbol lacks it
+    if (now === undefined || (!now.includes("${") && now !== r.text)) fields[name] = r.text;
   }
-  // 3. a field of the symbol the footprint lacks
-  for (const name of Object.keys(symbol)) if (!(MANDATORY_SYMBOL_FIELDS as readonly string[]).includes(name) && !(name in fields)) changes = true;
-  return changes ? { op: "carry_symbol_fields", id: part.ref, fields } : null;
+  // 3. a field the dialog deleted, which the symbol has and which is not mandatory
+  const remove = [...before.keys()].filter((name) => !names.has(name) && !(MANDATORY_SYMBOL_FIELDS as readonly string[]).includes(name) && name in symbol);
+  if (Object.keys(fields).length === 0 && remove.length === 0) return null;
+  return { op: "carry_symbol_fields", id: part.ref, fields, ...(remove.length > 0 ? { remove } : {}) };
 }
 
 /**

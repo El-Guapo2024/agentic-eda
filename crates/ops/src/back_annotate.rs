@@ -575,19 +575,20 @@ pub fn plan_net_back_annotation(design: &Design, model: &ConstraintModel, board_
 }
 
 impl crate::Board<'_> {
-    /// [`Cmd::CarrySymbolFields`]: `BACK_ANNOTATE::applyChangelist` with "Other fields" (`m_processOtherFields`, KiCad 8303b2ad `eeschema/tools/backannotate.cpp`) for
-    /// the symbol `id`, from the fields `fields` of its footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[ field->GetCanonicalName() ] =
-    /// field->GetText()`), on every sheet the symbol is on (its units share them):
+    /// [`Cmd::CarrySymbolFields`]: the fields Footprint Properties changed, carried to the symbol `id` as `BACK_ANNOTATE::applyChangelist` with "Other fields"
+    /// (`m_processOtherFields`, KiCad 8303b2ad `eeschema/tools/backannotate.cpp`) carries a field, on every sheet the symbol is on (its units share them):
     ///
-    /// 1. "Existing fields has changed value": a field of that name that names no variable (`HasTextVars`) and shows another text takes the footprint's
+    /// 1. "Existing fields has changed value": a field of a name in `fields` that names no variable (`HasTextVars`) and shows another text takes the footprint's
     ///    (`symField->SetText( fpFieldValue )`); Reference and Value are passed over ("Skip fields that are individually controlled");
-    /// 2. "New field has been added to footprint": a name the symbol has no field of is added with the text, hidden at the symbol (`newField.SetVisible( false )`,
-    ///    `SetTextPos( symbol->GetPosition() )`: the studio's user field with no placement, which is hidden at the symbol's origin);
-    /// 3. "Existing field has been deleted from footprint": a field of the symbol that is not mandatory and that the footprint has not is removed, with its places
-    ///    and the variants' texts of it (`symbol->RemoveField( fieldName )`).
+    /// 2. "New field has been added to footprint": a name in `fields` the symbol has no field of is added with the text, hidden at the symbol
+    ///    (`newField.SetVisible( false )`, `SetTextPos( symbol->GetPosition() )`: the studio's user field with no placement, which is hidden at its origin);
+    /// 3. "Existing field has been deleted from footprint": a field named in `remove` that is not mandatory is removed, with its places and the variants' texts
+    ///    of it (`symbol->RemoveField( fieldName )`).
     ///
-    /// A footprint field named like a mandatory one the footprint does not have (Footprint) is a field of the symbol's like any other, as `GetField( name )` finds it.
-    pub(crate) fn carry_symbol_fields(&mut self, id: &str, fields: &BTreeMap<String, String>) -> Result<(), Vec<eda_model::CheckResult>> {
+    /// **Differs**: KiCad compares every field of every footprint when Update Schematic from PCB runs; the studio carries, at Footprint Properties' OK, only the
+    /// fields that dialog changed (the coordinator's decision, 2026-11-14), so a footprint whose own fields differ from its symbol's does not rewrite the symbol
+    /// unasked.
+    pub(crate) fn carry_symbol_fields(&mut self, id: &str, fields: &BTreeMap<String, String>, remove: &[String]) -> Result<(), Vec<eda_model::CheckResult>> {
         use eda_model::sym_fields::is_mandatory_field;
         let fail = |m: &str| vec![eda_model::CheckResult::fail("ops_unknown_item", id, m.to_string())];
         if self.design.schematic.is_none() {
@@ -635,7 +636,7 @@ impl crate::Board<'_> {
                 }
             }
             // 3.
-            let gone: Vec<String> = sch.user_fields.get(id).map(|m| m.keys().filter(|n| !is_mandatory_field(n) && !fields.contains_key(*n)).cloned().collect()).unwrap_or_default();
+            let gone: Vec<String> = sch.user_fields.get(id).map(|m| m.keys().filter(|n| !is_mandatory_field(n) && remove.contains(*n)).cloned().collect()).unwrap_or_default();
             for name in gone {
                 if let Some(m) = sch.user_fields.get_mut(id) {
                     m.remove(&name);

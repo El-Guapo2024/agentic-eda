@@ -77,7 +77,7 @@
     t(JSON.stringify(await padNets("R1")) === JSON.stringify(before) && !((await state()).locked ?? []).includes("R1"), "two undos: the swap and the lock");
   });
 
-  await scenario("P3-14: Footprint Properties shows the jumper groups and carries a field added and a field deleted to the symbol", async (t) => {
+  await scenario("P3-14: Footprint Properties shows the jumper groups and carries a field added and a field deleted to the symbol (only what it changed)", async (t) => {
     const open = async () => {
       await select(["R1"]);
       await E.run("pcbnew.InteractiveEdit.properties");

@@ -30,8 +30,8 @@
 // bridged solder mask apertures between pads" (`set_footprint_solder_mask`, any footprint); a user row named like a mandatory field is taken as KiCad's reader takes
 // it (its text and look on that field: `mergeDuplicateFields`), no longer refused.
 //
-// UI-LEFT-3 P3-14 (task-v17-backannot): every field of the footprint is carried to the symbol at OK as Update Schematic from PCB's "Other fields" carries it
-// (`carryFieldsCmd`, `carry_symbol_fields`: a changed field set, a new one added hidden, a user field the footprint lacks deleted), and the Pad Properties tab shows the
+// UI-LEFT-3 P3-14 (task-v17-backannot): the fields the dialog changed are carried to the symbol at OK as Update Schematic from PCB's "Other fields" carries a field
+// (`carryFieldsCmd`, `carry_symbol_fields`: an edited field set, a new one added hidden, a deleted user field deleted; an untouched one left alone), and the Pad Properties tab shows the
 // footprint's jumper pad groups and "Duplicate pad numbers are jumpers" as KiCad 25ec2335's dialog lists them (read only there, as in KiCad: the Footprint Editor's
 // Footprint Properties edits them).
 import { DatasheetUrlButton } from "./DatasheetUrlButton";
@@ -253,9 +253,9 @@ export function FootprintPropertiesDialog() {
     // The Reference and Value texts, carried to the schematic's symbol as Update Schematic from PCB would (`BACK_ANNOTATE::applyChangelist`: the value, then the
     // reference); the rename last, as every command before it names the footprint by its old reference.
     if (val0 && valueChanged) cmds.push({ op: "edit_symbol_fields", id: part.ref, value: val0.text });
-    // Every other field of the footprint, carried to the symbol as Update Schematic from PCB's "Other fields" would: set, added hidden, deleted (UI-LEFT-2 PP18,
-    // UI-LEFT-3 P3-14).
-    const carried = carryFieldsCmd(part, attrs.board_only, merged);
+    // The other fields the dialog changed, carried to the symbol as Update Schematic from PCB's "Other fields" would: set, added hidden, deleted (UI-LEFT-2 PP18,
+    // UI-LEFT-3 P3-14); the fields it did not touch stay as the symbol has them.
+    const carried = carryFieldsCmd(part, attrs.board_only, new Map([...infos].map(([n, f]) => [n, f.text])), merged);
     if (carried) cmds.push(carried);
     if (Object.keys(variantFields).length > 0) cmds.push({ op: "set_symbol_variant", variant, ids: [part.ref], fields: variantFields });
     if (ref0 && ref0.text.trim() !== part.ref) cmds.push({ op: "rename_symbol", id: part.ref, new_id: ref0.text.trim() });
