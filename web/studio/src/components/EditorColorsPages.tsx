@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { THEME_PARAMS, getColorThemes, selectSymbolTheme, useColorThemes } from "../state/colorThemeStore";
 import { DEFAULT_THEME, SCH_SAME_AS_BACKGROUND_QUESTION, findTheme, fpColorPageKeys, fpColorPageRows, schColorPageKeys, schColorPageRows, schSameAsBackground, schSaveColors, sortedThemes } from "../kicad-port/colorTheme";
+import { SchColorPreview } from "./ColorPreview";
 import { useThemeColorsPage, type ThemeColorsPageConfig } from "./ThemeColorsPage";
 import type { PreferencesPageHandle } from "./preferencesPage";
 
@@ -32,6 +33,8 @@ const SCH_PAGE: ThemeColorsPageConfig = {
   saveColors: schSaveColors,
   // `validateSave`: every schematic layer (`SCH_LAYER_ID_START` .. `SCH_LAYER_ID_END`: the page's and the ones it leaves out) against the background
   validateSave: (colorOf) => (schSameAsBackground(colorOf, SCH_ALL_LAYER_KEYS) ? SCH_SAME_AS_BACKGROUND_QUESTION : null),
+  // `createPreviewItems`' sheet (components/ColorPreview.tsx)
+  preview: (working) => <SchColorPreview working={working} />,
 };
 
 const FP_PAGE: ThemeColorsPageConfig = {

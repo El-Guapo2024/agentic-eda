@@ -17,13 +17,14 @@
 //     defaults") is `ResetPanel`: every colour of the page to KiCad's default, nothing on a read-only theme.
 //   * OK (`TransferDataFromWindow`) makes the shown theme the editor's (`m_ColorTheme`); Cancel keeps the old one.
 //
-// Different from KiCad: no preview board or sheet (`m_preview`): the page's colours are drawn on the editor's canvas itself while the dialog is up
-// (`setEditorThemePreview`), and the canvas goes back to the editor's theme on Cancel. A reset is saved by OK here; in KiCad it waits in the page's
+// The PCB and schematic pages show KiCad's preview board and sheet at the right of the swatches in the page's colours (`m_preview`, components/ColorPreview.tsx;
+// UI-LEFT-3 C3-12). The page's colours are also drawn on the editor's canvas itself while the dialog is up (`setEditorThemePreview`), and the canvas goes back to
+// the editor's theme on Cancel. A reset is saved by OK here; in KiCad it waits in the page's
 // working copy until the next swatch edit or theme change saves it (`ResetPanel` does not call `saveCurrentTheme`). The schematic page's OK does not ask
 // `validateSave`'s "Some items have the same color as the background ..." question. In place of "Open Theme Folder" (the themes are the browser's, not
 // files in a folder) the page has Import Theme... and Export Theme...: a KiCad theme file (`colors/<name>.json`) read into the person's themes and
 // selected, or the shown theme written as KiCad writes it (kicad-port/colorThemeFile.ts).
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { THEME_DATA, THEME_PARAMS, getColorThemes, replaceStoredThemes, selectEditorTheme, setEditorThemePreview, setThemeColor, useColorThemes } from "../state/colorThemeStore";
 import { SWATCH_MENU_LABELS, addTheme, defaultColor, findTheme, importThemes, resetThemeColors, sanitizeThemeName, swatchMenu, themeColor, themeListEntries, type ColorTheme, type ThemeEditor } from "../kicad-port/colorTheme";
 import { parseThemeFile, themeFilenameOf, writeThemeFile } from "../kicad-port/colorThemeFile";
@@ -49,6 +50,8 @@ export interface ThemeColorsPageConfig {
   overrideOption?: boolean;
   /** The page's own `saveCurrentTheme` step before the save (the schematic's no-white rule). */
   saveColors?: (colors: Readonly<Record<string, string>>) => Record<string, string>;
+  /** The page's preview (`m_preview`: the PCB and schematic pages'; components/ColorPreview.tsx), drawn in the working colours at the right of the swatches. */
+  preview?: (working: ColorTheme) => ReactNode;
   /** `validateSave` on OK (the schematic page's): the question to ask about the colours as they would be saved, or null for none. */
   validateSave?: (colorOf: (key: string) => string | undefined) => string | null;
 }
@@ -222,8 +225,9 @@ export function useThemeColorsPage(config: ThemeColorsPageConfig, open: boolean,
           Override individual item colors
         </label>
       )}
-      {/* `m_colorsListWindow`: one scrolled column of swatch and name (KiCad's preview would be on its right) */}
-      <div role="list" aria-label="Colors" style={{ height: 400, overflowY: "auto", border: "1px solid var(--chrome-border)", padding: "4px 8px", maxWidth: 380 }}>
+      {/* `m_colorsListWindow`: one scrolled column of swatch and name, and the preview on its right (`m_previewPanelSizer`) */}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+      <div role="list" aria-label="Colors" style={{ height: 400, overflowY: "auto", border: "1px solid var(--chrome-border)", padding: "4px 8px", width: 300, flexShrink: 0 }}>
         {rows.map((r) => (
           <div key={r.key} role="listitem" data-color-key={r.key} className="filter-row" style={{ gap: 8, margin: 0, padding: "2px 0" }}>
             <span
@@ -248,6 +252,8 @@ export function useThemeColorsPage(config: ThemeColorsPageConfig, open: boolean,
             <span style={{ fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</span>
           </div>
         ))}
+      </div>
+      {config.preview?.(working)}
       </div>
       <div className="filter-row" style={{ gap: 8 }}>
         <button title="Read a KiCad color theme file (colors/<name>.json) into the themes and show it" onClick={() => fileInput.current?.click()} data-testid={`${config.testId}-import`}>

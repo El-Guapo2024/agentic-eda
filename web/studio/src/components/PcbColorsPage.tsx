@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useStudioState } from "../state/store";
 import { pcbColorPageKeys, pcbColorPageRows } from "../kicad-port/colorTheme";
 import { layerDisplayName } from "../kicad-port/boardLayers";
+import { PcbColorPreview } from "./ColorPreview";
 import { useThemeColorsPage, type ThemeColorsPageConfig } from "./ThemeColorsPage";
 import type { ReactNode } from "react";
 
@@ -30,7 +31,7 @@ export function usePcbColorsPage(open: boolean, shown: boolean): PcbColorsPage {
   // a board layer is labelled `m_board->GetLayerName( layer )` (its own name, else `LayerName()`'s)
   const config = useMemo<ThemeColorsPageConfig>(() => {
     const rows = pcbColorPageRows((file) => layerDisplayName(setup, file));
-    return { editor: "pcb", testId: "pcb-colors", rows: () => rows, pageKeys: PAGE_KEYS, backgroundKey: "LAYER_PCB_BACKGROUND" };
+    return { editor: "pcb", testId: "pcb-colors", rows: () => rows, pageKeys: PAGE_KEYS, backgroundKey: "LAYER_PCB_BACKGROUND", preview: (working) => <PcbColorPreview working={working} /> };
   }, [setup]);
   const page = useThemeColorsPage(config, open, shown);
   return { element: page.element, reset: page.reset!, resetLabel: page.resetLabel, resetTooltip: page.resetTooltip, commit: page.commit, cancel: page.cancel };

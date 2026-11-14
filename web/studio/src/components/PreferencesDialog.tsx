@@ -660,7 +660,7 @@ export function PreferencesDialog() {
 
   const gridsEditor = GRIDS_PAGE[page];
   const title = pageTitle(page);
-  const wide = page === "hotkeys" || page === "common" || page.endsWith("_edit") || page.endsWith("_toolbars") || page === "fp_defaults";
+  const wide = page === "hotkeys" || page === "common" || page.endsWith("_edit") || page.endsWith("_toolbars") || page === "fp_defaults" || page === "pcb_colors" || page === "sch_colors";
 
   return (
     <div className="dialog-backdrop" onClick={cancel}>
