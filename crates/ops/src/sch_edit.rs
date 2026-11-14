@@ -858,11 +858,9 @@ impl<'a> Board<'a> {
 
     /// [`SchCmd::ResetSymbolFields`]: `DIALOG_CHANGE_SYMBOLS::processSymbols`' reset of the fields, on each placed unit's placements (`field_layout`).
     fn reset_symbol_fields(&mut self, ids: &[String], visibility: bool, effects: bool, positions: bool, allow_unchanged: bool) -> Result<(), Vec<CheckResult>> {
-        use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
         if !visibility && !effects && !positions {
             return Err(vec![CheckResult::fail("ops_nothing_to_reset", "fields", "no reset option is chosen")]);
         }
-        let model = self.model;
         let sch = self.schematic()?;
         let mut units: Vec<(String, String, u32)> = Vec::new(); // (reference, lib id, unit)
         for id in ids {
@@ -872,8 +870,23 @@ impl<'a> Board<'a> {
             }
             units.extend(placed.iter().map(|s| (s.id.clone(), s.lib_id.clone(), s.unit)));
         }
+        let changed = self.reset_unit_fields(&units, visibility, effects, positions)?;
+        if !changed && !allow_unchanged {
+            return Err(vec![CheckResult::fail("ops_field_unchanged", ids.first().map(String::as_str).unwrap_or("fields"), "the fields are already as the library symbol has them")]);
+        }
+        Ok(())
+    }
+
+    /// [`Self::reset_symbol_fields`] on the placed units `units` (reference, library id, unit): whether a placement changed.
+    pub(crate) fn reset_unit_fields(&mut self, units: &[(String, String, u32)], visibility: bool, effects: bool, positions: bool) -> Result<bool, Vec<CheckResult>> {
+        let model = self.model;
+        self.reset_unit_fields_in(model, units, visibility, effects, positions)
+    }
+
+    /// [`Self::reset_unit_fields`] measured against `model` (a symbol just placed is not in the board's model yet: [`Board::model_with_placed`]).
+    pub(crate) fn reset_unit_fields_in(&mut self, model: &eda_model::ConstraintModel, units: &[(String, String, u32)], visibility: bool, effects: bool, positions: bool) -> Result<bool, Vec<CheckResult>> {
         let mut changed = false;
-        for (reference, lib_id, unit) in &units {
+        for (reference, lib_id, unit) in units {
             let held = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned();
             let has_copy = held.is_some();
             let lib = held.unwrap_or_else(|| eda_model::ir::LibrarySymbol { lib_id: lib_id.clone(), ..Default::default() });
@@ -894,37 +907,7 @@ impl<'a> Board<'a> {
             for (i, spec) in ctx.specs.iter().enumerate() {
                 // `doUpdate`: the mandatory fields always, a user field the library symbol has (`libField = GetLibSymbolRef()->GetField( field.GetName() )`)
                 let Some(lf) = lib.field(&spec.name).or_else(|| ["Reference", "Value", "Footprint", "Datasheet"].contains(&spec.name.as_str()).then(|| lib.default_field(&spec.name))) else { continue };
-                let p = &mut now[i];
-                if visibility {
-                    p.visible = !lf.hidden;
-                }
-                if effects {
-                    // `SetAttributes( *libField )` -- size, angle, justification, bold, italic -- "Careful: the visible bit and position are also set by
-                    // SetAttributes()": they are put back; then `SetNameShown`, `SetCanAutoplace`
-                    let size = eda_model::units::mm(lf.size_mm);
-                    p.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
-                    p.angle = if eda_model::kicad_geom::keep_upright_is_vertical(lf.angle_deg) { 90_000 } else { 0 };
-                    p.h = match lf.h_align {
-                        FieldHAlign::Left => TextJustify::Left,
-                        FieldHAlign::Center => TextJustify::Center,
-                        FieldHAlign::Right => TextJustify::Right,
-                    };
-                    p.v = match lf.v_align {
-                        FieldVAlign::Top => TextVAlign::Top,
-                        FieldVAlign::Center => TextVAlign::Center,
-                        FieldVAlign::Bottom => TextVAlign::Bottom,
-                    };
-                    p.bold = lf.bold;
-                    p.italic = lf.italic;
-                    p.name_shown = lf.show_name;
-                    p.no_autoplace = lf.do_not_autoplace;
-                }
-                if let (true, Some((x0, y1))) = (positions, corner) {
-                    // `SetTextPos( symbol->GetPosition() + libField->GetTextPos() )`: the library's place (mm, +y up, from its origin) in the frame of the box
-                    // corner the symbol sits by (+y down)
-                    p.dx = eda_model::units::mm(lf.at.x - x0);
-                    p.dy = eda_model::units::mm(y1 - lf.at.y);
-                }
+                apply_library_field(&mut now[i], &lf, visibility, effects, if positions { corner } else { None });
             }
             let algo = sch.extras.fields_autoplaced.get(&key).copied();
             let sch = self.schematic_mut()?;
@@ -934,7 +917,8 @@ impl<'a> Board<'a> {
             }
             // `if( resetPositions ) { .. if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) symbol->AutoplaceFields( screen, .. ) }`;
             // a symbol with no library frame has its fields placed by Autoplace Fields whatever they were
-            if positions && (algo.is_some() || corner.is_none()) {
+            // (`if( resetPositions && frame->eeconfig()->m_AutoplaceFields.enable )`: with "Automatically place symbol fields" off the fields stay at the library's places)
+            if positions && ((algo.is_some() && eda_engine::fields::autoplace_prefs().enable) || corner.is_none()) {
                 let snapshot = sch.clone();
                 if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(&snapshot, model, &key) {
                     let placed = ctx.autoplace(&snapshot, model, algo.unwrap_or_default());
@@ -945,10 +929,7 @@ impl<'a> Board<'a> {
                 }
             }
         }
-        if !changed && !allow_unchanged {
-            return Err(vec![CheckResult::fail("ops_field_unchanged", ids.first().map(String::as_str).unwrap_or("fields"), "the fields are already as the library symbol has them")]);
-        }
-        Ok(())
+        Ok(changed)
     }
 
     /// [`SchCmd::SetBodyStyle`]: `SCH_EDIT_FRAME::SelectBodyStyle` on each placed unit of `ids`.
@@ -1599,5 +1580,42 @@ mod tests {
         assert_eq!(json, serde_json::json!({ "op": "sch_edit", "verb": "set_locked", "ids": ["a"], "locked": true }));
         let back: Cmd = serde_json::from_value(json).unwrap();
         assert_eq!(back, c);
+    }
+}
+
+/// `DIALOG_CHANGE_SYMBOLS::processSymbols`' reset of one field to the library's `lf` (and what a new symbol's field is, `SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`):
+/// its visibility, its look (`SetAttributes( *libField )`, `SetNameShown`, `SetCanAutoplace`) and, given `corner` -- where the library's origin is in the item's
+/// own frame, the box corner `(x0, y1)` in millimetres the sheet places a symbol by, `(0, 0)` for a power symbol -- its place.
+pub(crate) fn apply_library_field(p: &mut eda_model::ir::FieldPlacement, lf: &eda_model::sym_fields::LibrarySymbolField, visibility: bool, effects: bool, corner: Option<(f64, f64)>) {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    if visibility {
+        p.visible = !lf.hidden;
+    }
+    if effects {
+        // `SetAttributes( *libField )` -- size, angle, justification, bold, italic -- "Careful: the visible bit and position are also set by
+        // SetAttributes()": they are put back; then `SetNameShown`, `SetCanAutoplace`
+        let size = eda_model::units::mm(lf.size_mm);
+        p.size_nm = if size == eda_model::ir::DEFAULT_FIELD_SIZE_NM { Nm::ZERO } else { size };
+        p.angle = if eda_model::kicad_geom::keep_upright_is_vertical(lf.angle_deg) { 90_000 } else { 0 };
+        p.h = match lf.h_align {
+            FieldHAlign::Left => TextJustify::Left,
+            FieldHAlign::Center => TextJustify::Center,
+            FieldHAlign::Right => TextJustify::Right,
+        };
+        p.v = match lf.v_align {
+            FieldVAlign::Top => TextVAlign::Top,
+            FieldVAlign::Center => TextVAlign::Center,
+            FieldVAlign::Bottom => TextVAlign::Bottom,
+        };
+        p.bold = lf.bold;
+        p.italic = lf.italic;
+        p.name_shown = lf.show_name;
+        p.no_autoplace = lf.do_not_autoplace;
+    }
+    if let Some((x0, y1)) = corner {
+        // `SetTextPos( symbol->GetPosition() + libField->GetTextPos() )`: the library's place (mm, +y up, from its origin) in the frame of the box
+        // corner the symbol sits by (+y down)
+        p.dx = eda_model::units::mm(lf.at.x - x0);
+        p.dy = eda_model::units::mm(y1 - lf.at.y);
     }
 }

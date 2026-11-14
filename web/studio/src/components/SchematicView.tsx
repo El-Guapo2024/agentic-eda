@@ -77,6 +77,8 @@ import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems } from "./schematic/schItems";
 import { pickItem } from "./schematic/schPick";
 import { isPinItemId, promoteLonePin } from "../kicad-port/schPins";
+import { autostartEvent, type Autostart, type AutostartTool } from "../kicad-port/schAutostart";
+import { schItemGrid, type SchItemKind } from "../kicad-port/gridOverrides";
 import { openSchProperties } from "./schematic/schPropertiesOpen";
 import { SchContextMenu } from "./schematic/SchContextMenu";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -150,7 +152,7 @@ type DragState =
    * jitter still falls through to an ordinary select instead of
    * committing a drag.
    */
-  | { kind: "move"; refs: string[]; startWorld: [number, number]; /** `BestDragOrigin`: the point of the held items the drag holds them by. */ origin: [number, number]; moved: boolean; vertices?: Record<string, number[]> };
+  | { kind: "move"; refs: string[]; startWorld: [number, number]; /** `BestDragOrigin`: the point of the held items the drag holds them by. */ origin: [number, number]; moved: boolean; vertices?: Record<string, number[]>; /** What a click (no drag) on the item starts instead of selecting it (`autostartEvent`). */ autostart?: Autostart };
 
 /**
  * Every pin's resolved world-space tip, for the junction analysis (`JUNCTION_HELPERS::AnalyzePoint`) and the wire tool's auto-finish on a pin. Only symbols with real
@@ -249,6 +251,8 @@ export function SchematicView() {
   const motionPanRef = useRef<{ x: number; y: number } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
+  /** The tool a click under the pointer would start (`autostartEvent` on motion: `displayWireCursor`, `displayBusCursor`), or null. */
+  const [autostartHover, setAutostartHover] = useState<AutostartTool | null>(null);
   /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   /** The menu of an ERC marker the last right click was on (kicad-port/rcItems.ts `rcMenu`). */
@@ -611,6 +615,29 @@ export function SchematicView() {
   };
 
   /**
+   * `SCH_SELECTION_TOOL::autostartEvent` (kicad-port/schAutostart.ts, UI-LEFT-3 S3-1): what a click of the selection tool on the item `id` at the pointer starts -- a wire or a
+   * bus from an unconnected pin, label, sheet pin, bus entry or wire end -- when Preferences > Schematic Editor > Editing Options has "Automatically start wires on
+   * unconnected pins" on; the point is `BestSnapAnchor( pos, GetItemGrid( item ) )`.
+   */
+  const autostartAt = (id: string | null, xNm: number, yNm: number): Autostart | null => {
+    // (the selection tool's own: not while a picker -- the simulator's probes, Group Properties' pick -- or a paste holds the pointer)
+    if (!sch || !id || !state.prefs.schAutoStartWires || state.activeTool !== "select" || picker.session() || paste) return null;
+    const wire = sch.wires.find((w) => w.id === id);
+    const kind: SchItemKind = isPinItemId(id) ? "pin" : wire ? (wire.bus ? "bus" : "wire") : sch.bus_entries.some((b) => b.id === id) ? "bus_entry" : sch.labels.some((l) => l.id === id) ? "label" : sch.sheets.some((sh) => (sh.pins ?? []).some((p) => p.id === id)) ? "sheet_pin" : "symbol";
+    const pos = snap.point("select", [xNm, yNm], modsRef.current, schItemGrid(kind));
+    return autostartEvent(sch, id, [pos[0], pos[1]], { showHiddenPins: schControl.display.showHiddenPins });
+  };
+  /** `m_toolMgr->ProcessEvent( *autostart )`: the selection is cleared (`DrawSegments`' `selectionClear`) and the wire or bus tool starts at the point, to give way to the
+   *  selection tool once the wire is drawn (`quitOnDraw`). */
+  const startAutostart = (a: Autostart) => {
+    dispatch({ type: "SET_SELECTION", refs: [] });
+    dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
+    dispatch({ type: "SET_ACTIVE_TOOL", tool: a.tool });
+    dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [a.at], quitOnDraw: true } });
+    setAutostartHover(null);
+  };
+
+  /**
    * The point a shape tool takes for the cursor: the grid of its category (`GRID_GRAPHICS`, `GRID_CONNECTABLE` for a rule area) and the anchors of the grid helper.
    * `live` is the render path: the point the last pointer event put the cursor at, without running the helper again.
    */
@@ -730,7 +757,9 @@ export function SchematicView() {
       data-arc-points={shapeEditor?.graphic?.shape.type === "arc" ? shapeEditor.edit.points.map((q, i) => `${["start", "mid", "end", "center"][i]}:${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-points={shapeEditor ? shapeEditor.edit.points.map((q) => `${q.pos[0]},${q.pos[1]}`).join(" ") : undefined}
       data-edit-lines={shapeEditor ? shapeEditor.edit.lines.flatMap((l, i) => (l.center ? [handlePos(shapeEditor.edit, { kind: "line", index: i }).join(",")] : [])).join(" ") : undefined}
-      style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
+      data-autostart-hover={autostartHover ?? undefined}
+      // (`displayWireCursor` / `displayBusCursor` over a point a click would start a wire from: KiCad's pencil cursors are not the studio's, the crosshair stands for them)
+      style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : autostartHover ? "crosshair" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
         modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };
@@ -822,6 +851,8 @@ export function SchematicView() {
           if (terminal && next.pts.length >= 2) {
             commitDrawn(next.pts);
             dispatch({ type: "SET_DRAW_STATE", draw: null });
+            // `if( aQuitOnDraw ) { m_frame->PopTool( aTool ); break; }`: a wire the selection tool started gives the selection tool back
+            if (draw.quitOnDraw) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
@@ -1001,6 +1032,13 @@ export function SchematicView() {
           }
           // A pin is selected and acted on (Swap Pins, a net highlight), never picked up: `SCH_PIN_T` is no movable item, so a drag that starts on one moves nothing.
           if (isPinItemId(picked)) {
+            // `autostartEvent`: a click on an unconnected pin starts a wire there instead (a drag from it draws the selection area, a pin being no movable item)
+            const auto = autostartAt(picked, wx, wy);
+            if (auto) {
+              areaClickRef.current = () => startAutostart(auto);
+              dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
+              return;
+            }
             dispatch({ type: "SET_SELECTION", refs: [picked] });
             dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
             return;
@@ -1011,7 +1049,9 @@ export function SchematicView() {
           if (leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: false, selectionEmpty: state.selection.size === 0, onItem: true, inSelection: state.selection.has(picked) }) === "area") {
             const wire = wireId ? sch.wires.find((w) => w.id === wireId) : undefined;
             const vertices = wire ? (wirePick(wire, [wx, wy], tolerance) ?? undefined) : undefined;
+            const auto = autostartAt(picked, wx, wy);
             areaClickRef.current = () => {
+              if (auto) return startAutostart(auto);
               dispatch({ type: "SET_SELECTION", refs: [picked] });
               dispatch({ type: "SET_SCH_WIRE_PICK", pick: wire && vertices ? { id: wire.id, vertices } : null });
             };
@@ -1038,7 +1078,7 @@ export function SchematicView() {
           const dragOrigin = snap.dragOrigin([wx, wy], leafIds(sch, refs));
           const origin: [number, number] = [dragOrigin[0], dragOrigin[1]];
           dispatch({ type: "SET_MOVE_ORIGIN", at: { x: wx, y: wy } });
-          dragRef.current = { kind: "move", refs, startWorld: [wx, wy], origin, moved: false, vertices: wire && vertices ? { [wire.id]: vertices } : undefined };
+          dragRef.current = { kind: "move", refs, startWorld: [wx, wy], origin, moved: false, vertices: wire && vertices ? { [wire.id]: vertices } : undefined, autostart: autostartAt(picked, wx, wy) ?? undefined };
           return;
         }
 
@@ -1093,6 +1133,14 @@ export function SchematicView() {
         }
 
         const drag = dragRef.current;
+        // `evt->IsMotion()` of the selection tool: over a point a click would start a wire from, the cursor says so (`autostartEvent` with no modifier held)
+        if (!drag && state.activeTool === "select" && state.prefs.schAutoStartWires && !picker.session() && !paste) {
+          const noMods = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+          const under = noMods ? pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first") : null;
+          const top = under ? (substituteSchSelection(sch, [under], state.schEnteredGroupId).ids[0] ?? under) : null;
+          const hover = top ? (autostartAt(top, wx, wy)?.tool ?? null) : null;
+          if (hover !== autostartHover) setAutostartHover(hover);
+        } else if (autostartHover) setAutostartHover(null);
         if (!drag) return;
         if (drag.kind === "editpoint") {
           // `grid->Align( controls->GetMousePosition(), GRID_GRAPHICS )` with the edited item's own anchors left out
@@ -1131,7 +1179,8 @@ export function SchematicView() {
           if (!motion?.dragging) return;
           drag.moved = true;
           const [sx, sy] = snap.moveCursor(heldCursor(drag.origin, drag.startWorld, [wx, wy]), modsRef.current, leafIds(sch, drag.refs));
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxNm: Math.round(sx - drag.origin[0]), dyNm: Math.round(sy - drag.origin[1]), holdNm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
+          // `if( m_isSymbolEditor || m_frame->eeconfig()->m_Input.drag_is_move ) RunAction( move ) else RunAction( drag )`: "Mouse drag performs Drag (G) operation"
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: state.prefs.schDragIsMove ? "sch_move" : "sch_drag", dxNm: Math.round(sx - drag.origin[0]), dyNm: Math.round(sy - drag.origin[1]), holdNm: [sx, sy], vertices: state.prefs.schDragIsMove ? undefined : drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
       onPointerLeave={() => {
@@ -1241,6 +1290,7 @@ export function SchematicView() {
         elbowRef.current = null;
         commitDrawn([...draw.pts, ...(tail as [number, number][])]);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
+        if (draw.quitOnDraw) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       }}
       onPointerUp={(e) => {
         gestureRef.current?.up();
@@ -1263,6 +1313,10 @@ export function SchematicView() {
             void api.commitSchHeld(state.movePreview);
           } else if (drag.moved) {
             dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+          } else if (drag.autostart) {
+            // a click on an unconnected label, sheet pin, bus entry or wire end (`autostartEvent`): the wire starts there, nothing is selected
+            dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+            startAutostart(drag.autostart);
           } else {
             // No real movement: a plain click, not a drag -- apply
             // whatever selection effect onPointerDown deferred (see

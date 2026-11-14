@@ -61,6 +61,7 @@ import { useSymApi } from "../state/symbolEditorStore";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import { SimModelDialog } from "./simulator/SimModelDialog";
 import { editedFieldsMerge } from "../kicad-port/sim/simModelDialog";
+import { resolveTemplates } from "../kicad-port/fieldNameTemplates";
 
 const MAIN_FIELDS = STANDARD_SYMBOL_FIELDS;
 
@@ -205,7 +206,8 @@ export function SymbolPropertiesDialog() {
       void fetchSchSetup()
         .then((r) => {
           if (!r.ok) return;
-          const missing = r.field_name_templates.filter((t) => !has.has(t.name));
+          // the project's and the person's own (Preferences > Schematic Editor > Field Name Templates), the project's first (`TEMPLATES::resolveTemplates`)
+          const missing = resolveTemplates(r.field_name_templates, state.prefs.schGlobalFieldNames).filter((t) => !has.has(t.name));
           if (missing.length > 0) setUserRows((rows) => [...rows, ...missing.map((t) => ({ key: nextKey.current++, name: t.name, text: "", shown: t.visible, isNew: true, removed: false }))]);
         })
         .catch(() => undefined);

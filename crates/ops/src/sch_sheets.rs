@@ -252,6 +252,10 @@ impl<'a> Board<'a> {
             if let (Some(fields), Some(id)) = (inc.fields.clone(), sch.sheets.last().map(|s| s.id.clone())) {
                 sch.extras.sheet_fields.insert(id, fields);
             }
+            // `DrawSheet( drawSheetFromFile )`: the person's colours for a new sheet, as for an empty one
+            if let Some(id) = sch.sheets.last().map(|s| s.id.clone()) {
+                crate::sch_prefs::color_new_sheet(sch, &id);
+            }
         }
 
         // the new sheet paths' page numbers before the annotation, which may number by page (`DrawSheet` gives the sheet `GetNextPageNumber`

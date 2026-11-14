@@ -162,7 +162,8 @@ impl<'a> Board<'a> {
         }
         // `if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) aSymbol->AutoplaceFields( GetScreen(), fieldsAutoplaced )`
         let keys: Vec<String> = if other.is_some() { vec![new_key, old_key] } else { vec![new_key] };
-        for key in keys {
+        // (`if( eeconfig()->m_AutoplaceFields.enable )` around it: off, the fields stay where they are)
+        for key in keys.into_iter().filter(|_| eda_engine::fields::autoplace_prefs().enable) {
             if let Some(&algo) = sch.extras.fields_autoplaced.get(&key) {
                 let snapshot = sch.clone();
                 if let Some(ctx) = OwnerCtx::new(&snapshot, model, &key) {

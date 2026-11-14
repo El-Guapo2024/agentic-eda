@@ -326,8 +326,9 @@ impl<'a> Board<'a> {
             // Symbol Properties: the item's fields are placed again, if at all, after OK (`AutoplaceFieldsKept`)
         } else if moved {
             sch.extras.fields_autoplaced.remove(&key_now);
-        } else if let Some(&algo) = sch.extras.fields_autoplaced.get(&key_now) {
-            // `editFieldText`: an item whose fields were autoplaced has them placed again, for the new text, size or visibility
+        } else if let Some(&algo) = sch.extras.fields_autoplaced.get(&key_now).filter(|_| eda_engine::fields::autoplace_prefs().enable || sch.sheets.iter().any(|s| s.id == key_now)) {
+            // `editFieldText`: an item whose fields were autoplaced has them placed again, for the new text, size or visibility -- when "Automatically place symbol
+            // fields" is on, and for a sheet's always (`if( m_frame->eeconfig()->m_AutoplaceFields.enable || parentType == SCH_SHEET_T )`)
             let snapshot = sch.clone();
             if let Some(ctx) = OwnerCtx::new(&snapshot, model, &key_now) {
                 sch.field_layout.insert(key_now.clone(), ctx.autoplace(&snapshot, model, algo));
@@ -593,6 +594,10 @@ impl<'a> Board<'a> {
     pub(crate) fn autoplace_fields_kept(&mut self, keys: &[String]) -> Result<(), Vec<CheckResult>> {
         let model = self.model;
         let sch = self.schematic_mut()?;
+        // `if( m_frame->eeconfig()->m_AutoplaceFields.enable )`: with "Automatically place symbol fields" off the fields stay as the dialog left them
+        if !eda_engine::fields::autoplace_prefs().enable {
+            return Ok(());
+        }
         for key in keys {
             let Some(&algo) = sch.extras.fields_autoplaced.get(key) else { continue };
             let snapshot = sch.clone();

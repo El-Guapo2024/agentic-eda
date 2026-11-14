@@ -254,3 +254,49 @@ fn autoplace_reads_the_places_swap_pins_traded() {
     let p1 = swapped.pins.iter().find(|p| p.number == "1").unwrap();
     assert!(!p1.hidden && p1.tip == plain.pins.iter().find(|p| p.number == "3").unwrap().tip);
 }
+
+/// UI-LEFT-3 S3-3: "Always align autoplaced fields to the 50 mil grid" off (`AUTOPLACER::m_align_to_grid`): the rows are the text's height and `FIELD_PADDING`
+/// (15 mil) apart and nothing is rounded to the grid (`computeFBoxSize`, `fieldVPlacement`, `DoAutoplace`).
+#[test]
+fn fields_not_aligned_to_the_grid_are_a_text_height_and_fifteen_mils_apart_and_off_the_grid() {
+    let lib = eda_model::symbol::builtin("Device:R");
+    let sym = resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false);
+    let geom = SymbolGeom::of(&sym, &part("R1", 2), lib.as_ref());
+    let specs = symbol_specs(&sym, None, "");
+    let anchor = |p: &FieldPlacement| page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, "x").at;
+    let aligned = autoplace_symbol(&sym, &geom, &specs);
+    let free = with_autoplace_prefs(AutoplacePrefs { align_to_grid: false, ..AutoplacePrefs::default() }, || autoplace_symbol(&sym, &geom, &specs));
+    assert_eq!(autoplace_prefs(), AutoplacePrefs::default(), "the preferences are put back");
+    let (ax, ay) = anchor(&aligned[0]);
+    let (fx, fy) = anchor(&free[0]);
+    let (_, fvy) = anchor(&free[1]);
+    let (_, avy) = anchor(&aligned[1]);
+    // aligned: 2.54 mm rows; free: the text's height (KiCad's box of a 50 mil text) plus 15 mil
+    assert!((avy - ay - 2_540_000.0).abs() < 1.0, "{ay} {avy}");
+    let gap = fvy - fy;
+    assert!(gap < 2_540_000.0 && gap > 1_270_000.0 + 381_000.0 - 1.0, "rows {gap}");
+    // the x is the field box's edge, not rounded up to the grid
+    assert!(fx <= ax && ((fx / 1_270_000.0).fract().abs() > 1e-6 || fx != ax), "{fx} {ax}");
+}
+
+/// UI-LEFT-3 S3-3: "Allow field autoplace to change justification" off (`AUTOPLACER::m_allow_rejustify`): a field keeps its own justification and is placed by it
+/// (`fieldHPlacement`); on, `justifyField` sets the side's.
+#[test]
+fn a_field_keeps_its_justification_when_autoplace_may_not_change_it() {
+    let lib = eda_model::symbol::builtin("Device:R");
+    let sym = resistor(Point { x: mm(50.8), y: mm(50.8) }, 0, false);
+    let geom = SymbolGeom::of(&sym, &part("R1", 2), lib.as_ref());
+    let placed = autoplace_symbol(&sym, &geom, &symbol_specs(&sym, None, ""));
+    // the Reference set right-justified by hand, the Value as autoplace left it
+    let mut stored = placed.clone();
+    stored[0].h = TextJustify::Right;
+    let specs = specs_styled(symbol_specs(&sym, None, ""), Some(&stored));
+    let rejustified = autoplace_symbol(&sym, &geom, &specs);
+    assert_eq!(rejustified[0].h, TextJustify::Left, "the side's justification");
+    let kept = with_autoplace_prefs(AutoplacePrefs { allow_rejustify: false, ..AutoplacePrefs::default() }, || autoplace_symbol(&sym, &geom, &specs));
+    assert_eq!(kept[0].h, TextJustify::Right, "its own");
+    // placed by its right end at the box's right edge: the anchor is the box's width further right than the left-justified one
+    let anchor = |p: &FieldPlacement| page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, "x").at;
+    assert!(anchor(&kept[0]).0 > anchor(&rejustified[0]).0, "{:?} {:?}", anchor(&kept[0]), anchor(&rejustified[0]));
+    assert_eq!(anchor(&kept[1]), anchor(&rejustified[1]), "the Value, left-justified either way, is where it was");
+}

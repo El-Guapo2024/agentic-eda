@@ -159,7 +159,8 @@ pub(crate) fn convert(dir: &Path, body: &[u8]) -> Value {
 /// `.pro`): the root is the legacy schematic no other one places (the first of them when each is placed), read by `crate::legacy_import::load`. A browser
 /// hands the page the files and not the folder, so they are what the folder is. What the legacy rescue reads comes along into the board's folder `dir`
 /// (`carry_project_files`), named after the board's project. The reply is a schematic's (`content`, `counts`, `notes`), with `format` "KiCad legacy
-/// schematic" and `remap` when no symbol names a library (KiCad opens Remap Symbols as such a project loads).
+/// schematic" and `remap` when no symbol names a library (KiCad opens Remap Symbols as such a project loads), and `cache_found` when the project's cache library came
+/// with it (`OpenProjectFiles` runs Rescue Symbols for one that names its libraries and has none, `if( !cfg->m_RescueNeverShow && !cacheExists )`).
 fn legacy_reply(dir: &Path, work: &Path, staged: &[std::path::PathBuf]) -> Value {
     let legacy: Vec<&std::path::PathBuf> = staged.iter().filter(|p| crate::legacy_import::is_legacy_schematic_file(p)).collect();
     let placed: std::collections::BTreeSet<String> = legacy
@@ -172,6 +173,9 @@ fn legacy_reply(dir: &Path, work: &Path, staged: &[std::path::PathBuf]) -> Value
     let root = legacy.iter().find(|p| p.file_name().is_some_and(|n| !placed.contains(&*n.to_string_lossy()))).or(legacy.first()).map(|p| (*p).clone());
     let Some(root) = root else { return refused("there is no legacy schematic among the files") };
     let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // `cacheFn.SetName( cacheFn.GetName() + "-cache" )` beside the schematic
+    let stem = root.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let cache_found = root.parent().is_some_and(|d| crate::legacy_import::cache_library(d, &stem).is_some());
     let loaded = match crate::legacy_import::load(&root, work) {
         Ok(l) => l,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e).replace(&work.display().to_string(), "<scratch>"), "unrecognized": false }),
@@ -192,6 +196,7 @@ fn legacy_reply(dir: &Path, work: &Path, staged: &[std::path::PathBuf]) -> Value
         "counts": { "symbols": symbols, "sheets": 1 + content.screens.len(), "labels": content.all_screens().map(|(_, s)| s.labels.len()).sum::<usize>(), "wires": content.all_screens().map(|(_, s)| s.wires.len()).sum::<usize>() },
         "notes": notes,
         "remap": loaded.remap,
+        "cache_found": cache_found,
         "content": serde_json::to_value(content).unwrap_or(Value::Null),
     })
 }

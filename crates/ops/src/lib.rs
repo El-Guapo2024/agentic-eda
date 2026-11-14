@@ -52,6 +52,8 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
+/// The person's schematic preferences a verb reads (a new sheet's colours).
+pub mod sch_prefs;
 pub mod notice;
 mod review;
 mod simulator;
@@ -6173,6 +6175,10 @@ impl<'a> Board<'a> {
         let sch = self.schematic_mut_or_create();
         sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![], page: String::new() });
         sch.assign_missing_ids();
+        // `DrawSheet`: the person's colours for a new sheet (Preferences > Schematic Editor > Editing Options > Defaults for New Objects)
+        if let Some(id) = sch.sheets.last().map(|s| s.id.clone()) {
+            sch_prefs::color_new_sheet(sch, &id);
+        }
         // a file nothing uses yet gets its own empty screen; one that is already there is shared
         self.design.sheet_contents.get_or_insert_with(BTreeMap::new).entry(file).or_insert_with(empty_schematic_section);
         Ok(())
@@ -6475,6 +6481,24 @@ impl<'a> Board<'a> {
         let last = sch.power_symbols.len() - 1;
         // `AddToScreen`: the screen's library-symbol cache (`SCH_SCREEN::Append`), of the library's kind (PARITY-sch §82)
         self.cache_placed_power_symbol(last);
+        // "Automatically place symbol fields" off (`PlaceSymbol` without `AutoplaceFields`): the Value and the Reference where the project's copy of the
+        // library symbol puts them about its origin, the power symbol's pin, and not autoplaced
+        if !eda_engine::fields::autoplace_prefs().enable {
+            if let Some(lib) = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned() {
+                let model = self.model;
+                let sch = self.schematic_mut()?;
+                let key = sch.power_symbols[last].id.clone();
+                if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(sch, model, &key) {
+                    let mut now = ctx.current(sch);
+                    for p in now.iter_mut() {
+                        if let Some(lf) = lib.field(&p.name).or_else(|| ["Reference", "Value"].contains(&p.name.as_str()).then(|| lib.default_field(&p.name))) {
+                            sch_edit::apply_library_field(p, &lf, false, true, Some((0.0, 0.0)));
+                        }
+                    }
+                    sch.field_layout.insert(key, now);
+                }
+            }
+        }
         self.settle_placed(sch_scene::Item::Power(last));
         Ok(())
     }
@@ -6543,8 +6567,45 @@ impl<'a> Board<'a> {
         for (name, l) in looks {
             sch.extras.set_field_look(&key, &name, eda_model::sch_extras::FieldFontLook { font: l.font, color: l.color });
         }
+        // "Automatically place symbol fields" off (`if( m_frame->eeconfig()->m_AutoplaceFields.enable ) symbol->AutoplaceFields( .. )` in `PlaceSymbol` skipped): the
+        // fields are the library symbol's copies, where it puts them and as it sets them (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), and not autoplaced
+        if !eda_engine::fields::autoplace_prefs().enable {
+            // measured as the symbol will be drawn: the part and the library definition this step brings are not in the board's model yet
+            let placed_model = self.model_with_placed(id, lib_id, value);
+            let model = placed_model.as_ref().unwrap_or(self.model);
+            self.reset_unit_fields_in(model, &[(id.to_string(), lib_id.to_string(), unit)], true, true, true)?;
+            // a symbol the design keeps no library copy of (one its intent defines) has no library places for its fields: they are where the sheet draws them now,
+            // stored as its own and not autoplaced (`AUTOPLACE_NONE`), so nothing but the Autoplace Fields command moves them
+            let sch = self.schematic_mut()?;
+            if !sch.field_layout.contains_key(&key) {
+                if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(sch, model, &key) {
+                    let now = ctx.current(sch);
+                    sch.field_layout.insert(key.clone(), now);
+                }
+            }
+        }
         self.settle_placed(sch_scene::Item::Symbol(last));
         Ok(())
+    }
+
+    /// The board's model with what a symbol `id` of `lib_id` placed in this step needs to be measured: the published library definition the design keeps for
+    /// it (`EmbedLibSymbol` earlier in the batch; the studio's loader folds it in at the next load, `publish_overlay`) and a part for a reference the intent
+    /// does not have (`fold_unknown_symbols`). `None` when the model has both already.
+    fn model_with_placed(&self, id: &str, lib_id: &str, value: &str) -> Option<ConstraintModel> {
+        let flat = self.design.symbol_library.as_ref().filter(|l| l.by_lib_id(lib_id).is_some_and(|s| s.published)).and_then(|l| l.flatten(lib_id).ok());
+        if flat.is_none() && self.model.part(id).is_some() {
+            return None;
+        }
+        let mut m = self.model.clone();
+        if let Some(flat) = flat {
+            m.symbols.retain(|s| s.lib_id != lib_id);
+            m.symbols.push(flat.to_engine_symbol());
+        }
+        if m.part(id).is_none() {
+            let pins = m.placed_symbol_of(lib_id).map(|lib| lib.pins.iter().map(|p| eda_model::Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind: eda_model::PinKind::Passive }).collect()).unwrap_or_default();
+            m.parts.push(eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value: Some(value.to_string()), package: None, footprint: None, symbol: Some(lib_id.to_string()), datasheet: None, pins, body_nm: None, edge: None });
+        }
+        Some(m)
     }
 
     /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc. Applies to

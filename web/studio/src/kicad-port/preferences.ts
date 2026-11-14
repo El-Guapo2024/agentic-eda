@@ -36,6 +36,10 @@ import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 import { DEFAULT_USER_LAYER_COUNT, sanitizeFpTextItems, sanitizeUserLayerNames, type FpTextItem } from "./fpFieldDefaults";
 import { sanitizeDisplayOrigin, type DisplayOrigin } from "./originTransforms";
 import { DEFAULT_PCB_DISPLAY, sanitizeNetNamesMode, sanitizeTrackClearanceMode, type NetNamesMode, type TrackClearanceMode } from "./pcbDisplayOptions";
+import type { LineMode } from "./schLineMode";
+import type { SchColor } from "../api/schEditTypes";
+import type { TemplateFieldName } from "../api/types";
+import { DEFAULT_SIM_WHEEL_ACTIONS, sanitizeSimWheelActions, type SimWheelActions } from "./sim/simWheel";
 
 /** `COMMON_SETTINGS`' default `input.zoom_speed`: 5 on macOS, 1 elsewhere. */
 export function defaultZoomSpeed(isMacPlatform: boolean): number {
@@ -158,6 +162,42 @@ export interface Preferences {
   pcbTrackClearance: TrackClearanceMode;
   /** `m_Display.m_PadClearance` ("Show pad clearance", `pcb_display.pad_clearance`). Default on. */
   pcbPadClearance: boolean;
+  /** `EESCHEMA_SETTINGS::m_Input.drag_is_move` (the inverse of "Mouse drag performs Drag (G) operation", `input.drag_is_move`): a left drag of the selection in the
+   *  selection tool moves it (M) rather than drags it (G, wires stretch). Default off (UI-LEFT-3 S3-26). */
+  schDragIsMove: boolean;
+  /** `m_Drawing.auto_start_wires` ("Automatically start wires on unconnected pins", `drawing.auto_start_wires`): a click of the selection tool on an unconnected pin,
+   *  label, sheet pin, bus entry or wire end starts a wire there (`SCH_SELECTION_TOOL::autostartEvent`). Default on (UI-LEFT-3 S3-1). */
+  schAutoStartWires: boolean;
+  /** `m_Drawing.line_mode` (`drawing.line_mode`): the wire, bus and line tools' Line Mode (Free Angle, 90 deg, 45 deg) -- the toolbar's and Editing Options'
+   *  "Line drawing mode:", kept between sessions as KiCad keeps it. Default `LINE_MODE_90` (UI-LEFT-3 S3-26). */
+  schLineMode: LineMode;
+  /** `m_AutoplaceFields.enable` / `.allow_rejustify` / `.align_to_grid` (Symbol Field Automatic Placement: "Automatically place symbol fields", "Allow field autoplace to
+   *  change justification", "Always align autoplaced fields to the 50 mil grid"), sent with every command (`eda_engine::fields::AutoplacePrefs`). All on by
+   *  default (UI-LEFT-3 S3-3). */
+  schAutoplaceFields: boolean;
+  schAutoplaceJustify: boolean;
+  schAutoplaceAlign: boolean;
+  /** `m_Drawing.default_sheet_border_color` / `default_sheet_background_color` ("Sheet border:", "Sheet background:" of Defaults for New Objects): the colours a sheet
+   *  drawn gets (`SCH_DRAWING_TOOLS::DrawSheet`); null is `COLOR4D::UNSPECIFIED`, the layers' colours. Default null (UI-LEFT-3 S3-26). */
+  schSheetBorderColor: SchColor | null;
+  schSheetBackgroundColor: SchColor | null;
+  /** `EESCHEMA_SETTINGS::m_RescueNeverShow` ("Never show Rescue Symbols tool", `system.never_show_rescue_dialog`): a legacy schematic brought in without its cache
+   *  library is not offered Rescue Symbols (`OpenProjectFiles`); Rescue's "Never Show Again" sets it. Default off (UI-LEFT-3 S3-26). */
+  schRescueNeverShow: boolean;
+  /** `m_Drawing.field_names` (Preferences > Schematic Editor > Field Name Templates, `PANEL_TEMPLATE_FIELDNAMES` global): the person's own templates, offered with the
+   *  project's (`TEMPLATES::resolveTemplates`: a project template of the same name wins) and alone in the Symbol Editor's Symbol Properties. Default none (UI-LEFT-3 C3-2). */
+  schGlobalFieldNames: TemplateFieldName[];
+  /** `m_Simulator.preferences.mouse_wheel_actions` (Preferences > Schematic Editor > Simulator): what the scroll wheel does on a simulator plot, per modifier
+   *  (`mpWindow::onMouseWheel`). KiCad's mouse defaults (UI-LEFT-3 C3-2). */
+  simWheel: SimWheelActions;
+  /** `SYMBOL_EDITOR_SETTINGS::m_Defaults` (Preferences > Symbol Editor > Editing Options > Defaults for New Objects), mils: the line width of a new shape or text box
+   *  (0: inherit the schematic's), the text size of a new text, text box and field, the length and the number and name sizes of the first new pin
+   *  (`GetLastPinLength`, ...). Defaults 0, 50, 100, 50, 50 (UI-LEFT-3 C3-2). */
+  symDefaultLineWidthMils: number;
+  symDefaultTextSizeMils: number;
+  symDefaultPinLengthMils: number;
+  symDefaultPinNumSizeMils: number;
+  symDefaultPinNameSizeMils: number;
 }
 
 /** The ratsnest thickness as `m_ratsnestThickness` (a `wxSpinCtrlDouble` of 0.5 .. 10 by 0.5) can hold it; anything else is the default 0.5. */
@@ -242,6 +282,22 @@ export const DEFAULT_PREFERENCES: Preferences = {
   pcbNetNames: DEFAULT_PCB_DISPLAY.netNames,
   pcbTrackClearance: DEFAULT_PCB_DISPLAY.trackClearance,
   pcbPadClearance: DEFAULT_PCB_DISPLAY.padClearance,
+  schDragIsMove: false,
+  schAutoStartWires: true,
+  schLineMode: 1,
+  schAutoplaceFields: true,
+  schAutoplaceJustify: true,
+  schAutoplaceAlign: true,
+  schSheetBorderColor: null,
+  schSheetBackgroundColor: null,
+  schRescueNeverShow: false,
+  schGlobalFieldNames: [],
+  simWheel: DEFAULT_SIM_WHEEL_ACTIONS,
+  symDefaultLineWidthMils: 0,
+  symDefaultTextSizeMils: 50,
+  symDefaultPinLengthMils: 100,
+  symDefaultPinNumSizeMils: 50,
+  symDefaultPinNameSizeMils: 50,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH" | "horizontalPan">;
@@ -329,6 +385,12 @@ const finiteInt = (v: unknown, fallback: number) => (typeof v === "number" && Nu
 const arcEditMode = (v: unknown, fallback: ArcEditMode): ArcEditMode =>
   v === "keep_center_adjust_angle_radius" || v === "keep_center_ends_adjust_angle" || v === "keep_endpoints_or_start_direction" ? v : fallback;
 const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
+const channel = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 255;
+/** A colour as `SchColor` keeps it, or null (`COLOR4D::UNSPECIFIED`) for anything else. */
+const schColor = (v: unknown): SchColor | null => {
+  const c = v as Partial<SchColor> | null;
+  return c && typeof c === "object" && channel(c.r) && channel(c.g) && channel(c.b) && channel(c.a) ? { r: c.r!, g: c.g!, b: c.b!, a: c.a! } : null;
+};
 
 /** The magnetic settings the board editor's snapping reads, with `allLayers` (the toggle of `common.Control.magneticSnapToggle`, Shift+S, kept in the studio state). */
 export function toPcbMagnetic(p: Pick<Preferences, "magneticPads" | "magneticTracks" | "magneticGraphics">, allLayers: boolean): PcbMagnetic {
@@ -398,6 +460,25 @@ export function sanitizePreferences(raw: unknown): Preferences {
     pcbNetNames: sanitizeNetNamesMode(o.pcbNetNames, d.pcbNetNames),
     pcbTrackClearance: sanitizeTrackClearanceMode(o.pcbTrackClearance, d.pcbTrackClearance),
     pcbPadClearance: bool(o.pcbPadClearance, d.pcbPadClearance),
+    schDragIsMove: bool(o.schDragIsMove, d.schDragIsMove),
+    schAutoStartWires: bool(o.schAutoStartWires, d.schAutoStartWires),
+    schLineMode: o.schLineMode === 0 || o.schLineMode === 1 || o.schLineMode === 2 ? o.schLineMode : d.schLineMode,
+    schAutoplaceFields: bool(o.schAutoplaceFields, d.schAutoplaceFields),
+    schAutoplaceJustify: bool(o.schAutoplaceJustify, d.schAutoplaceJustify),
+    schAutoplaceAlign: bool(o.schAutoplaceAlign, d.schAutoplaceAlign),
+    schSheetBorderColor: schColor(o.schSheetBorderColor),
+    schSheetBackgroundColor: schColor(o.schSheetBackgroundColor),
+    schRescueNeverShow: bool(o.schRescueNeverShow, d.schRescueNeverShow),
+    schGlobalFieldNames: Array.isArray(o.schGlobalFieldNames)
+      ? (o.schGlobalFieldNames as unknown[]).filter((t): t is TemplateFieldName => !!t && typeof (t as TemplateFieldName).name === "string").map((t) => ({ name: t.name, visible: !!t.visible, url: !!t.url }))
+      : d.schGlobalFieldNames,
+    simWheel: sanitizeSimWheelActions(o.simWheel),
+    // `PARAM<int>`: whole mils (`IUToMils( .GetIntValue() )`), none negative
+    symDefaultLineWidthMils: clampInt(o.symDefaultLineWidthMils, 0, 1000, d.symDefaultLineWidthMils),
+    symDefaultTextSizeMils: clampInt(o.symDefaultTextSizeMils, 1, 10000, d.symDefaultTextSizeMils),
+    symDefaultPinLengthMils: clampInt(o.symDefaultPinLengthMils, 0, 10000, d.symDefaultPinLengthMils),
+    symDefaultPinNumSizeMils: clampInt(o.symDefaultPinNumSizeMils, 1, 10000, d.symDefaultPinNumSizeMils),
+    symDefaultPinNameSizeMils: clampInt(o.symDefaultPinNameSizeMils, 1, 10000, d.symDefaultPinNameSizeMils),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

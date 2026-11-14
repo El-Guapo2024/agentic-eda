@@ -16,6 +16,8 @@ use std::path::Path;
 
 pub(crate) fn place_preview(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    // the item rides as the click will place it: with the person's Symbol Field Automatic Placement (`PlaceSymbol`'s preview autoplaces only when it is on)
+    let _autoplace = eda_engine::fields::scoped_autoplace_prefs(eda_engine::fields::AutoplacePrefs::from_json(req.get("autoplace")));
     let sheet = req.get("sheet").and_then(Value::as_str).unwrap_or("").to_string();
     let cmd: Cmd = match req.get("cmd").cloned().map(serde_json::from_value) {
         Some(Ok(c)) => c,
