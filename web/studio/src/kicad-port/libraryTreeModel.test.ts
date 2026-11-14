@@ -73,3 +73,20 @@ test("a bare name belongs to the project library, like the tree has always group
   const { groups } = buildTreeGroups([{ name: "0603", project: false }], [], new Map(), "");
   assert.deepEqual(groups.map((g) => g.lib), ["eda"]);
 });
+
+test("a search scores each item's description, keywords and fields as KiCad's tree does, best first (LIB_TREE_NODE_ITEM::UpdateScore)", () => {
+  const loaded = new Map([["Device", ["R", "C", "L"]], ["Amp", ["OPA1"]]]);
+  const details = new Map([
+    ["Device:R", { id: "Device:R", lib: "Device", name: "R", description: "Resistor", keywords: "r res resistor" }],
+    ["Device:C", { id: "Device:C", lib: "Device", name: "C", description: "Unpolarized capacitor", keywords: "cap capacitor" }],
+    ["Device:L", { id: "Device:L", lib: "Device", name: "L", description: "Inductor", keywords: "inductor choke coil" }],
+    ["Amp:OPA1", { id: "Amp:OPA1", lib: "Amp", name: "OPA1", description: "Op-amp with a capacitor input", keywords: "opamp" }],
+  ]);
+  const libs = [{ name: "Device" }, { name: "Amp" }];
+  const r = buildTreeGroups([], libs, loaded, "capacitor", undefined, { kind: "symbol", details });
+  // C has it as a keyword (weight 4, exact 8x) and in its description; OPA1 only inside its description (weight 1): Device's best is higher
+  assert.deepEqual(r.groups.map((g) => [g.lib, g.items.map((i) => i.name)]), [["Device", ["Device:C"]], ["Amp", ["Amp:OPA1"]]]);
+  assert.deepEqual(buildTreeGroups([], libs, loaded, "choke", undefined, { kind: "symbol", details }).groups.map((g) => g.items.map((i) => i.name)), [["Device:L"]], "a keyword");
+  // every word must score
+  assert.deepEqual(buildTreeGroups([], libs, loaded, "capacitor opamp", undefined, { kind: "symbol", details }).groups.map((g) => g.lib), ["Amp"]);
+});
