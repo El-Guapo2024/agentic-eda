@@ -406,8 +406,8 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
 ///
 /// The net is the one the wire under the label is on, on each placement of the label's sheet (a screen shown twice has a net per placement:
 /// `checkNetclassDrivers` runs per subgraph, so both are in the class), found by the pins of that wire under the references the placement gives them; a
-/// label off any pin's wire names its own. A bus label's classes go to its members too (`checkNetclassDrivers`' `processBusMember`): the nets of each
-/// member's name on that sheet.
+/// label off any pin's wire names its own. A bus label's classes go to the members of the label driving its bus (`checkNetclassDrivers`' `processBusMember`,
+/// [`bus_driver_label`]): the nets of each member's name on that sheet, else the member's own net name.
 ///
 /// A directive label (`SCH_DIRECTIVE_LABEL`, the netclass flag) gives its Netclass to the net at its connection point (the wire or bus through it, else a
 /// label or a pin there), and a rule area gives the classes of the flags on its border to the wires and buses it touches and the labels and pins inside it
@@ -465,14 +465,19 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             }
             let mut targets: Vec<String> = Vec::new();
             match eda_kicad::expand_bus_members(&l.net, &design.bus_aliases) {
-                // a bus: each member's nets on this sheet (the labels of the member's name), else the member's own name
-                Some(members) => {
-                    for m in members {
+                // a bus: the members of the label that drives the bus (`processBusMember` over `m_driver_connection->Members()`, UI-LEFT-3 S3-27), each
+                // the net of its name on this sheet (the member takes its neighbour's connection: `propagateToNeighbors`), else its own name with the
+                // driver's path (`SCH_CONNECTION::Name()`; none for a global label)
+                Some(_) => {
+                    let driver = bus_driver_label(sec, l);
+                    for m in eda_kicad::expand_bus_members(&driver.net, &design.bus_aliases).unwrap_or_default() {
                         let here: Vec<String> = sec.labels.iter().filter(|o| o.net == m).map(|o| net_at(o.at, &m)).collect();
-                        if here.is_empty() {
+                        if !here.is_empty() {
+                            targets.extend(here);
+                        } else if matches!(driver.kind, eda_model::ir::LabelKind::Global { .. }) {
                             targets.push(m);
                         } else {
-                            targets.extend(here);
+                            targets.push(format!("{}{m}", sheet.sheet_path));
                         }
                     }
                 }
@@ -598,6 +603,42 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             }
         }
     }
+}
+
+/// The label that drives the bus label `l` is on (`CONNECTION_SUBGRAPH::ResolveDrivers`, `CLAIM_LESS`): of the labels on the bus wires joined to `l`'s point on
+/// its sheet (`l` itself among them), a global one before a local one before a hierarchical one, then the smallest name (`fullName`: one sheet, one path).
+/// `checkNetclassDrivers` gives the classes of every item of the bus to the members of that driver's connection, so a class on any label of the bus goes to
+/// the driver's members (UI-LEFT-3 S3-27). A label on no bus wire drives its own.
+fn bus_driver_label<'a>(sec: &'a eda_model::ir::SchematicSection, l: &'a eda_model::ir::NetLabel) -> &'a eda_model::ir::NetLabel {
+    use eda_model::ir::LabelKind;
+    let buses: Vec<&eda_model::ir::Wire> = sec.wires.iter().filter(|w| w.bus).collect();
+    // the bus wires joined to the label's point: one touching it, then every one sharing a point with one already in (an end, or an end on the other's run)
+    let mut on: Vec<bool> = buses.iter().map(|w| polyline_touches(&w.pts, l.at)).collect();
+    loop {
+        let mut grew = false;
+        for i in 0..buses.len() {
+            if on[i] {
+                continue;
+            }
+            if (0..buses.len()).any(|j| on[j] && (buses[i].pts.iter().any(|&p| polyline_touches(&buses[j].pts, p)) || buses[j].pts.iter().any(|&p| polyline_touches(&buses[i].pts, p)))) {
+                on[i] = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let rank = |k: &LabelKind| match k {
+        LabelKind::Global { .. } => 0,
+        LabelKind::Local => 1,
+        LabelKind::Hierarchical { .. } => 2,
+    };
+    sec.labels
+        .iter()
+        .filter(|o| o.id == l.id || buses.iter().zip(&on).any(|(w, &b)| b && polyline_touches(&w.pts, o.at)))
+        .min_by(|a, b| rank(&a.kind).cmp(&rank(&b.kind)).then_with(|| a.net.cmp(&b.net)))
+        .unwrap_or(l)
 }
 
 /// The net classes a label's (or a directive's) `Netclass` fields name on a placement: each field's shown text ([`label_field_shown`]), trimmed, the empty

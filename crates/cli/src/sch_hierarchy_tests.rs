@@ -847,6 +847,35 @@ fn slow_a_bus_labels_net_class_is_its_members() {
     }
 }
 
+/// UI-LEFT-3 S3-27 (`checkNetclassDrivers`: the classes of every item of the bus's subgraphs, `processBusMember` on the members of the subgraph's driver
+/// connection): a class on a second bus label `X[0..1]` of the root's bus, which `D[0..1]` drives (`CLAIM_LESS`: `/D..` before `/X..`), goes to D0 and D1,
+/// the driver's members -- R1.1 and R2.1, and the child's R3.1 and R4.1 on them -- in the studio's model as in kicad-cli's netlist.
+#[test]
+fn slow_a_class_on_any_label_of_a_bus_goes_to_its_drivers_members() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let (dir, sheet_id, hl) = bus_board("slow_bus_class_second", "D[0..1]");
+    define_high_current(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let bus = root.wires.iter().find(|w| w.bus).unwrap();
+    let mid = Point { x: Nm::new((bus.pts[0].x.get() + bus.pts[1].x.get()) / 2), y: bus.pts[0].y };
+    step(&dir, Cmd::AddLabel { net: "X[0..1]".into(), at: mid, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+    let add = Cmd::AddLabel { net: "D[0..1]".into(), at: hl, kind: eda_model::ir::LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Bidirectional } };
+    step(&dir, Cmd::OnSheet { sheet: sheet_id, cmd: Box::new(add) }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let x = design.schematic.as_ref().unwrap().labels.iter().find(|l| l.net == "X[0..1]").unwrap().id.clone();
+    step(&dir, edit_label_fields(&x, vec![netclass("HighCurrent")]), false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let class = model.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap();
+    for pin in ["R1.1", "R2.1", "R3.1", "R4.1"] {
+        let net = design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+        assert!(kicad_classes_of_pin(&dir, pin).iter().any(|c| c == "HighCurrent"), "kicad-cli puts {pin}'s net in the class");
+        assert!(class.nets.contains(&eda_kicad::exact_pattern(&net)), "{pin}'s net {net} is in the class: {:?}", class.nets);
+    }
+}
+
 /// A label's net class on a screen shown twice is in force on both placements (`checkNetclassDrivers` runs for each net, and each placement has its own): the
 /// second placement's net is in the class too, in the studio's model and in kicad-cli's netlist.
 #[test]
