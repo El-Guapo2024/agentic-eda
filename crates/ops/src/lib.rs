@@ -6570,10 +6570,42 @@ impl<'a> Board<'a> {
         // "Automatically place symbol fields" off (`if( m_frame->eeconfig()->m_AutoplaceFields.enable ) symbol->AutoplaceFields( .. )` in `PlaceSymbol` skipped): the
         // fields are the library symbol's copies, where it puts them and as it sets them (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), and not autoplaced
         if !eda_engine::fields::autoplace_prefs().enable {
-            self.reset_unit_fields(&[(id.to_string(), lib_id.to_string(), unit)], true, true, true)?;
+            // measured as the symbol will be drawn: the part and the library definition this step brings are not in the board's model yet
+            let placed_model = self.model_with_placed(id, lib_id, value);
+            let model = placed_model.as_ref().unwrap_or(self.model);
+            self.reset_unit_fields_in(model, &[(id.to_string(), lib_id.to_string(), unit)], true, true, true)?;
+            // a symbol the design keeps no library copy of (one its intent defines) has no library places for its fields: they are where the sheet draws them now,
+            // stored as its own and not autoplaced (`AUTOPLACE_NONE`), so nothing but the Autoplace Fields command moves them
+            let sch = self.schematic_mut()?;
+            if !sch.field_layout.contains_key(&key) {
+                if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(sch, model, &key) {
+                    let now = ctx.current(sch);
+                    sch.field_layout.insert(key.clone(), now);
+                }
+            }
         }
         self.settle_placed(sch_scene::Item::Symbol(last));
         Ok(())
+    }
+
+    /// The board's model with what a symbol `id` of `lib_id` placed in this step needs to be measured: the published library definition the design keeps for
+    /// it (`EmbedLibSymbol` earlier in the batch; the studio's loader folds it in at the next load, `publish_overlay`) and a part for a reference the intent
+    /// does not have (`fold_unknown_symbols`). `None` when the model has both already.
+    fn model_with_placed(&self, id: &str, lib_id: &str, value: &str) -> Option<ConstraintModel> {
+        let flat = self.design.symbol_library.as_ref().filter(|l| l.by_lib_id(lib_id).is_some_and(|s| s.published)).and_then(|l| l.flatten(lib_id).ok());
+        if flat.is_none() && self.model.part(id).is_some() {
+            return None;
+        }
+        let mut m = self.model.clone();
+        if let Some(flat) = flat {
+            m.symbols.retain(|s| s.lib_id != lib_id);
+            m.symbols.push(flat.to_engine_symbol());
+        }
+        if m.part(id).is_none() {
+            let pins = m.placed_symbol_of(lib_id).map(|lib| lib.pins.iter().map(|p| eda_model::Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind: eda_model::PinKind::Passive }).collect()).unwrap_or_default();
+            m.parts.push(eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value: Some(value.to_string()), package: None, footprint: None, symbol: Some(lib_id.to_string()), datasheet: None, pins, body_nm: None, edge: None });
+        }
+        Some(m)
     }
 
     /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc. Applies to

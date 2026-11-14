@@ -880,6 +880,11 @@ impl<'a> Board<'a> {
     /// [`Self::reset_symbol_fields`] on the placed units `units` (reference, library id, unit): whether a placement changed.
     pub(crate) fn reset_unit_fields(&mut self, units: &[(String, String, u32)], visibility: bool, effects: bool, positions: bool) -> Result<bool, Vec<CheckResult>> {
         let model = self.model;
+        self.reset_unit_fields_in(model, units, visibility, effects, positions)
+    }
+
+    /// [`Self::reset_unit_fields`] measured against `model` (a symbol just placed is not in the board's model yet: [`Board::model_with_placed`]).
+    pub(crate) fn reset_unit_fields_in(&mut self, model: &eda_model::ConstraintModel, units: &[(String, String, u32)], visibility: bool, effects: bool, positions: bool) -> Result<bool, Vec<CheckResult>> {
         let mut changed = false;
         for (reference, lib_id, unit) in units {
             let held = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).cloned();

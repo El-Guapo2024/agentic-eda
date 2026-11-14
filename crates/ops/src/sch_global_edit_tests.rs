@@ -294,4 +294,8 @@ fn a_symbol_placed_with_automatic_placement_off_has_its_fields_where_the_library
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
     b.apply(&add).unwrap();
     assert!(!root(b.design()).field_layout.contains_key("R7"));
+    // off, with no library copy to take the places from: the places drawn now are stored as the symbol's own, not autoplaced
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    with_autoplace_prefs(off, || b.apply(&add)).unwrap();
+    assert!(root(b.design()).field_layout.contains_key("R7") && !root(b.design()).extras.fields_autoplaced.contains_key("R7"));
 }
