@@ -1,4 +1,4 @@
-// UI-LEFT-3's common lane (C3-4, C3-5, C3-6, C3-7, C3-9, C3-10, C3-12, Display Options' Highlight thickness; PARITY-common.md "common v17"), on a placed mcu30:
+// UI-LEFT-3's common lane (C3-4, C3-5, C3-6, C3-7, C3-9, C3-10, C3-12, Display Options' Highlight thickness; PARITY-common.md section 30, "common v17"), on a placed mcu30:
 //   hotkeys     Preferences > Hotkeys lists a "3D Viewer" section (View Top: Z) first; a click on the Hotkey column's title sorts the rows by it (▲), a second
 //               turns it round (▼, the sections too)
 //   grids       Edit Grids opens Preferences on the PCB Editor's Grids page; a grid of the same X as another (1 mm x 2 mm beside 1 mm) chosen on that page stays the
