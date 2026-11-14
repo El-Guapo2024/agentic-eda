@@ -114,13 +114,15 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
 /// * a text's size by `|sx|` across and `|sy|` up (`PCB_TEXT::GetTextSize`), its thickness by the mean (`GetTextThickness`);
 /// * a graphic's points (`rebakeFromTransform`), and its line width by the mean (`PCB_SHAPE::GetWidth`: `fpScaleLinear`).
 ///
-/// Under a scale that differs across and up KiCad makes a circle an ellipse (`SHAPE_T::ELLIPSE`), which the model has not: the circle becomes the closed polyline KiCad draws
-/// and plots that ellipse as ([`ellipse_polyline`]). **Approximated**: an arc, an elliptical arc in KiCad (`SHAPE_T::ELLIPSE_ARC`), has its points scaled, so it stays a
-/// circular arc through them. A custom pad's primitives are not scaled.
-fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
+/// Under a scale that differs across and up KiCad makes a circle an ellipse (`SHAPE_T::ELLIPSE`) and an arc an elliptical arc (`SHAPE_T::ELLIPSE_ARC`), which the
+/// model has not: the circle becomes the closed polyline KiCad draws and plots that ellipse as ([`ellipse_polyline`]), the arc the open chain of lines it draws and plots
+/// the elliptical arc as ([`elliptical_arc_chain`], UI-LEFT-3 P3-28). A custom pad's primitives are not scaled.
+fn bake_scale(fp: &mut Vec<Sexpr>, fp_angle: f64, (sx, sy): (f64, f64)) {
     let point = |p: (f64, f64)| (p.0 * sx, p.1 * sy);
     let mean = (sx.abs() + sy.abs()) * 0.5;
-    for child in fp.iter_mut() {
+    // the arcs that became chains of lines: (index, the lines), put in place after the walk
+    let mut splices: Vec<(usize, Vec<Sexpr>)> = Vec::new();
+    for (index, child) in fp.iter_mut().enumerate() {
         let Sexpr::List(item) = child else { continue };
         match sexpr::tag(item) {
             Some("pad") => {
@@ -237,6 +239,52 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
                     }
                 }
             }
+            // An arc under a scale that differs across and up is an elliptical arc (`rebakeFromTransform`: `SHAPE_T::ELLIPSE_ARC`), which the model has not: it becomes
+            // the open chain KiCad draws and plots it as (`SHAPE_ELLIPSE::ConvertToPolyline( GetMaxError() )`, `PlotPoly( chain, FILL_T::NO_FILL, .. )`), a line per chord with
+            // the arc's stroke (its width times the mean), layer and the rest; the first line keeps the arc's uuid, the others take one made from it
+            Some("fp_arc") if sx.abs() != sy.abs() => {
+                let xy = |tag: &str| sexpr::find(item, tag).and_then(|l| Some((sexpr::num(l, 1)?, sexpr::num(l, 2)?)));
+                let (Some(start), Some(mid), Some(end)) = (xy("start"), xy("mid"), xy("end")) else { continue };
+                let Some(chain) = elliptical_arc_chain(start, mid, end, (sx, sy)) else { continue };
+                let linear = (sx + sy) * 0.5;
+                let rest: Vec<Sexpr> = item.iter().skip(1).filter(|p| !matches!(p.as_list().and_then(sexpr::tag), Some("start") | Some("mid") | Some("end"))).cloned().collect();
+                let mut lines: Vec<Sexpr> = Vec::new();
+                for (k, w) in chain.windows(2).enumerate() {
+                    let mut line = vec![atom("fp_line"), Sexpr::List(vec![atom("start"), atom(&mm(w[0].0)), atom(&mm(w[0].1))]), Sexpr::List(vec![atom("end"), atom(&mm(w[1].0)), atom(&mm(w[1].1))])];
+                    for part in &rest {
+                        let mut part = part.clone();
+                        if let Sexpr::List(l) = &mut part {
+                            match sexpr::tag(l) {
+                                Some("stroke") => {
+                                    for wl in l.iter_mut() {
+                                        if let Sexpr::List(wl) = wl {
+                                            if sexpr::tag(wl) == Some("width") {
+                                                if let Some(v) = sexpr::num(wl, 1) {
+                                                    wl[1] = atom(&mm((v * linear).max(0.0)));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Some("width") => {
+                                    if let Some(v) = sexpr::num(l, 1) {
+                                        l[1] = atom(&mm((v * linear).max(0.0)));
+                                    }
+                                }
+                                Some("uuid") | Some("tstamp") if k > 0 => {
+                                    if let Some(u) = sexpr::txt(l, 1).map(str::to_string) {
+                                        l[1] = sexpr::quoted_atom(&chord_uuid(&u, k));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        line.push(part);
+                    }
+                    lines.push(Sexpr::List(line));
+                }
+                splices.push((index, lines));
+            }
             Some("fp_line") | Some("fp_arc") | Some("fp_circle") | Some("fp_rect") | Some("fp_poly") | Some("fp_curve") => {
                 // `PCB_SHAPE::GetWidth`: the line width times `fpScaleLinear`, `( sx + sy ) * 0.5` (signed, as KiCad has it)
                 let linear = (sx + sy) * 0.5;
@@ -269,10 +317,108 @@ fn bake_scale(fp: &mut [Sexpr], fp_angle: f64, (sx, sy): (f64, f64)) {
             _ => {}
         }
     }
+    for (index, lines) in splices.into_iter().rev() {
+        fp.splice(index..=index, lines);
+    }
+}
+
+/// The uuid of the `k`-th line an elliptical arc becomes (the first keeps the arc's): made from the arc's, so a file read twice gives the same.
+fn chord_uuid(arc_uuid: &str, k: usize) -> String {
+    let h = blake3::hash(format!("{arc_uuid}/ellipse-arc/{k}").as_bytes()).to_hex().to_string();
+    format!("{}-{}-4{}-8{}-{}", &h[0..8], &h[8..12], &h[13..16], &h[17..20], &h[20..32])
+}
+
+/// The open chain an arc of a footprint becomes under the scale `(sx, sy)` when the two differ: KiCad 25ec2335 `PCB_SHAPE::rebakeFromTransform`'s
+/// `SHAPE_T::ELLIPSE_ARC` -- the centre of the library arc (`CalcArcCenter`) and its radius scaled to the two semi-axes (`KiROUND( libRadius * GetScaleX() )`,
+/// `.. GetScaleY()`, the larger the major one, a quarter turn and the angles less 90 degrees when it is the one up), the parameters the library points' angles
+/// about the centre (`EDA_ANGLE( VECTOR2D( m_libStart - libCenter ) )`, start and end swapped when the middle is not between them counter-clockwise, the end
+/// past the start) -- cut as `SHAPE_ELLIPSE::ConvertToPolyline( aMaxError )` cuts it (`sweepRange`, `subdivideEllipseArc`). The points are in millimetres, in the
+/// footprint's frame (the footprint's turn is its `(at ..)`'s, as `-xform.GetRotate()` is the ellipse's rotation on the board). `None` for a degenerate arc.
+fn elliptical_arc_chain(start: (f64, f64), mid: (f64, f64), end: (f64, f64), (sx, sy): (f64, f64)) -> Option<Vec<(f64, f64)>> {
+    let nm = |p: (f64, f64)| ((p.0 * 1e6).round() as i64, (p.1 * 1e6).round() as i64);
+    let (ls, lm, le) = (nm(start), nm(mid), nm(end));
+    // `CalcArcCenter( VECTOR2I, VECTOR2I, VECTOR2I )`: the deltas exact, the numerators in 128 bits, one rounding
+    let (bx, by) = ((lm.0 - ls.0) as i128, (lm.1 - ls.1) as i128);
+    let (cx, cy) = ((le.0 - ls.0) as i128, (le.1 - ls.1) as i128);
+    let d = (bx * cy - by * cx) * 2;
+    if d == 0 {
+        return None;
+    }
+    let (b2, c2) = (bx * bx + by * by, cx * cx + cy * cy);
+    let centre_x = ((ls.0 as i128 * d + b2 * cy - c2 * by) as f64 / d as f64).round();
+    let centre_y = ((ls.1 as i128 * d + c2 * bx - b2 * cx) as f64 / d as f64).round();
+    let radius = ((ls.0 as f64 - centre_x).hypot(ls.1 as f64 - centre_y)).round();
+    // `xform.Apply( libCenter )`: the scale (the turn and the move are the footprint's)
+    let (ox, oy) = ((centre_x * sx).round(), (centre_y * sy).round());
+    let mut major = (radius * sx).round().abs();
+    let mut minor = (radius * sy).round().abs();
+    let angle = |p: (i64, i64)| (p.1 as f64 - centre_y).atan2(p.0 as f64 - centre_x).to_degrees();
+    let (mut a_start, a_mid, mut a_end) = (angle(ls), angle(lm), angle(le));
+    let wrap = |mut a: f64, base: f64| {
+        while a < base {
+            a += 360.0;
+        }
+        a
+    };
+    if wrap(a_mid, a_start) > wrap(a_end, a_start) {
+        std::mem::swap(&mut a_start, &mut a_end);
+    }
+    while a_end < a_start {
+        a_end += 360.0;
+    }
+    let mut rotation = 0.0_f64;
+    if minor > major {
+        std::mem::swap(&mut major, &mut minor);
+        rotation += 90.0;
+        a_start -= 90.0;
+        a_end -= 90.0;
+    }
+    let (sin_rot, cos_rot) = if rotation == 90.0 { (1.0, 0.0) } else { (0.0, 1.0) };
+    let eval = |t: f64| -> (i64, i64) {
+        let (ct, st) = (t.cos(), t.sin());
+        let (lx, ly) = (major * ct, minor * st);
+        ((ox + lx * cos_rot - ly * sin_rot).round() as i64, (oy + lx * sin_rot + ly * cos_rot).round() as i64)
+    };
+    // `sweepRange`
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let t_start = a_start.to_radians();
+    let mut t_end = a_end.to_radians();
+    let sweep = t_end - t_start;
+    if sweep >= two_pi || sweep <= -two_pi {
+        t_end = t_start + two_pi;
+    } else if t_end < t_start {
+        t_end += two_pi;
+    }
+    let (p_start, p_end) = (eval(t_start), eval(t_end));
+    let mut out = vec![p_start];
+    subdivide_ellipse_arc(t_start, p_start, t_end, p_end, MAX_ERROR_NM * MAX_ERROR_NM, 20, &eval, &mut out);
+    // `SHAPE_LINE_CHAIN::Append` passes over a point equal to the last one
+    out.dedup();
+    (out.len() >= 2).then(|| out.into_iter().map(|(x, y)| (x as f64 / 1e6, y as f64 / 1e6)).collect())
 }
 
 /// `PCB_SHAPE::GetMaxError()`: the board's `m_MaxError`, `ARC_HIGH_DEF` (0.005 mm) by default.
 const MAX_ERROR_NM: f64 = 5_000.0;
+
+/// `subdivideEllipseArc` (KiCad 25ec2335 `libs/kimath/src/geometry/shape_ellipse.cpp`): the chord from `t0` to `t1` is split at the middle parameter until its
+/// middle is within the max error of the curve, at most `depth` levels; the points after `p0` are appended.
+#[allow(clippy::too_many_arguments)]
+fn subdivide_ellipse_arc(t0: f64, p0: (i64, i64), t1: f64, p1: (i64, i64), max_err_sq: f64, depth: i32, eval: &dyn Fn(f64) -> (i64, i64), out: &mut Vec<(i64, i64)>) {
+    if depth <= 0 {
+        out.push(p1);
+        return;
+    }
+    let tm = 0.5 * (t0 + t1);
+    let pm = eval(tm);
+    let (mx, my) = (0.5 * (p0.0 as f64 + p1.0 as f64), 0.5 * (p0.1 as f64 + p1.1 as f64));
+    let (ex, ey) = (pm.0 as f64 - mx, pm.1 as f64 - my);
+    if ex * ex + ey * ey <= max_err_sq {
+        out.push(p1);
+        return;
+    }
+    subdivide_ellipse_arc(t0, p0, tm, pm, max_err_sq, depth - 1, eval, out);
+    subdivide_ellipse_arc(tm, pm, t1, p1, max_err_sq, depth - 1, eval, out);
+}
 
 /// The ellipse a circle of radius `r` (mm, in the footprint's library frame) becomes under the scale `(|sx|, |sy|)`, centred on `centre` (mm, scaled), as KiCad 25ec2335's
 /// `SHAPE_ELLIPSE::ConvertToPolyline( aMaxError )` cuts it: the major axis is the longer of the two (rotation 0 across, 90 degrees up), the points `eval( t )` rounded to the
@@ -288,26 +434,10 @@ fn ellipse_polyline(centre: (f64, f64), r: f64, (ax, ay): (f64, f64)) -> Vec<(f6
         let (lx, ly) = (a * ct, b * st);
         ((cx + lx * cos_rot - ly * sin_rot).round() as i64, (cy + lx * sin_rot + ly * cos_rot).round() as i64)
     };
-    fn subdivide(t0: f64, p0: (i64, i64), t1: f64, p1: (i64, i64), max_err_sq: f64, depth: i32, eval: &dyn Fn(f64) -> (i64, i64), out: &mut Vec<(i64, i64)>) {
-        if depth <= 0 {
-            out.push(p1);
-            return;
-        }
-        let tm = 0.5 * (t0 + t1);
-        let pm = eval(tm);
-        let (mx, my) = (0.5 * (p0.0 as f64 + p1.0 as f64), 0.5 * (p0.1 as f64 + p1.1 as f64));
-        let (ex, ey) = (pm.0 as f64 - mx, pm.1 as f64 - my);
-        if ex * ex + ey * ey <= max_err_sq {
-            out.push(p1);
-            return;
-        }
-        subdivide(t0, p0, tm, pm, max_err_sq, depth - 1, eval, out);
-        subdivide(tm, pm, t1, p1, max_err_sq, depth - 1, eval, out);
-    }
     let two_pi = 2.0 * std::f64::consts::PI;
     let (p_start, p_end) = (eval(0.0), eval(two_pi));
     let mut out = vec![p_start];
-    subdivide(0.0, p_start, two_pi, p_end, MAX_ERROR_NM * MAX_ERROR_NM, 20, &eval, &mut out);
+    subdivide_ellipse_arc(0.0, p_start, two_pi, p_end, MAX_ERROR_NM * MAX_ERROR_NM, 20, &eval, &mut out);
     // `SHAPE_LINE_CHAIN::Append` passes over a point equal to the last one
     out.dedup();
     if out.len() > 1 && out.first() == out.last() {
@@ -517,6 +647,66 @@ mod tests {
             let k = (((m.0 - 2.0) / 2.0).powi(2) + m.1.powi(2)).sqrt();
             assert!(1.0 - k < 0.0051, "{w:?}");
         }
+    }
+
+    /// KiCad 25ec2335 (UI-LEFT-3 P3-28): an arc of a footprint scaled 2 across and 1 up is an elliptical arc (`SHAPE_T::ELLIPSE_ARC`), drawn and plotted as
+    /// `ConvertToPolyline( maxError )`'s open chain: lines from one end of the arc to the other along the ellipse, the chords within 5 um of it, the stroke, the
+    /// layer and the first uuid the arc's.
+    #[test]
+    fn an_arc_under_a_scale_that_differs_across_and_up_is_the_elliptical_arcs_chain() {
+        let mut tree = parse(r#"(kicad_pcb (version 20260901) (footprint "X" (transform (translate 0 0) (rotate 0) (scale 2 1)) (property "Reference" "U9")
+            (fp_arc (start 2 0) (mid 1 -1) (end 0 0) (stroke (width 0.1) (type solid)) (layer "F.Fab") (uuid "a1"))
+            (fp_line (start 0 1) (end 1 1) (stroke (width 0.1) (type solid)) (layer "F.Fab") (uuid "l1"))))"#);
+        normalize(&mut tree);
+        let fp = sexpr::find(tree.as_list().unwrap(), "footprint").unwrap().to_vec();
+        assert!(sexpr::find(&fp, "fp_arc").is_none(), "no circular arc is left");
+        let lines: Vec<&[Sexpr]> = sexpr::find_all(&fp, "fp_line").collect();
+        assert!(lines.len() > 16, "{}", lines.len());
+        let chain: Vec<&[Sexpr]> = lines[..lines.len() - 1].to_vec();
+        assert_eq!(sexpr::txt(sexpr::find(lines[lines.len() - 1], "uuid").unwrap(), 1), Some("l1"), "the footprint's other line stays where it was, after the chain");
+        let xy = |l: &[Sexpr], tag: &str| { let p = sexpr::find(l, tag).unwrap(); (sexpr::num(p, 1).unwrap(), sexpr::num(p, 2).unwrap()) };
+        assert_eq!(xy(chain[0], "start"), (0.0, 0.0), "from the end of the major axis at t = 180 degrees");
+        assert_eq!(xy(chain[chain.len() - 1], "end"), (4.0, 0.0));
+        let mut uuids = std::collections::BTreeSet::new();
+        for (k, w) in chain.iter().enumerate() {
+            assert_eq!(sexpr::txt(sexpr::find(w, "layer").unwrap(), 1), Some("F.Fab"));
+            let width = sexpr::find(sexpr::find(w, "stroke").unwrap(), "width").unwrap().to_vec();
+            assert_eq!(sexpr::num(&width, 1), Some(0.15), "the width times the mean scale");
+            let u = sexpr::txt(sexpr::find(w, "uuid").unwrap(), 1).unwrap().to_string();
+            if k == 0 {
+                assert_eq!(u, "a1");
+            }
+            assert!(uuids.insert(u), "each line its own uuid");
+            if k > 0 {
+                assert_eq!(xy(chain[k - 1], "end"), xy(w, "start"), "a chain");
+            }
+            for (x, y) in [xy(w, "start"), xy(w, "end")] {
+                let on = ((x - 2.0) / 2.0).powi(2) + (y / 1.0).powi(2);
+                assert!((on - 1.0).abs() < 1e-5 && y <= 1e-9, "({x}, {y}) is on the upper half of the ellipse: {on}");
+            }
+            let (a, b) = (xy(w, "start"), xy(w, "end"));
+            let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            let k = (((m.0 - 2.0) / 2.0).powi(2) + m.1.powi(2)).sqrt();
+            assert!(1.0 - k < 0.0051, "{a:?} {b:?}");
+        }
+        // the same file read again gives the same uuids
+        let mut again = parse(r#"(kicad_pcb (version 20260901) (footprint "X" (transform (translate 0 0) (rotate 0) (scale 2 1)) (property "Reference" "U9")
+            (fp_arc (start 2 0) (mid 1 -1) (end 0 0) (stroke (width 0.1) (type solid)) (layer "F.Fab") (uuid "a1"))))"#);
+        normalize(&mut again);
+        let fp2 = sexpr::find(again.as_list().unwrap(), "footprint").unwrap().to_vec();
+        let second = sexpr::find_all(&fp2, "fp_line").nth(1).map(|l| sexpr::txt(sexpr::find(l, "uuid").unwrap(), 1).unwrap().to_string());
+        assert_eq!(second, sexpr::txt(sexpr::find(chain[1], "uuid").unwrap(), 1).map(str::to_string));
+    }
+
+    /// Under a scale of one ratio an arc stays an arc (`rebakeFromTransform`'s `SetArcGeometry( xform.Apply( .. ) )`).
+    #[test]
+    fn an_arc_under_a_uniform_scale_stays_an_arc() {
+        let mut tree = parse(r#"(kicad_pcb (version 20260901) (footprint "X" (transform (translate 0 0) (rotate 0) (scale 2 2)) (property "Reference" "U9")
+            (fp_arc (start 2 0) (mid 1 -1) (end 0 0) (stroke (width 0.1) (type solid)) (layer "F.Fab") (uuid "a1"))))"#);
+        normalize(&mut tree);
+        let fp = sexpr::find(tree.as_list().unwrap(), "footprint").unwrap().to_vec();
+        let arc = sexpr::find(&fp, "fp_arc").expect("still an arc").to_vec();
+        assert_eq!(sexpr::num(sexpr::find(&arc, "mid").unwrap(), 2), Some(-2.0));
     }
 
     #[test]
