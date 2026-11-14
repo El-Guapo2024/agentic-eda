@@ -58,6 +58,9 @@ pub struct Clipboard {
     pub locked: Vec<ClipRef>,
     /// True when the text was a single bare footprint (`PCB_FOOTPRINT_T` in `PCB_CONTROL::Paste`) rather than a board.
     pub bare_footprint: bool,
+    /// The custom properties the text gives its items (`(custom_property ..)`, `EDA_ITEM::m_customProperties`, which the copy constructor copies): the item, a pad's
+    /// `NUM` of a footprint (empty for the item itself), and the names and texts.
+    pub custom: Vec<(ClipRef, String, BTreeMap<String, String>)>,
 }
 
 impl Clipboard {
@@ -369,6 +372,42 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
 /// [`export_pcb_clipboard`] with the board's zone fills: a copied zone is written with its current fill, moved with it, and `(fill yes ..)` when it is filled
 /// (`PCB_IO_KICAD_SEXPR::format( const ZONE* )` writes the `(filled_polygon ..)` whatever the control flags, R6-Z1), so a paste carries the fill.
 pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
+    // The items' custom properties go with them (`CLIPBOARD_IO::SaveSelection` writes clones, `FormatCustomProperties`): into the forms of the uuids they were written as
+    // (`crate::custom_props_io`), a pad's by the uuid map its footprint's writing keeps.
+    let custom = design.drawings.as_ref().map(|d| &d.custom_properties).filter(|c| !c.is_empty());
+    let own_map = custom.is_some() && crate::uuid_map_snapshot().is_none();
+    if own_map {
+        crate::start_uuid_map();
+    }
+    let r = clipboard_items(design, model, ids, reference, fills);
+    let map = if own_map { Some(crate::take_uuid_map()) } else { custom.and_then(|_| crate::uuid_map_snapshot()) };
+    let (mut out, written) = r?;
+    if let Some(custom) = custom {
+        let at = |out: &str, u: &str| out.find(&format!("(uuid {})", sexpr_str(u))).unwrap_or(usize::MAX);
+        let mut uuid_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for id in custom.keys() {
+            let mut best: Option<String> = written.get(id).and_then(|v| v.first().cloned());
+            if best.is_none() {
+                for (u, our) in map.iter().flatten() {
+                    if our == id && best.as_ref().is_none_or(|b| at(&out, u) < at(&out, b)) {
+                        best = Some(u.clone());
+                    }
+                }
+            }
+            if best.is_none() && design.drawings.as_ref().is_some_and(|d| d.is_group(id)) {
+                best = Some(duid(&format!("clip:group:{id}")));
+            }
+            if let Some(u) = best {
+                uuid_of.insert(id.clone(), u);
+            }
+        }
+        crate::custom_props_io::inject(&mut out, custom, &uuid_of);
+    }
+    Ok(out)
+}
+
+/// [`export_pcb_clipboard_with`]'s text, the custom properties aside, and the uuids each item was written as.
+fn clipboard_items(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point, fills: Option<&crate::zone_fills::KicadFills>) -> Result<(String, BTreeMap<String, Vec<String>>), Vec<CheckResult>> {
     let picked = Picked::resolve(design, model, ids)?;
     if picked.total() == 0 {
         return Err(fail("clipboard.empty", "copy", "nothing to copy: none of the items is a footprint, track, via, zone, graphic, text or dimension"));
@@ -397,8 +436,8 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
         let zones = own_zones(&moved.id, &BTreeMap::new());
-        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, &zones, &FpExtra::of(design, &moved.id, &footprint), &Default::default());
-        return Ok(out);
+        let uuid = write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, &zones, &FpExtra::of(design, &moved.id, &footprint), &Default::default());
+        return Ok((out, BTreeMap::from([(moved.id.clone(), vec![uuid])])));
     }
 
     // Net names the items use, numbered from 1 in name order -- the table the text carries.
@@ -576,7 +615,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
     }
     write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
-    Ok(out)
+    Ok((out, written))
 }
 
 // -------------------------------------------------------------------- parse
@@ -700,6 +739,30 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                 .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint));
             if let Some(r) = r {
                 clip.locked.push(r);
+            }
+        }
+        // the items' custom properties (`(custom_property ..)`, read by the importer by item id), and a footprint's pads' by its `REF.NUM`
+        for (id, props) in &dr.custom_properties {
+            let m = id.as_str();
+            let item = group_index
+                .get(m)
+                .copied()
+                .map(ClipRef::Group)
+                .or_else(|| clip.tracks.iter().position(|t| t.id == m).map(ClipRef::Track))
+                .or_else(|| clip.vias.iter().position(|v| v.id == m).map(ClipRef::Via))
+                .or_else(|| clip.zones.iter().position(|z| z.id == m).map(ClipRef::Zone))
+                .or_else(|| clip.shapes.iter().position(|s| s.id() == m).map(ClipRef::Shape))
+                .or_else(|| clip.texts.iter().position(|t| t.id == m).map(ClipRef::Text))
+                .or_else(|| clip.dimensions.iter().position(|d| d.id == m).map(ClipRef::Dimension))
+                .or_else(|| clip.barcodes.iter().position(|b| b.id == m).map(ClipRef::Barcode))
+                .or_else(|| clip.text_boxes.iter().position(|t| t.id == m).map(ClipRef::TextBox))
+                .or_else(|| clip.images.iter().position(|i| i.id == m).map(ClipRef::Image))
+                .or_else(|| clip.tables.iter().position(|t| t.id == m).map(ClipRef::Table))
+                .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint));
+            if let Some(r) = item {
+                clip.custom.push((r, String::new(), props.clone()));
+            } else if let Some((fp, pad)) = fp_index.iter().find_map(|(f, i)| m.strip_prefix(f.as_str()).and_then(|rest| rest.strip_prefix('.')).map(|pad| (*i, pad))) {
+                clip.custom.push((ClipRef::Footprint(fp), pad.to_string(), props.clone()));
             }
         }
     }

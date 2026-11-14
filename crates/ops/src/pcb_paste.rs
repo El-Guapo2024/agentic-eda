@@ -125,6 +125,9 @@ pub(crate) struct Copies {
     pub(crate) locked: Vec<Member>,
     /// Each copy [`Board::collect_copies`] made, with the id of what it is a copy of.
     pub(crate) sources: Vec<(Member, String)>,
+    /// The custom properties of the copies (`EDA_ITEM`'s copy constructor copies `m_customProperties`; KiCad 25ec2335): the copy, a pad's `NUM` of a footprint copy
+    /// (empty for the copy itself), and the names and texts.
+    pub(crate) custom: Vec<(Member, String, BTreeMap<String, String>)>,
 }
 
 impl Copies {
@@ -152,6 +155,7 @@ impl Copies {
         let join: Vec<(Member, String)> = other.join.iter().map(|(m, g)| (shift(*m, self), g.clone())).collect();
         let locked: Vec<Member> = other.locked.iter().map(|m| shift(*m, self)).collect();
         let sources: Vec<(Member, String)> = other.sources.iter().map(|(m, id)| (shift(*m, self), id.clone())).collect();
+        let custom: Vec<(Member, String, BTreeMap<String, String>)> = other.custom.iter().map(|(m, pad, p)| (shift(*m, self), pad.clone(), p.clone())).collect();
         self.tracks.extend(other.tracks);
         self.vias.extend(other.vias);
         self.zones.extend(other.zones);
@@ -173,6 +177,7 @@ impl Copies {
         self.join.extend(join);
         self.locked.extend(locked);
         self.sources.extend(sources);
+        self.custom.extend(custom);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -320,6 +325,20 @@ impl Board<'_> {
         }
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text, dimension, point, barcode, text box, image or table")]);
+        }
+        // `BOARD_ITEM::Duplicate` is a clone: the copy has the original's custom properties, a footprint's pads theirs (KiCad 25ec2335 `EDA_ITEM( const EDA_ITEM& )`)
+        if let Some(dr) = self.design.drawings.as_ref().filter(|d| !d.custom_properties.is_empty()) {
+            for (m, id) in &copies.sources {
+                if let Some(p) = dr.custom_properties.get(id) {
+                    copies.custom.push((*m, String::new(), p.clone()));
+                }
+                if matches!(m, Member::Footprint(_)) {
+                    let prefix = format!("{id}.");
+                    for (key, p) in dr.custom_properties.range(prefix.clone()..).take_while(|(k, _)| k.starts_with(&prefix)) {
+                        copies.custom.push((*m, key[prefix.len()..].to_string(), p.clone()));
+                    }
+                }
+            }
         }
         Ok(copies)
     }
@@ -640,6 +659,25 @@ impl Board<'_> {
             copies.groups.push(GroupCopy { name: g.name.clone(), members, design_block: g.design_block.clone() });
         }
         // A locked item of the text is a locked copy (`CLIPBOARD_IO::Parse` keeps `(locked yes)`; Append Board's file keeps its locks).
+        let groups_len = copies.groups.len();
+        let member_of = |r: ClipRef| -> Option<Member> {
+            match r {
+                ClipRef::Track(i) => track_ix.get(i).copied().flatten().map(Member::Track),
+                ClipRef::Via(i) => via_ix.get(i).copied().flatten().map(Member::Via),
+                ClipRef::Zone(i) => zone_ix.get(i).copied().flatten().map(Member::Zone),
+                ClipRef::Shape(i) => shape_ix.get(i).copied().map(Member::Shape),
+                ClipRef::Text(i) => text_ix.get(i).copied().map(Member::Text),
+                ClipRef::Dimension(i) => dim_ix.get(i).copied().map(Member::Dimension),
+                ClipRef::Footprint(i) => fp_ix.get(i).copied().map(Member::Footprint),
+                ClipRef::Barcode(i) => barcode_ix.get(i).copied().map(Member::Barcode),
+                ClipRef::TextBox(i) => box_ix.get(i).copied().map(Member::TextBox),
+                ClipRef::Image(i) => image_ix.get(i).copied().map(Member::Image),
+                ClipRef::Table(i) => table_ix.get(i).copied().flatten().map(Member::Table),
+                ClipRef::Group(i) => (i < groups_len).then_some(Member::Group(i)),
+            }
+        };
+        // the text's custom properties are the copies' (`CLIPBOARD_IO::Parse` reads them into the items)
+        copies.custom = clip.custom.iter().filter_map(|(r, pad, p)| member_of(*r).map(|m| (m, pad.clone(), p.clone()))).collect();
         copies.locked = clip
             .locked
             .iter()
@@ -831,6 +869,7 @@ impl Board<'_> {
         let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&point_ids).chain(&barcode_ids).chain(&box_ids).chain(&image_ids).chain(&table_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
         let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
         let locked_copies: Vec<String> = copies.locked.iter().filter_map(|m| id_of(m, &group_ids)).collect();
+        let custom_copies: Vec<(String, BTreeMap<String, String>)> = copies.custom.iter().filter_map(|(m, pad, p)| id_of(m, &group_ids).map(|id| (if pad.is_empty() { id } else { format!("{id}.{pad}") }, p.clone()))).collect();
 
         // A footprint's zones are the copy's: the parent each names is the footprint copied (its reference, `#n` for the n-th of a repeated one on the clipboard), which
         // lands as `fp_refs`' (a zone whose footprint is not among the copies is a zone of the board).
@@ -914,6 +953,13 @@ impl Board<'_> {
         for r in owners {
             if let Some(pose) = self.pose_of(&r).cloned() {
                 self.mark_zones_at(&r, &pose);
+            }
+        }
+        // the copies' custom properties (the copy constructor's `m_customProperties`)
+        if !custom_copies.is_empty() {
+            let dr = self.drawings_mut();
+            for (id, p) in custom_copies {
+                dr.custom_properties.entry(id).or_default().extend(p);
             }
         }
         Ok(top)
