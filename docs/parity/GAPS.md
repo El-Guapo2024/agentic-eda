@@ -942,7 +942,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   moves, paste and the clipboard keep them. UI-LEFT P8 (2026-11-05, `task-u1-zones`, `PARITY-pcb.md` section 68): the point editor edits every contour (KiCad's global vertex index; a hole of three
   corners goes whole), Simplify simplifies the holes, Create Lines / Tracks draws them, Create Zone / Polygon from Selection keeps them (`ConvertedPolys::polys`; a polygon has none, so a zone made a
   polygon is a slit ring whose holes come back when it is made a zone again), the canvas hit test leaves them out, and the Zone Manager's preview draws them. Left (non-blocking): the zone's shape in
-  the rule evaluator's clearance tests (`crates/drc/src/rule_board.rs::zone_item`: its `shapes`; `insideArea` has the holes) and Repeat Layout's target area (the reference's outline without its holes).
+  the rule evaluator's clearance tests (`crates/drc/src/rule_board.rs::zone_item`: its `shapes`; `insideArea` has the holes) and Repeat Layout's target area (the reference's outline without its holes). -- done 2026-11-14 (`task-v18-pcbmisc`, UI-LEFT-3 P3-21, `PARITY-pcb.md` section 122): the zone's shape is its fractured polygon; Repeat Layout's target is KiCad's own (the reference's outline alone).
 - **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it; a zone moved, turned, mirrored or flipped keeps its fill moved with it (`ZONE::Move` /
   `Rotate` / `Mirror` / `Flip` transform `m_FilledPolysList`), and one edited in Zone Properties (a setting, its net) keeps it as it was (`Edit_Zone_Params` does not `UnFill()`), both counted out of date
   until the next fill (round 5 R5-Z2, 2026-10-28: before, any edit to a zone emptied it, which was not KiCad's); a zone reshaped (the point editor's `UnFill()`) or put on other layers (`SetLayerSet`) is emptied;
@@ -1034,6 +1034,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Create from Selection, Grouping), Zoom and Grid, and Properties last. The router's menu opens while a route is drawn. A right click keeps a selection.
 - Missing: table cells, gate swap and generators have no IR, so no entries; the pad settings are listed dimmed; most of the router's via, posture and corner-mode actions are dimmed (Place Through Via
   works while routing; Track Corner Mode always shows 45); Zone Priority raise and lower go by the zones' boxes overlapping, not their filled shapes.
+- Done 2026-11-14 (`task-v18-pcbmisc`, UI-LEFT-3 P3-17, `PARITY-pcb.md` section 122): a tuning pattern is a generator in the menu (Update All Tuning Patterns in the selection's and the router's menus; no Enter Group); the table cells' entries and gate swap are in (earlier lanes).
 - Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
