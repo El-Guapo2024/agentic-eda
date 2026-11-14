@@ -596,6 +596,25 @@ fn chrono_stamp() -> String {
     format!("-{year:04}-{month:02}-{day:02}-{:02}-{:02}-{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// The mark a board imported from a KiCad 5 project carries until the studio first opens it (UI-LEFT-3 S3-16): `SCH_EDIT_FRAME::OpenProjectFiles` runs
+/// `RescueSymbolLibTableProject( false )` -- Rescue Symbols, not on demand -- as a legacy project whose symbols name their libraries and that has no cache
+/// library beside it opens (`if( ( !cfg || !cfg->m_RescueNeverShow ) && !cacheExists )`). The browser's import runs it at once (`importActions.ts`); `eda
+/// import-kicad` leaves this mark, and the studio runs it as it opens the board ([`rescue_on_open`]).
+pub(crate) const RESCUE_ON_OPEN: &str = ".eda-rescue-on-open";
+
+/// Leave [`RESCUE_ON_OPEN`] in the board folder `dir`.
+pub(crate) fn mark_rescue_on_open(dir: &Path) -> std::io::Result<()> {
+    std::fs::write(dir.join(RESCUE_ON_OPEN), "RescueSymbolLibTableProject( false )\n")
+}
+
+/// `POST /api/sch/rescue/on_open` -> `{pending}`: whether the board is a legacy project the studio opens for the first time since `eda import-kicad` brought it
+/// in ([`RESCUE_ON_OPEN`]); the mark is spent (the project is saved in the new format from then on, so KiCad would not run it again either).
+pub fn rescue_on_open(dir: &Path) -> Value {
+    let mark = dir.join(RESCUE_ON_OPEN);
+    let pending = mark.is_file() && std::fs::remove_file(&mark).is_ok();
+    json!({ "ok": true, "pending": pending })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,5 +950,18 @@ mod tests {
         let d = std::env::temp_dir().join(format!("eda-rescue-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// UI-LEFT-3 S3-16: the mark `eda import-kicad` leaves is answered once, then spent.
+    #[test]
+    fn the_rescue_on_open_mark_is_answered_once() {
+        let dir = std::env::temp_dir().join(format!("eda-rescue-on-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(super::rescue_on_open(&dir)["pending"], false);
+        super::mark_rescue_on_open(&dir).unwrap();
+        assert_eq!(super::rescue_on_open(&dir)["pending"], true);
+        assert_eq!(super::rescue_on_open(&dir)["pending"], false, "spent");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

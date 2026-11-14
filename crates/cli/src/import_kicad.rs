@@ -428,6 +428,13 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
         if legacy.remap {
             // `OpenProjectFiles`: "Convert old projects over to use symbol library table." -- `DIALOG_SYMBOL_REMAP`
             eprintln!("  legacy project: no symbol names its library; Tools > Remap Legacy Library Symbols... gives them the libraries of the project's legacy list");
+        } else if crate::legacy_import::cache_library(&legacy.project_dir, &legacy.project).is_none() {
+            // `OpenProjectFiles`: "if( ( !cfg || !cfg->m_RescueNeverShow ) && !cacheExists ) RescueSymbolLibTableProject( false )" -- the studio runs it as it
+            // first opens the board (UI-LEFT-3 S3-16)
+            match crate::rescue_api::mark_rescue_on_open(out) {
+                Ok(()) => eprintln!("  legacy project: no cache library; the studio runs Rescue Symbols as it opens the board"),
+                Err(e) => eprintln!("  legacy project: {e}"),
+            }
         }
     }
 

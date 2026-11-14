@@ -50,3 +50,12 @@ export async function remapSymbols(): Promise<{ report: RemapLine[]; cmd?: Cmd }
   if (j.error) throw new ApiError(j.error);
   return j;
 }
+
+/**
+ * Whether the board is a KiCad 5 project `eda import-kicad` brought in with no cache library, opened for the first time (`POST /api/sch/rescue/on_open`, the
+ * mark spent): `OpenProjectFiles` runs Rescue Symbols, not on demand, as such a project opens (UI-LEFT-3 S3-16).
+ */
+export async function rescueOnOpen(): Promise<boolean> {
+  const j = await postJson<{ ok?: boolean; pending?: boolean }>("/api/sch/rescue/on_open", {});
+  return !!j.pending;
+}
