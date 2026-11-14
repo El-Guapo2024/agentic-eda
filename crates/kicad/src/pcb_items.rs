@@ -399,7 +399,8 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         let fx = &d.text_effects;
         let mut l = eda_model::fp_edit::FieldLayout::new(eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, &d.layer);
         l.size = (d.text_width_nm(), d.text_size_nm);
-        l.thickness = d.text_thickness_nm.unwrap_or_else(|| Nm::kiround(d.text_size_nm.as_f64() * 0.15));
+        // the automatic pen is no `(thickness ..)` (`EDA_TEXT::Format`: `if( !GetAutoThickness() )`, UI-LEFT-3 P3-11)
+        l.thickness = d.text_thickness_nm.unwrap_or(Nm::ZERO);
         l.halign = match fx.h_justify {
             eda_model::ir::TextJustify::Left => -1,
             eda_model::ir::TextJustify::Center => 0,

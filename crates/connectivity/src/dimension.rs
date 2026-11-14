@@ -199,13 +199,9 @@ fn format_value(dim: &Dimension, measured_value_nm: Nm) -> String {
     text
 }
 
-/// The pen of the dimension's text (`GetEffectiveTextPenWidth`): its own thickness, or 15 % of the size, which the writer writes for one that has none,
-/// clamped to a quarter of the smaller of its width and height (`ClampTextPenSize( penWidth, GetTextSize() )`, not strict).
+/// The pen of the dimension's text (`GetEffectiveTextPenWidth`, [`Dimension::text_pen_nm`]): its own thickness or the automatic pen, clamped.
 fn text_pen(dim: &Dimension) -> Nm {
-    let pen = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
-    let size = dim.text_size_nm.abs().min(dim.text_width_nm().abs());
-    // `std::min( aPenSize, KiROUND( (double) aSize * 0.25 ) )`
-    pen.min(Nm::kiround(size.as_f64() * 0.25))
+    dim.text_pen_nm()
 }
 
 /// The four corners of the text's box as the dimension's `updateGeometry` collides its lines with it: `GetTextBox( nullptr ).Inflate( grow_x, grow_y )`
@@ -667,8 +663,26 @@ mod tests {
             text_pos: None,
             text_frame: Default::default(),
             text_effects: Default::default(),
-            text_thickness_nm: None,
+            // the 0.15 mm pen of KiCad's 1 mm label (`DrawDimension`'s `SetTextThickness( bds.GetTextThickness( layer ) )`)
+            text_thickness_nm: Some(mm(0.15)),
         }
+    }
+
+    /// UI-LEFT-3 P3-11: a label with no pen of its own is drawn with `GetEffectiveTextPenWidth`'s automatic one -- an eighth of its width, a fifth when bold -- clamped
+    /// to a quarter of its smaller side (`ClampTextPenSize`); a thickness of 0 is the same.
+    #[test]
+    fn a_label_with_no_pen_of_its_own_has_the_automatic_one() {
+        let mut dim = base_dim(DimensionKind::Aligned { height: mm(3.0) }, Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(20.0), y: Nm::ZERO });
+        dim.text_thickness_nm = None;
+        dim.text_effects.width_nm = Some(mm(1.6));
+        assert!(dim.text_auto_thickness());
+        assert_eq!(text_pen(&dim), mm(0.2));
+        dim.text_effects.bold = true;
+        assert_eq!(text_pen(&dim), mm(0.25), "a fifth of 1.6 mm is 0.32 mm: clamped to a quarter of the 1 mm height");
+        dim.text_thickness_nm = Some(Nm::ZERO);
+        assert!(dim.text_auto_thickness());
+        dim.text_thickness_nm = Some(mm(0.1));
+        assert_eq!(text_pen(&dim), mm(0.1));
     }
 
     /// The width of the gap an inline label cuts in a horizontal crossbar at y = `y`.

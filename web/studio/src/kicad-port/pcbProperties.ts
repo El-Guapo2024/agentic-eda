@@ -432,6 +432,12 @@ function textCmd(t: BoardText, patch: Partial<{ content: string; angle: number; 
 }
 
 /** `edit_dimension` replaces the whole dimension: the current one with `patch` laid over it. */
+/** `GetEffectiveTextPenWidth()` of a dimension's label: its own thickness, else the bold or normal pen of its width, clamped (UI-LEFT-3 P3-11). */
+function dimPen(d: Dimension): number {
+  const width = d.text_width_nm ?? d.text_size_nm;
+  return effectiveTextPenWidth(d.text_thickness_nm ?? 0, [width, d.text_size_nm], !!d.bold);
+}
+
 function dimCmd(d: Dimension, patch: Partial<CmdDimension>): Cmd {
   return { op: "edit_dimension", id: d.id, dimension: { ...toCmdDimension(d), ...patch } };
 }
@@ -1799,10 +1805,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "EDA_TEXT",
       name: "Auto Thickness",
       kind: "bool",
-      get: (i) => (i.text ? !!i.text.auto_thickness : i.field ? i.field.thickness === 0 : i.dim!.text_thickness_nm == null),
-      writeable: (i) => !!i.text || !!i.field,
-      readOnlyReason: () => "A dimension's label keeps its own pen (15% of its size unless set).",
+      get: (i) => (i.text ? !!i.text.auto_thickness : i.field ? i.field.thickness === 0 : !i.dim!.text_thickness_nm),
       set: (i, v) => {
+        // a dimension's label: `SetAutoThickness( true )` is a thickness of 0 (none of its own), `false` keeps the pen it is drawn with
+        // (`GetEffectiveTextPenWidth()`; UI-LEFT-3 P3-11)
+        if (i.dim) {
+          const d = i.dim;
+          if (!d.text_thickness_nm === Boolean(v)) return [];
+          return [dimCmd(d, { text_thickness_nm: Boolean(v) ? undefined : dimPen(d) })];
+        }
         // a field's automatic pen is a thickness of 0 (`FieldLayout::thickness`): `SetAutoThickness` sets 0, or the pen it is drawn with
         // (`GetEffectiveTextPenWidth()`, the bold or normal pen of its width, clamped) when it is turned off (UI-LEFT-2 PP8)
         if (i.field) {
@@ -1815,8 +1826,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
     TEXT
   );
-  /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a dimension's label's, 15 % of its size unless it says otherwise. */
-  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? (i.field.thickness || effectiveTextPenWidth(0, [i.field.w, i.field.h], i.field.bold)) : i.dim!.text_thickness_nm ?? Math.round(i.dim!.text_size_nm * 0.15));
+  /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a field's or a dimension's label's own, else the automatic one it is drawn with (`GetEffectiveTextPenWidth`). */
+  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? (i.field.thickness || effectiveTextPenWidth(0, [i.field.w, i.field.h], i.field.bold)) : i.dim!.text_thickness_nm || dimPen(i.dim!));
   add(
     {
       owner: "EDA_TEXT",
@@ -1829,10 +1840,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         const w = Math.round(num(v));
         // a field's typed pen ends its automatic one even when it is the pen it had (`SetTextThickness`)
         if (i.field) return i.field.thickness === w ? [] : [editFieldCmd(i.part!, i.field, { thickness: w })];
+        // a dimension's typed pen ends its automatic one, as a field's does (`SetTextThickness`)
+        if (i.dim) return i.dim.text_thickness_nm === w ? [] : [dimCmd(i.dim, { text_thickness_nm: w })];
         if (thickness(i) === w && !i.text?.auto_thickness) return [];
-        if (!i.text) return [dimCmd(i.dim!, { text_thickness_nm: w })];
         // `SetTextThickness` ends the automatic width (`GetAutoThickness` is a thickness of 0).
-        return [...(thickness(i) === w ? [] : [textCmd(i.text, { stroke_width: w })]), ...(i.text.auto_thickness ? [styleCmd(i.text, { auto_thickness: false })] : [])];
+        const t = i.text!;
+        return [...(thickness(i) === w ? [] : [textCmd(t, { stroke_width: w })]), ...(t.auto_thickness ? [styleCmd(t, { auto_thickness: false })] : [])];
       },
     },
     TEXT
@@ -1848,7 +1861,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
           if (i.field) return i.field[key] === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { [key]: Boolean(v) })];
           // `EDA_TEXT::SetBold`: in the stroke font the pen goes to the bold or the normal one (KiCad gives back a pen it kept aside, `m_StoredStrokeWidth`;
           // the model keeps none: the normal pen); an outline face is its own weight
-          if (i.dim) return dimLookCmd(i, (l) => (key === "bold" && !l.face ? boldToggled(l, Boolean(v)) : { ...l, [key]: Boolean(v) }));
+          // (8303b2ad `SetBold` sets `m_StrokeWidth` even on an automatic pen: the label has a pen of its own after it)
+          if (i.dim) return dimLookCmd(i, (l) => (key === "bold" && !l.face ? boldToggled({ ...l, autoThickness: false }, Boolean(v)) : { ...l, [key]: Boolean(v) }));
           return !!i.text![key] === Boolean(v) ? [] : [styleCmd(i.text!, { [key]: Boolean(v) })];
         },
       },

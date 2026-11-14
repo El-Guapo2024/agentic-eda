@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CmdDimension, TextGraphicsDefaults } from "../api/types";
-import { boldToggled, fontPicked, labelLooksOf, labelLooksOfCmd, thicknessTyped, withLabelLooks } from "./dimensionLabel";
+import { autoThicknessToggled, boldToggled, fontPicked, labelLooksOf, labelLooksOfCmd, thicknessTyped, widthTyped, withLabelLooks } from "./dimensionLabel";
 import { fpDimensionHeightOffGrid, fpDimensionOnLayer, fpDimensionWithLineWidth, fpNewDimension, FP_DIMENSION_STYLE, type FpDimDraw } from "./fpDrawTools";
 import { dimensionTextSpec } from "./textSpecs";
 import { FACTORY_TEXT_GRAPHICS } from "./layerDefaults";
@@ -16,9 +16,11 @@ const cmd = (over: Partial<CmdDimension> = {}): CmdDimension => ({
 
 test("a label without looks of its own is square, upright, centred, in the stroke font and mirrored as its layer's side says", () => {
   const l = labelLooksOfCmd(cmd());
-  assert.deepEqual(l, { widthNm: l.heightNm, heightNm: l.heightNm, thicknessNm: l.thicknessNm, face: null, bold: false, italic: false, mirrored: false, hJustify: "center", keepUpright: false });
+  assert.deepEqual(l, { widthNm: l.heightNm, heightNm: l.heightNm, thicknessNm: l.thicknessNm, autoThickness: false, face: null, bold: false, italic: false, mirrored: false, hJustify: "center", keepUpright: false });
   assert.equal(labelLooksOfCmd(cmd({ layer: "B.Fab" })).mirrored, true, "DrawDimension's SetMirrored( IsBackLayer( layer ) )");
-  assert.equal(labelLooksOf({ layer: "B.SilkS", text_size_nm: MM, text_thickness_nm: null }).thicknessNm, 150_000, "no pen of its own: 15 % of the height");
+  // no pen of its own is the automatic pen (UI-LEFT-3 P3-11): KiCad 25ec2335's dialog shows `GetPenSizeForNormal( GetTextWidth() )`
+  const auto = labelLooksOf({ layer: "B.SilkS", text_size_nm: MM, text_thickness_nm: null, text_width_nm: 2 * MM });
+  assert.deepEqual([auto.autoThickness, auto.thicknessNm], [true, 250_000]);
 });
 
 test("the looks go into the dimension's text_effects, each left out at its default", () => {
@@ -33,12 +35,23 @@ test("the looks go into the dimension's text_effects, each left out at its defau
   assert.deepEqual(labelLooksOfCmd(moved), { ...l }, "and reads back the same");
 });
 
-test("a dimension with no pen of its own keeps none while it shows 15 % of its height", () => {
+test("the automatic pen: kept while the button is checked, frozen at GetPenSizeForNormal( width ) when it is unchecked (KiCad 25ec2335, UI-LEFT-3 P3-11)", () => {
   const base = { ...cmd(), text_thickness_nm: undefined };
   const l = labelLooksOfCmd(base);
+  assert.equal(l.autoThickness, true);
   assert.equal(withLabelLooks(base, l).text_thickness_nm, undefined);
-  // `SetTextHeight` leaves the pen: the 15 % of the old height is the pen now
-  assert.equal(withLabelLooks(base, { ...l, heightNm: 2 * MM }).text_thickness_nm, l.thicknessNm);
+  assert.equal(withLabelLooks(base, { ...l, heightNm: 2 * MM }).text_thickness_nm, undefined, "a new size keeps it automatic");
+  // `onTextSize`: the shown pen follows the width; Bold leaves an automatic pen alone
+  const wide = widthTyped(l, 4 * MM);
+  assert.equal(wide.thicknessNm, 500_000);
+  assert.deepEqual(boldToggled(wide, true), { ...wide, bold: true });
+  // `onAutoTextThickness`: unchecked, the pen shown is the label's own; checked again, none of its own
+  const own = autoThicknessToggled(wide, false);
+  assert.equal(withLabelLooks(base, own).text_thickness_nm, 500_000);
+  assert.equal(withLabelLooks({ ...base, text_thickness_nm: 300_000 }, autoThicknessToggled({ ...own, thicknessNm: 300_000 }, true)).text_thickness_nm, undefined);
+  // drawn with `GetEffectiveTextPenWidth`: an eighth of the width, a fifth when bold, at most a quarter of the smaller side
+  const pen = (bold: boolean) => dimensionTextSpec({ text: "20", text_at: [0, 0], computed_text_angle: 0, text_size_nm: MM, text_thickness_nm: null, text_width_nm: 1.6 * MM, bold }).spec.pen;
+  assert.deepEqual([pen(false), pen(true)], [200_000, 250_000]);
 });
 
 test("the dialog's Bold button, a thickness typed in and the font follow DIALOG_DIMENSION_PROPERTIES", () => {

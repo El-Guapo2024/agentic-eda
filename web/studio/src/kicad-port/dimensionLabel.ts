@@ -15,6 +15,7 @@
 // font, upright, centred, mirrored as the layer's side says). Pure: no store, no DOM. Unit-tested in dimensionLabel.test.ts.
 import type { CmdDimension, Dimension, DimensionTextEffects, TextJustify } from "../api/types";
 import { boldTogglePenNm, inferBold, isBackLayer } from "./layerDefaults";
+import { penSizeForNormal } from "./kicadText";
 
 /** The label's looks as the dialog and the Properties panel show them. */
 export interface DimensionLabelLooks {
@@ -22,8 +23,13 @@ export interface DimensionLabelLooks {
   widthNm: number;
   /** `GetTextHeight()`, nm. */
   heightNm: number;
-  /** `GetTextThickness()`, nm (15 % of the height when the dimension has none). */
+  /**
+   * `GetTextThickness()`, nm; with the automatic pen, what KiCad 25ec2335's dialog shows (`GetPenSizeForNormal( GetTextWidth() )`, the pen
+   * `SetAutoThickness( false )` freezes).
+   */
   thicknessNm: number;
+  /** `GetAutoThickness()`: no pen of its own (a thickness of 0), drawn with `GetEffectiveTextPenWidth`'s (KiCad 25ec2335's dialog's auto-thickness button; UI-LEFT-3 P3-11). */
+  autoThickness: boolean;
   /** The face; null is KiCad's stroke font. */
   face: string | null;
   bold: boolean;
@@ -41,10 +47,14 @@ export function layerMirrors(layer: string): boolean {
 
 /** The looks of a dimension as `/api/state` gives it (a backend without them: a square, upright, centred stroke-font label mirrored as its layer says). */
 export function labelLooksOf(d: Pick<Dimension, "layer" | "text_size_nm" | "text_thickness_nm"> & Partial<Pick<Dimension, "text_width_nm" | "face" | "bold" | "italic" | "mirrored" | "h_justify" | "keep_upright">>): DimensionLabelLooks {
+  const widthNm = d.text_width_nm ?? d.text_size_nm;
+  const autoThickness = !d.text_thickness_nm;
   return {
-    widthNm: d.text_width_nm ?? d.text_size_nm,
+    widthNm,
     heightNm: d.text_size_nm,
-    thicknessNm: d.text_thickness_nm ?? Math.round(d.text_size_nm * 0.15),
+    // `TransferDataToWindow` (KiCad 25ec2335): the automatic pen shows `GetPenSizeForNormal( GetTextWidth() )`
+    thicknessNm: autoThickness ? penSizeForNormal(widthNm) : d.text_thickness_nm!,
+    autoThickness,
     face: d.face ?? null,
     bold: !!d.bold,
     italic: !!d.italic,
@@ -69,8 +79,9 @@ export function withLabelLooks(cmd: CmdDimension, l: DimensionLabelLooks): CmdDi
   if (l.hJustify !== "center") fx.h_justify = l.hJustify;
   if (l.keepUpright) fx.keep_upright = true;
   const out: CmdDimension = { ...cmd, text_size_nm: l.heightNm };
-  // The pen: `SetTextThickness` of what is shown. A dimension with no pen of its own (15 % of its height) keeps none while that is still what it shows.
-  if (cmd.text_thickness_nm != null || l.thicknessNm !== Math.round(l.heightNm * 0.15)) out.text_thickness_nm = l.thicknessNm;
+  // The pen: `SetAutoThickness( true )` (none of its own) or `SetTextThickness` of what is shown (`updateDimensionFromDialog`, KiCad 25ec2335).
+  if (l.autoThickness) delete out.text_thickness_nm;
+  else out.text_thickness_nm = l.thicknessNm;
   if (Object.keys(fx).length) out.text_effects = fx;
   else delete out.text_effects;
   return out;
@@ -79,10 +90,13 @@ export function withLabelLooks(cmd: CmdDimension, l: DimensionLabelLooks): CmdDi
 /** The looks of a dimension the verbs take, as [`withLabelLooks`] wrote them. */
 export function labelLooksOfCmd(cmd: CmdDimension): DimensionLabelLooks {
   const fx = cmd.text_effects ?? {};
+  const widthNm = fx.width_nm ?? cmd.text_size_nm;
+  const autoThickness = !cmd.text_thickness_nm;
   return {
-    widthNm: fx.width_nm ?? cmd.text_size_nm,
+    widthNm,
     heightNm: cmd.text_size_nm,
-    thicknessNm: cmd.text_thickness_nm ?? Math.round(cmd.text_size_nm * 0.15),
+    thicknessNm: autoThickness ? penSizeForNormal(widthNm) : cmd.text_thickness_nm!,
+    autoThickness,
     face: fx.face ?? null,
     bold: !!fx.bold,
     italic: !!fx.italic,
@@ -94,7 +108,21 @@ export function labelLooksOfCmd(cmd: CmdDimension): DimensionLabelLooks {
 
 /** `onBoldToggle`: the Bold button sets the thickness to the bold or the normal pen of the smaller of the width and the height. */
 export function boldToggled(l: DimensionLabelLooks, bold: boolean): DimensionLabelLooks {
-  return { ...l, bold, thicknessNm: boldTogglePenNm(bold, l.widthNm, l.heightNm) };
+  // the automatic pen follows the weight by itself (`GetEffectiveTextPenWidth`): only a pen of its own is set
+  return l.autoThickness ? { ...l, bold } : { ...l, bold, thicknessNm: boldTogglePenNm(bold, l.widthNm, l.heightNm) };
+}
+
+/**
+ * KiCad 25ec2335's `onAutoTextThickness`: checked, the thickness shows `GetPenSizeForNormal( width )` and is greyed; unchecked, it is editable again and keeps that
+ * value (what `SetAutoThickness( false )` freezes). UI-LEFT-3 P3-11.
+ */
+export function autoThicknessToggled(l: DimensionLabelLooks, on: boolean): DimensionLabelLooks {
+  return on ? { ...l, autoThickness: true, thicknessNm: penSizeForNormal(l.widthNm) } : { ...l, autoThickness: false };
+}
+
+/** KiCad 25ec2335's `onTextSize`: with the automatic pen, a new width shows its `GetPenSizeForNormal`. */
+export function widthTyped(l: DimensionLabelLooks, widthNm: number): DimensionLabelLooks {
+  return { ...l, widthNm, ...(l.autoThickness ? { thicknessNm: penSizeForNormal(widthNm) } : {}) };
 }
 
 /** `onThickness`: a thickness typed in sets the Bold button to the pen it is nearer (`GetPenSizeForBold` or `GetPenSizeForNormal`). */

@@ -2522,10 +2522,9 @@ pub struct Dimension {
     #[serde(deserialize_with = "crate::units::de")]
     pub extension_height: Nm,
     pub arrow_direction: ArrowDirection,
-    /// `EDA_TEXT::GetTextThickness()` of the dimension's text, nm: the pen the label is
-    /// drawn with, which the text-dimension DRC checks read. `None` = 15 % of
-    /// `text_size_nm`, KiCad's own pen for its default 1 mm label. Additive: absent in an
-    /// older `design.json`.
+    /// `EDA_TEXT::GetTextThickness()` of the dimension's text, nm. `None` (or 0) is the automatic pen (`GetAutoThickness`: a thickness of 0, a file's
+    /// `(font ..)` with no `(thickness ..)`), which the label is drawn with as [`Dimension::text_pen_nm`] says (`GetEffectiveTextPenWidth`: an eighth of
+    /// the text width, a fifth when bold; UI-LEFT-3 P3-11 -- it was 15 % of the height before). Additive: absent in an older `design.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "text_thickness_um", deserialize_with = "crate::units::de")]
     pub text_thickness_nm: Option<Nm>,
@@ -2558,6 +2557,23 @@ impl Dimension {
     /// `GetTextWidth()`: the label's own width, else its height (a square label).
     pub fn text_width_nm(&self) -> Nm {
         self.text_effects.width_nm.unwrap_or(self.text_size_nm)
+    }
+
+    /// `GetAutoThickness()`: the label has no pen of its own (a thickness of 0).
+    pub fn text_auto_thickness(&self) -> bool {
+        self.text_thickness_nm.is_none_or(|t| t == Nm::ZERO)
+    }
+
+    /// `EDA_TEXT::GetEffectiveTextPenWidth()` of the label: its own thickness, or, at 1 nm or less, `GetPenSizeForBold( GetTextWidth() )` (a fifth) when bold and
+    /// `GetPenSizeForNormal( GetTextWidth() )` (an eighth) when not; then `ClampTextPenSize( pen, GetTextSize() )`, at most a quarter of the smaller of the width and height.
+    pub fn text_pen_nm(&self) -> Nm {
+        let width = self.text_width_nm();
+        let mut pen = self.text_thickness_nm.unwrap_or(Nm::ZERO);
+        if pen <= Nm::new(1) {
+            pen = if self.text_effects.bold { Nm::kiround(width.as_f64() / 5.0) } else { Nm::kiround(width.as_f64() / 8.0) };
+        }
+        let size = width.abs().min(self.text_size_nm.abs());
+        pen.min(Nm::kiround(size.as_f64() * 0.25))
     }
 
     /// `IsMirrored()`: the label's own mirror, else what `DRAWING_TOOL::DrawDimension` gives a new one (`SetMirrored( m_board->IsBackLayer( layer ) )`),

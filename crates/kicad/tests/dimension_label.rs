@@ -37,6 +37,12 @@ const BOARD: &str = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (gener
 		(style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0.5) (keep_text_aligned yes))
 		(gr_text "20" (at 20 34.15 0) (layer "B.SilkS") (uuid "33333333-3333-3333-3333-333333333334") (effects (font (size 1 1) (thickness 0.15))))
 	)
+	(dimension (type aligned) (layer "F.SilkS") (uuid "44444444-4444-4444-4444-444444444444")
+		(pts (xy 40 10) (xy 55 10)) (height -3)
+		(format (prefix "") (suffix "") (units 2) (units_format 0) (precision 2) (suppress_zeroes yes))
+		(style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0.5) (keep_text_aligned yes))
+		(gr_text "15" (at 47.5 5.85 0) (layer "F.SilkS") (uuid "44444444-4444-4444-4444-444444444445") (effects (font (size 1 1.6))))
+	)
 )
 "#;
 
@@ -65,6 +71,8 @@ fn expected() -> Vec<(String, Nm, Option<Nm>, DimensionTextEffects, bool)> {
             DimensionTextEffects { width_nm: Some(mm(2.0)), face: Some("DejaVu Sans".into()), bold: true, italic: true, mirrored: Some(true), h_justify: TextJustify::Left, keep_upright: false },
             true,
         ),
+        // no `(thickness ..)`: the automatic pen (`GetAutoThickness`, UI-LEFT-3 P3-11), 1.6 mm wide
+        ("F.SilkS".into(), mm(1.0), None, DimensionTextEffects { width_nm: Some(mm(1.6)), ..Default::default() }, false),
     ]
 }
 
@@ -76,6 +84,7 @@ fn a_dimension_labels_looks_are_read_kept_and_written() {
     assert!(text.contains("(effects (font (face \"DejaVu Sans\") (size 1.5 2) (thickness 0.3) bold italic) (justify left mirror))"), "{text}");
     assert!(text.contains("(effects (font (size 1 1) (thickness 0.15)) (justify right mirror))"), "{text}");
     assert!(text.contains("(layer \"B.SilkS\") (uuid") && !text.contains("(effects (font (size 1 1) (thickness 0.15)) (justify mirror))"), "B.SilkS's label stays unmirrored: {text}");
+    assert!(text.contains("(effects (font (size 1 1.6)))"), "the automatic pen is written as none (`EDA_TEXT::Format`'s `if( !GetAutoThickness() )`): {text}");
     let (again, model2, _) = import_kicad_pcb(&text).expect("re-imports");
     assert_eq!(looks(&again), expected());
     assert_eq!(export(&again, &model2), text, "a second round is the same text");
@@ -121,5 +130,18 @@ fn kicad_cli_keeps_a_dimension_labels_looks() {
     let theirs = std::fs::read_to_string(&path).unwrap();
     let (back, _, _) = import_kicad_pcb(&theirs).expect("read kicad-cli's rewrite");
     assert_eq!(looks(&back), expected(), "kicad-cli's rewrite:\n{theirs}");
+    // kicad-cli draws the automatic pen as `Dimension::text_pen_nm` says: an eighth of the 1.6 mm width, 0.2 mm (UI-LEFT-3 P3-11)
+    let pen = back.drawings.as_ref().unwrap().dimensions.iter().find(|d| d.layer == "F.SilkS").unwrap().text_pen_nm();
+    assert_eq!(pen, mm(0.2));
+    let svg_out = dir.join("silk.svg");
+    let svg = Command::new(std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).unwrap_or_else(|| "kicad-cli".into()))
+        .args(["pcb", "export", "svg", "--layers", "F.SilkS", "--mode-single", "--exclude-drawing-sheet", "-o"])
+        .arg(&svg_out)
+        .arg(&path)
+        .output()
+        .expect("kicad-cli runs");
+    assert!(svg.status.success(), "kicad-cli pcb export svg failed: {}{}", String::from_utf8_lossy(&svg.stdout), String::from_utf8_lossy(&svg.stderr));
+    let plot = std::fs::read_to_string(&svg_out).unwrap();
+    assert!(plot.contains("stroke-width:0.2000") && !plot.contains("stroke-width:0.1500"), "the label's strokes are 0.2 mm wide, not 15 % of the height:\n{plot}");
     let _ = std::fs::remove_dir_all(&dir);
 }

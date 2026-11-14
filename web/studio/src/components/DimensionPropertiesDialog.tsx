@@ -28,7 +28,7 @@ import { DIM_PRECISION_CHOICES, toCmdDimension } from "../kicad-port/dimensionCo
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { nmFrom, nmTo, type LengthUnit } from "../state/units";
 import type { ArrowDirection, CmdDimension, CmdDimensionKind, Dimension, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TextJustify } from "../api/types";
-import { boldToggled, fontPicked, labelLooksOf, thicknessTyped, withLabelLooks, type DimensionLabelLooks } from "../kicad-port/dimensionLabel";
+import { autoThicknessToggled, boldToggled, fontPicked, labelLooksOf, thicknessTyped, widthTyped, withLabelLooks, type DimensionLabelLooks } from "../kicad-port/dimensionLabel";
 import { KICAD_FONT } from "../kicad-port/textLooks";
 import { FontSelect, useFontFamilies } from "./TextLookControls";
 import { fetchDimensionPreview } from "../api/dimensionPreview";
@@ -404,14 +404,19 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
                   onChange={(f) => setLooks((l) => fontPicked(l, f === KICAD_FONT ? null : f))}
                 />
                 <span title="Text width">Width: ({unit})</span>
-                <input type="number" step="any" title="Text width" data-testid="dim-text-width" value={nmTo(looks.widthNm, unit)} onChange={(e) => setLooks((l) => ({ ...l, widthNm: Math.round(nmFrom(Number(e.target.value), unit)) }))} />
+                <input type="number" step="any" title="Text width" data-testid="dim-text-width" value={nmTo(looks.widthNm, unit)} onChange={(e) => setLooks((l) => widthTyped(l, Math.round(nmFrom(Number(e.target.value), unit))))} />
                 <span title="Text height">Height: ({unit})</span>
                 <input type="number" step="any" title="Text height" data-testid="dim-text-height" value={nmTo(looks.heightNm, unit)} onChange={(e) => setLooks((l) => ({ ...l, heightNm: Math.round(nmFrom(Number(e.target.value), unit)) }))} />
                 {/* `onFontSelected`: `m_textThickness.Show( IsStroke )` -- an outline face's weight is its own */}
                 {!looks.face && (
                   <>
                     <span title="Text thickness">Thickness: ({unit})</span>
-                    <input type="number" step="any" title="Text thickness" data-testid="dim-text-thickness" value={nmTo(looks.thicknessNm, unit)} onChange={(e) => setLooks((l) => thicknessTyped(l, Math.round(nmFrom(Number(e.target.value), unit))))} />
+                    {/* KiCad 25ec2335's `m_autoTextThickness` (a check button with the link bitmap, "Adjust the text thickness"): checked, the thickness is the
+                        automatic pen and greyed (`onAutoTextThickness`; UI-LEFT-3 P3-11) */}
+                    <span style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="number" step="any" title="Text thickness" data-testid="dim-text-thickness" disabled={looks.autoThickness} value={nmTo(looks.thicknessNm, unit)} onChange={(e) => setLooks((l) => thicknessTyped(l, Math.round(nmFrom(Number(e.target.value), unit))))} />
+                      <TextToggle label="Adjust the text thickness" glyph={LINK_GLYPH} checked={looks.autoThickness} testId="dim-auto-thickness" onChange={(on) => setLooks((l) => autoThicknessToggled(l, on))} />
+                    </span>
                   </>
                 )}
                 <span />
@@ -485,6 +490,14 @@ export function DimensionPropertiesForm({ host }: { host: DimensionHost }) {
 }
 
 /** One of the "Dimension Text" box's bitmap toggle buttons (`BITMAP_BUTTON::SetIsCheckButton` / `SetIsRadioButton`): pressed while `checked`. */
+/** KiCad's `BITMAPS::link`: two links of a chain. */
+const LINK_GLYPH = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+    <rect x="1.5" y="5.5" width="7" height="5" rx="2.5" />
+    <rect x="7.5" y="5.5" width="7" height="5" rx="2.5" />
+  </svg>
+);
+
 function TextToggle({ label, glyph, checked, onChange, testId }: { label: string; glyph: ReactNode; checked: boolean; onChange: (v: boolean) => void; testId: string }) {
   return (
     <button

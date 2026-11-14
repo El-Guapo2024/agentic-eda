@@ -328,7 +328,15 @@ test("dimensions: the kinds share the text and layer rows and each adds its own"
   assert.deepEqual(rows("dim_a")["Text Properties"], ["Font", "Auto Thickness", "Thickness", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright", "Color", "Keep Aligned with Dimension", "Orientation"]);
   // A dimension's label is its own text (UI-LEFT-2 PP11): its looks are writeable; only the automatic pen is not modelled for it.
   for (const name of ["Font", "Italic", "Bold", "Mirrored", "Width", "Height", "Horizontal Justification", "Keep Upright"]) assert.equal(rowOf(b, ["dim_a"], name)!.writable, true, name);
-  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.writable, false);
+  // UI-LEFT-3 P3-11: a label with no pen of its own has the automatic one, which the row turns off (the pen it is drawn with) and on (none of its own)
+  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.writable, true);
+  assert.equal(rowOf(b, ["dim_a"], "Auto Thickness")!.value, true);
+  assert.equal(rowOf(b, ["dim_a"], "Thickness")!.value, 125, "GetTextThicknessProperty: the automatic pen, an eighth of the width");
+  const off = edit(b, ["dim_a"], "Auto Thickness", false)[0] as Extract<Cmd, { op: "edit_dimension" }>;
+  assert.equal(off.dimension.text_thickness_nm, 125);
+  const own: BoardState = { ...b, drawings: { ...b.drawings!, dimensions: [dim({ text_thickness_nm: 180 })] } };
+  const on = edit(own, ["dim_a"], "Auto Thickness", true)[0] as Extract<Cmd, { op: "edit_dimension" }>;
+  assert.equal(on.dimension.text_thickness_nm, undefined);
 });
 
 test("a dimension's label rows set its looks in one edit_dimension each (UI-LEFT-2 PP11)", () => {

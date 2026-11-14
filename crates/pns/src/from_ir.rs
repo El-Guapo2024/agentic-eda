@@ -519,7 +519,8 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
             }
             if !g.text.is_empty() {
                 let size = (dim.text_size_nm, dim.text_size_nm);
-                let thickness = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
+                // the pen the label is drawn with (`GetEffectiveTextPenWidth`: its own or the automatic one, UI-LEFT-3 P3-11)
+                let thickness = dim.text_pen_nm();
                 let rot = (g.text_angle as f64 / 1000.0).rem_euclid(360.0);
                 let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &g.text, pos: g.text_at, size, thickness, angle_deg: rot, mirror: false, halign: 0, valign: 0 });
                 if !segs.is_empty() {
