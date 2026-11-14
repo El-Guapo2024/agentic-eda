@@ -4,6 +4,7 @@
 import type { LibraryFootprint, LibrarySymbol } from "./types";
 import { ApiError, postCmd } from "./client";
 import { withDefaults } from "../kicad-port/libraryDefaults";
+import { base64Of, imageHeader } from "../kicad-port/refImage";
 import { ensureInProject, UNKNOWN_SYMBOL } from "../kicad-port/libraryEnsure";
 
 export interface ParsedSymbols {
@@ -105,6 +106,25 @@ export async function readClipboardText(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * The bitmap on the system clipboard (`GetImageFromClipboard`: `wxDF_BITMAP`), as its bytes in base64 -- a PNG, JPEG, BMP or GIF the reference images take -- or null for none,
+ * for an image of another kind, or where the browser will not hand the clipboard over.
+ */
+export async function readClipboardImage(): Promise<string | null> {
+  try {
+    const items = (await navigator.clipboard?.read?.()) ?? [];
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith("image/"));
+      if (!type) continue;
+      const bytes = new Uint8Array(await (await item.getType(type)).arrayBuffer());
+      if (imageHeader(bytes)) return base64Of(bytes);
+    }
+  } catch {
+    /* no clipboard read: no image */
+  }
+  return null;
 }
 
 /** Put `text` on the system clipboard; `false` when the browser refuses. */

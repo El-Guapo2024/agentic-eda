@@ -37,7 +37,7 @@ import type { LibraryFootprint } from "../api/types";
 import type { LayerPreset } from "./appearance";
 import { OBJECT_IDS, OBJECT_ROWS, objectKey, objectOn, withObjectVisible, type ContrastMode, type ObjectId, type ObjectRow, type Opacity } from "./appearance";
 import { hideAllButActive, isCopper, layerIsVisible, layerStateKey, menuPreset, TECH_LAYER_NAMES, firstLayer, type LayerGroupOp, type MenuPresetKind, type PresetView } from "./layerPresets";
-import { isCopperLayerName, standardLayerName, userLayerName, userLayerNumber } from "./boardLayers";
+import { isCopperLayerName, MAX_USER_LAYERS, standardLayerName, userLayerName, userLayerNumber } from "./boardLayers";
 import { zoneLayers } from "./zoneLayers";
 
 // ------------------------------------------------------------------------------------------------------------------------------------ layers
@@ -95,6 +95,40 @@ export function fpLayerLabel(name: string, userLayerNames: Readonly<Record<strin
   if (name === "In1.Cu") return FP_INNER_LAYERS_LABEL;
   if (userLayerNames[name]) return userLayerNames[name]!;
   return isCopperLayerName(name) ? name : standardLayerName(name);
+}
+
+/** One entry of a layer choice: the layer's canonical name (what an item keeps) and the name it is shown by. */
+export interface FpLayerChoice {
+  value: string;
+  label: string;
+}
+
+/**
+ * The layers the Footprint Editor's layer choices offer, each by its name (UI-LEFT-3 F3-1): the toolbar's layer box (`PCB_LAYER_BOX_SELECTOR::Resync` with the frame's board:
+ * `GetEnabledLayers()` in `UIOrder()`, named by `getLayerName` -> `BOARD::GetLayerName`), the dialogs' (`m_LayerSelectionCtrl->SetBoardFrame( frame ); Resync()`) and the
+ * Properties pane's (`PCB_PROPERTIES_PANEL::updateLists`: `GetEnabledLayers().UIOrder()`, shown by `GetLayerName`). The enabled layers are the Appearance panel's
+ * (`updateEnabledLayers`: [`fpPanelLayers`]), so a user layer appears by the name Preferences > Footprint Editor > User Layer Names gives it (`LoadSettings`' `SetLayerName`).
+ */
+export function fpLayerChoices(fp: FpLayerSource | null | undefined, userLayerNames: Readonly<Record<string, string>> = {}, userLayerCount = FP_USER_LAYER_COUNT): FpLayerChoice[] {
+  return fpPanelLayers([...fpUsedLayers(fp), ...Object.keys(userLayerNames)], userLayerCount).map((value) => ({ value, label: fpLayerLabel(value, userLayerNames) }));
+}
+
+/** Every layer of a board in `UIOrder()` (`LSET::AllCuMask() | LSET::AllNonCuMask()`): F.Cu, In1.Cu .. In30.Cu, B.Cu, the technical layers, User.1 .. User.45. */
+export function fpAllLayers(): string[] {
+  const inner = Array.from({ length: 30 }, (_, i) => `In${i + 1}.Cu`);
+  return ["F.Cu", ...inner, "B.Cu", ...TECH_LAYER_NAMES, ...Array.from({ length: MAX_USER_LAYERS }, (_, i) => userLayerName(i + 1))];
+}
+
+/**
+ * A text dialog's layer choice when the text is on a layer the editor's board has not enabled (`DIALOG_TEXT_PROPERTIES`: `if( !m_frame->GetBoard()->IsLayerEnabled(
+ * m_item->GetLayer() ) ) m_LayerSelectionCtrl->ShowNonActivatedLayers( true )`): every layer, one not enabled shown by its standard name with " (not activated)"
+ * (`Resync`'s `layerstatus`); otherwise the enabled ones ([`fpLayerChoices`]).
+ */
+export function fpTextLayerChoices(layer: string, fp: FpLayerSource | null | undefined, userLayerNames: Readonly<Record<string, string>> = {}, userLayerCount = FP_USER_LAYER_COUNT): FpLayerChoice[] {
+  const enabled = fpLayerChoices(fp, userLayerNames, userLayerCount);
+  if (enabled.some((c) => c.value === layer)) return enabled;
+  const on = new Map(enabled.map((c) => [c.value, c.label]));
+  return fpAllLayers().map((value) => ({ value, label: on.get(value) ?? `${fpLayerLabel(value)} (not activated)` }));
 }
 
 /** `non_cu_seq`'s tooltips. */

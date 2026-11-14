@@ -90,15 +90,69 @@ fn layer_of(item: &[Sexpr]) -> String {
     sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.SilkS").to_string()
 }
 
-/// The footprints a clipboard text holds for a paste into the Footprint Editor (`CLIPBOARD_IO::Parse` in `PCB_CONTROL::Paste`, UI-LEFT-2 FF1): the one footprint of
-/// a footprint's text (`(footprint ..)` or `(module ..)`, what KiCad's Footprint Editor copies), or every `(footprint ..)` of a board's (`(kicad_pcb ..)`, what the
-/// board editor copies), each read as a library footprint is. `Ok(None)` for a text that is neither (the paste then makes a text of it).
-pub fn parse_clipboard_footprints(text: &str) -> Result<Option<Vec<ParsedFootprint>>, String> {
+/// One footprint of a clipboard text as `CLIPBOARD_IO::Parse` gives it to `PCB_CONTROL::Paste` (UI-LEFT-3 F3-10): the footprint read as a library footprint is (what
+/// a file holds in the footprint's own frame -- its graphics, text boxes, texts' and fields' places, pads' places -- stays in that frame; the angles of its pads, texts
+/// and fields, which the file writes as the board has them, and its dimensions, tables, barcodes, images and zones, which the file writes in the board's frame, stay
+/// as the file has them), with where the board had it: `at` and `angle`, the footprint's `(at x y angle)` (counter-clockwise millidegrees, as KiCad's angles are). A
+/// footprint's own clipboard (`(footprint ..)`, what the Footprint Editor copies) is at the origin, angle 0; so are a board clipboard's drawings ([`parse_footprint_clipboard`]).
+pub struct ClipboardFootprint {
+    pub parsed: ParsedFootprint,
+    pub at: Point,
+    pub angle: i64,
+}
+
+/// The board items `PCB_CONTROL::Paste` takes from a board's clipboard into the Footprint Editor beside the items of its footprints (`clipBoard->Drawings()`'s
+/// `PCB_TEXT_T`, `PCB_TEXTBOX_T`, `PCB_TABLE_T`, `PCB_SHAPE_T`, `PCB_BARCODE_T` and the five dimensions; an image, a point, a zone, a track or a via is not pasted) and
+/// its groups (`clipBoard->Groups()`), each in its footprint form (`gr_line` is a footprint's `fp_line` ..; `gr_text "x"` is `fp_text user "x"`).
+fn board_drawing_as_footprint_item(item: &[Sexpr]) -> Option<Sexpr> {
+    let tag = sexpr::tag(item)?;
+    let renamed = match tag {
+        "gr_line" => "fp_line",
+        "gr_arc" => "fp_arc",
+        "gr_circle" => "fp_circle",
+        "gr_rect" => "fp_rect",
+        "gr_poly" => "fp_poly",
+        "gr_curve" => "fp_curve",
+        "gr_text" => "fp_text",
+        "gr_text_box" | "dimension" | "table" | "barcode" | "group" => tag,
+        _ => return None,
+    };
+    let mut out: Vec<Sexpr> = vec![Sexpr::Atom(renamed.to_string())];
+    if tag == "gr_text" {
+        out.push(Sexpr::Atom("user".to_string()));
+    }
+    out.extend(item.iter().skip(1).cloned());
+    Some(Sexpr::List(out))
+}
+
+/// The footprints a clipboard text holds for a paste into the Footprint Editor, with where the board had each (`CLIPBOARD_IO::Parse` in `PCB_CONTROL::Paste`; UI-LEFT-2
+/// FF1, UI-LEFT-3 F3-10): a footprint's text (`(footprint ..)` or `(module ..)`) is its one footprint at the origin; a board's (`(kicad_pcb ..)`) is each `(footprint ..)`
+/// at its `(at x y angle)`, then -- when the board has any -- its drawings and its own groups as one footprint at the origin (`PCB_CONTROL::Paste` takes
+/// `clipBoard->Drawings()` and `clipBoard->Groups()` too; a group's member that is not pasted, a footprint, leaves it). `Ok(None)` for a text that is neither (the paste
+/// then makes a text of it).
+pub fn parse_footprint_clipboard(text: &str) -> Result<Option<Vec<ClipboardFootprint>>, String> {
     let Ok(tree) = sexpr::parse(text) else { return Ok(None) };
     let Some(root) = tree.as_list() else { return Ok(None) };
+    let at_origin = |parsed| ClipboardFootprint { parsed, at: Point::default(), angle: 0 };
     match sexpr::tag(root) {
-        Some("footprint") | Some("module") => Ok(Some(vec![parse_library_footprint(text)?])),
-        Some("kicad_pcb") => root.iter().filter_map(|n| n.as_list().filter(|l| sexpr::tag(l) == Some("footprint"))).map(|l| parse_library_footprint(&sexpr::to_text(&Sexpr::List(l.to_vec())))).collect::<Result<Vec<_>, _>>().map(Some),
+        Some("footprint") | Some("module") => Ok(Some(vec![at_origin(parse_library_footprint(text)?)])),
+        Some("kicad_pcb") => {
+            let mut out = Vec::new();
+            for l in root.iter().filter_map(|n| n.as_list().filter(|l| sexpr::tag(l) == Some("footprint"))) {
+                let parsed = parse_library_footprint(&sexpr::to_text(&Sexpr::List(l.to_vec())))?;
+                let place = sexpr::find(l, "at");
+                let n = |i| place.and_then(|a| sexpr::num(a, i)).unwrap_or(0.0);
+                out.push(ClipboardFootprint { parsed, at: Point { x: mm_to_nm(n(1)), y: mm_to_nm(n(2)) }, angle: (n(3) * 1000.0).round() as i64 });
+            }
+            let drawings: Vec<Sexpr> = root.iter().filter_map(Sexpr::as_list).filter_map(board_drawing_as_footprint_item).collect();
+            if !drawings.is_empty() {
+                let mut fp = vec![Sexpr::Atom("footprint".into()), Sexpr::Atom("clipboard".into())];
+                fp.extend(sexpr::find(root, "version").map(|v| Sexpr::List(v.to_vec())));
+                fp.extend(drawings);
+                out.push(at_origin(parse_library_footprint(&sexpr::to_text(&Sexpr::List(fp)))?));
+            }
+            Ok(Some(out))
+        }
         _ => Ok(None),
     }
 }

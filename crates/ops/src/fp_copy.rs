@@ -17,10 +17,13 @@
 //!   below it, an item's membership of a group not copied dropped: `copy->SetParentGroup( nullptr )`), every one moved so the reference point is the origin
 //!   (`copy->Move( -refPoint )`). Written by the `.kicad_mod` writer, it is the text KiCad's Footprint Editor puts on the clipboard.
 //! * [`paste`]: `PCB_CONTROL::Paste` in the footprint editor -> `pasteFootprintItemsToFootprintEditor`: from a clipboard footprint, its pads, its fields that are not
-//!   mandatory, its graphical items (shapes, texts, text boxes, dimensions, barcodes, tables, images), its zones, its points and its groups go into the footprint,
-//!   new (`placeBoardItems( .., aIsNew = true, aAnchorAtOrigin = true ..)`: `ResetUuid()`, the clipboard's origin on the cursor), moved by `at`. Nothing is pruned
-//!   (`pruneItemLayers` returns at once in the footprint editor). Differs: a user field whose name the footprint already has is not pasted (a footprint here holds one
-//!   field of a name); a clipboard of a board (`(kicad_pcb ..)`) pastes the items of its footprints, not its own drawings.
+//!   mandatory, its graphical items (shapes, texts, text boxes, dimensions, barcodes, tables, images), its zones and its groups go into the footprint, new
+//!   (`placeBoardItems( .., aIsNew = true, aAnchorAtOrigin = true ..)`: `ResetUuid()`, the clipboard's origin on the cursor), moved by `at`. Its points do not: the
+//!   function takes `Pads()`, `GetFields()`, `GraphicalItems()`, `Zones()` and `Groups()` and nothing else (KiCad 8303b2ad and 25ec2335), so a point is left on the
+//!   clipboard and leaves its group. Nothing is pruned (`pruneItemLayers` returns at once in the footprint editor). A board's clipboard (`(kicad_pcb ..)`) gives the
+//!   items of each of its footprints, turned into the editor's frame first ([`board_footprint_to_editor`]), then its own drawings and groups
+//!   (`eda_kicad::parse_footprint_clipboard`; UI-LEFT-3 F3-10). Differs: a user field whose name the footprint already has is not pasted (a footprint here holds one field of a
+//!   name).
 
 use super::fp_items::{transform_ids, FIELD_PREFIX};
 use super::pcb_transform::Xform;
@@ -226,6 +229,41 @@ pub fn clipboard_footprint(fp: &LibraryFootprint, ids: &[String], reference: Poi
     Ok(out)
 }
 
+/// `pasteFootprintItemsToFootprintEditor`'s frame for a footprint of a board's clipboard that the board had at `at`, turned `angle` (counter-clockwise millidegrees,
+/// KiCad's): what the file wrote in the board's frame or with the board's angle is put as KiCad has it once pasted (UI-LEFT-3 F3-10).
+///
+/// * a pad: `pad->SetParent( editorFootprint )` and nothing else -- it keeps its place and angle on the board (the file has its place in the footprint's frame:
+///   it is put back on the board, `at` plus the place turned by `angle`; its angle the file wrote as the board has it);
+/// * a field that is not mandatory, a text: `SetTextAngle( GetTextAngle() - aClipFootprint->GetOrientation() )` and its place in the footprint's frame
+///   (`GetFPRelativePosition`, which the file holds);
+/// * a dimension, a barcode, an image: `item->Rotate( item->GetPosition(), -orientation )` and then `SetFPRelativePosition` of its place -- the item taken whole from
+///   the board's frame into the footprint's (the file wrote it in the board's frame); a graphic, a text box and a table's cells the file already holds in the
+///   footprint's (`formatInternalUnits( .., parentFP )`, the text box's angle less the footprint's);
+/// * a zone: `zone->SetParent( editorFootprint )` -- it stays where the board had it, as the file wrote it.
+pub(crate) fn board_footprint_to_editor(clip: &mut LibraryFootprint, at: Point, angle: i64) {
+    if at == Point::default() && angle == 0 {
+        return;
+    }
+    let turn = Xform::Rotate { pivot: Point::default(), angle: -angle };
+    for p in &mut clip.pads {
+        let q = turn.point(p.at);
+        p.at = Point { x: q.x + at.x, y: q.y + at.y };
+    }
+    let back = |a: i64| (a - angle).rem_euclid(360_000);
+    for t in &mut clip.texts {
+        t.angle = back(t.angle as i64) as u32;
+    }
+    for f in &mut clip.fields {
+        if let Some(l) = f.layout.as_mut() {
+            l.angle = back(l.angle);
+        }
+    }
+    let it = &clip.items;
+    let framed: BTreeSet<String> = it.dimensions.iter().map(|x| x.id.clone()).chain(it.barcodes.iter().map(|x| x.id.clone())).chain(it.images.iter().map(|x| x.id.clone())).collect();
+    transform_ids(clip, &framed, Xform::Move { dx: -at.x, dy: -at.y });
+    transform_ids(clip, &framed, Xform::Rotate { pivot: Point::default(), angle });
+}
+
 /// `pasteFootprintItemsToFootprintEditor` + `placeBoardItems` (see the module doc): the items of the clipboard footprint `clip` into `fp`, moved by `at`, each new. The
 /// ids of what was pasted, the leaves and groups at the top (what the selection takes), in the clipboard's order.
 pub(crate) fn paste(fp: &mut LibraryFootprint, clip: &LibraryFootprint, at: Point) -> Result<Vec<String>, Vec<CheckResult>> {
@@ -235,7 +273,8 @@ pub(crate) fn paste(fp: &mut LibraryFootprint, clip: &LibraryFootprint, at: Poin
     leaves.extend(clip.texts.iter().map(|t| t.id.clone()));
     let it = &clip.items;
     leaves.extend(it.dimensions.iter().map(|x| x.id.clone()).chain(it.zones.iter().map(|x| x.id.clone())).chain(it.text_boxes.iter().map(|x| x.id.clone())));
-    leaves.extend(it.points.iter().map(|x| x.id.clone()).chain(it.images.iter().map(|x| x.id.clone())).chain(it.barcodes.iter().map(|x| x.id.clone())).chain(it.tables.iter().map(|x| x.id.clone())));
+    // (no point: `pasteFootprintItemsToFootprintEditor` never takes `aClipFootprint->Points()`)
+    leaves.extend(it.images.iter().map(|x| x.id.clone()).chain(it.barcodes.iter().map(|x| x.id.clone())).chain(it.tables.iter().map(|x| x.id.clone())));
     let mut slots: Vec<(String, Slot)> = Vec::new();
     for id in &leaves {
         if let Some(s) = copy_leaf(clip, id, fp) {

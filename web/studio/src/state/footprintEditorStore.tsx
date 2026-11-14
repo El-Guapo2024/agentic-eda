@@ -11,7 +11,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Nm } from "../api/types";
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCarry, postClearEditorHistory, postCmd, postRedo, postUndo, type CarryStep } from "../api/client";
-import { readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { readClipboardImage, readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
+import { isBoardFragment } from "../kicad-port/pcbPasteSpecial";
 import { fpClipboardKind, fpPlainTextPaste } from "../kicad-port/fpClipboard";
 import { LONG_TEXT_QUESTION } from "../kicad-port/plainTextPaste";
 import { ensureFootprintInProject } from "../api/libraryClient";
@@ -29,7 +31,7 @@ import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import type { AngleSnapMode } from "../kicad-port/pcbParityState";
 import type { FlipDirectionWire, FpItemWire } from "../api/fpItemTypes";
-import { fpAllIds, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fpUngroupCmd, type Snap } from "../kicad-port/fpItems";
+import { fpAllIds, fpCanMirror, fpGroupCmd, fpLeaves, fpMirrorCmd, fpMoveCmd, fpRotateCmd, fpUngroupCmd, type Snap } from "../kicad-port/fpItems";
 import { fpSwapCmd } from "../kicad-port/pcbSwap";
 import type { FpDimDraw, FpDimKind, FpDrawnTable } from "../kicad-port/fpDrawTools";
 import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
@@ -37,6 +39,9 @@ import type { CmdZone } from "../api/types";
 import { snapGridNm } from "../components/canvas/gridHelper";
 import { getFpDefaultTextItems, getFpGraphicsDefaults } from "./fpPrefs";
 import { isFactoryNewFootprint, newFootprintTexts } from "../kicad-port/fpFieldDefaults";
+import { inEnteredGroup } from "../kicad-port/groupEdit";
+import { fpCopyOrigin } from "../components/footprint/footprintSnap";
+import type { FpCornerEdit } from "../kicad-port/fpPointEdit";
 
 export type FpToolId =
   | "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate"
@@ -541,6 +546,22 @@ export interface FootprintEditorApi {
    * paste and the drop one undo step (Escape leaves nothing).
    */
   pasteItems: () => Promise<void>;
+  /**
+   * A corner operation of the point editor on the graphic `id` (`PCB_POINT_EDITOR::addCorner`, `removeCorner`, `chamferCorner`, `movePoint`; UI-LEFT-3 F3-2), one undo
+   * step: its new shape (`set_graphic`, its looks kept), the graphic removed, or split in two -- the copy made with its looks (`graphicItem->Duplicate()`: `fp_item
+   * duplicate`) and both halves set, in one carry.
+   */
+  cornerEdit: (id: string, edit: FpCornerEdit) => Promise<boolean>;
+  /** A point edit of the zone `id` (a dragged or typed point, Create / Remove / Chamfer Corner; UI-LEFT-3 F3-2): the zone set (`fp_item set`), or removed (null). One undo step. */
+  zoneEdit: (id: string, zone: CmdZone | null) => Promise<boolean>;
+  /** This session's last Copy (what Paste falls back to where the browser will not hand the system clipboard over), or null. */
+  sessionClipboard: () => string | null;
+  /**
+   * Mirror while the selection moves (`EDIT_TOOL::Mirror` with `m_dragging`, UI-LEFT-3 F3-4): the moving items mirrored about the point held (the move's reference point,
+   * `moveOriginNm` before the offset), in the move's own step -- the carry the server holds open is begun (a drag) or added to (Duplicate's or Paste's carry), and
+   * the drop commits it, Escape reverts it.
+   */
+  mirrorMoving: (direction: FlipDirectionWire) => Promise<void>;
   /** Escape while the Move tool carries what Duplicate, Paste or Import Graphics made: `commit.Revert()` -- the held step is cancelled, or the step undone. */
   cancelPickUp: () => Promise<void>;
   /**
@@ -667,7 +688,11 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
   const pendingRef = useRef(false);
   const runCmd = useCallback(
     async (cmd: Cmd, carry?: CarryStep) => {
-      const reply = await postCmd(cmd, false, carry); // strict has no meaning here -- footprint-library edits never touch board placement/routing gates
+      // With a group of the footprint entered, what the command adds joins it (`BOARD_COMMIT::Push`: `enteredGroup->AddItem( boardItem )`, `Cmd::InGroup`;
+      // UI-LEFT-3 F3-3): a drawn shape, a text, a pad, a pasted or duplicated item.
+      const st = stateRef.current;
+      const sent = inEnteredGroup(cmd, st.enteredGroupId, st.footprint?.items?.groups);
+      const reply = await postCmd(sent, false, carry); // strict has no meaning here -- footprint-library edits never touch board placement/routing gates
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       await refresh();
       return reply.ok;
@@ -811,10 +836,12 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       const ids = [...st.selection];
       if (!name || ids.length === 0) return false;
-      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: here the cursor on the grid (while the editor snaps to it)
+      // `refPoint = grid.BestDragOrigin( GetCursorPosition(), items )`: the anchor of the copied items nearest the cursor on the grid (while the editor snaps to it), else
+      // that point -- the canvas' grid helper (components/footprint/footprintSnap.ts `fpCopyOrigin`, UI-LEFT-3 F3-10)
       const c = st.cursorNm ?? { x: 0, y: 0 };
       const g = snapGridNm(st.gridNm) || 1;
-      const reference = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
+      const [rx, ry] = fpCopyOrigin([Math.round(c.x / g) * g, Math.round(c.y / g) * g], ids);
+      const reference = { x: rx, y: ry };
       const r = await fetch("/api/footprint/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ footprint: name, ids, reference }) });
       const reply = (await r.json()) as { text?: string; error?: string };
       if (!reply.text) {
@@ -837,15 +864,26 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const name = st.name;
       if (!fp || !name) return;
       const system = await readClipboardText();
-      const text = system != null && system !== "" ? system : clipboardRef.current;
-      if (!text) return;
+      // this session's Copy only where the browser will not read the clipboard (null); a clipboard that holds no text (a bitmap only) is read as such
+      const text = system ?? clipboardRef.current;
       const c = st.cursorNm ?? { x: 0, y: 0 };
       const g = snapGridNm(st.gridNm) || 1;
       const at = { x: Math.round(c.x / g) * g, y: Math.round(c.y / g) * g };
-      // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; any other text as a text item on the active layer ("If it wasn't content, then paste as a text object")
+      const kicad = !!text && fpClipboardKind(text) === "kicad";
+      // `hasTableCells`: with table cells selected and a table on a board's clipboard, its cells go into them ("Paste Cells", `pasteCellsIntoSelection`; UI-LEFT-3 F3-10)
+      if (kicad && isBoardFragment(text!) && clipboardHasTable(text!, 1) && hasTableCells(st.selection, fp.display?.tables ?? [])) {
+        await runCmd({ op: "fp_item", verb: "paste_cells", footprint: name, ids: [...st.selection], text: text! });
+        return;
+      }
+      // KiCad's text (`CLIPBOARD_IO::Parse`) goes in as items; else a bitmap on the clipboard as a reference image (`GetImageFromClipboard`, a `PCB_REFERENCE_IMAGE`
+      // at the origin on F.Cu, which the paste puts on the cursor; UI-LEFT-3 F3-10); else the text as a text item on the active layer ("If it wasn't content, then
+      // paste as a text object")
       let cmd: Cmd;
-      if (fpClipboardKind(text) === "kicad") cmd = { op: "fp_item", verb: "paste", footprint: name, text, at };
+      const image = kicad ? null : await readClipboardImage();
+      if (kicad) cmd = { op: "fp_item", verb: "paste", footprint: name, text: text!, at };
+      else if (image) cmd = { op: "fp_item", verb: "add", footprint: name, item: { image: { layer: "F.Cu", at, data: image } } };
       else {
+        if (!text) return;
         const plain = fpPlainTextPaste(text, at, st.activeLayer || "F.SilkS");
         if (!plain || (plain.longText && !window.confirm(LONG_TEXT_QUESTION))) return;
         cmd = { op: "add_footprint_text", footprint: name, text: plain.text };
@@ -868,7 +906,58 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
       pendingRef.current = true;
     },
+    sessionClipboard: () => clipboardRef.current,
+    zoneEdit: async (id, zone) => {
+      const name = stateRef.current.name;
+      if (!name) return false;
+      if (zone) return runCmd({ op: "fp_item", verb: "set", footprint: name, id, item: { zone } });
+      dispatch({ type: "CLEAR_SELECTION" });
+      return runCmd({ op: "fp_item", verb: "delete", footprint: name, ids: [id] });
+    },
+    cornerEdit: async (id, edit) => {
+      const st = stateRef.current;
+      const name = st.name;
+      if (!name || !st.footprint) return false;
+      if (edit.kind === "set") return runCmd({ op: "fp_item", verb: "set_graphic", footprint: name, id, shape: edit.shape });
+      if (edit.kind === "remove") {
+        // `m_toolMgr->RunAction( ACTIONS::selectionClear ); commit.Remove( item )`
+        dispatch({ type: "CLEAR_SELECTION" });
+        return runCmd({ op: "fp_item", verb: "delete", footprint: name, ids: [id] });
+      }
+      // "Split Segment" / "Split Arc": `Duplicate( true, &commit )` of the graphic (its looks, its group), then the graphic ends at the point and the copy starts there
+      const before = new Set((st.footprint.graphics ?? []).map((g) => g.id));
+      if (!(await runCmd({ op: "fp_item", verb: "duplicate", footprint: name, ids: [id] }, "begin"))) return false;
+      const after = await fetchFootprint(name).catch(() => null);
+      const copy = after?.graphics.find((g) => g.id && !before.has(g.id))?.id;
+      if (!copy) {
+        await postCarry("cancel");
+        await refresh();
+        return false;
+      }
+      return runCmd({ op: "batch", cmds: [{ op: "fp_item", verb: "set_graphic", footprint: name, id, shape: edit.first }, { op: "fp_item", verb: "set_graphic", footprint: name, id: copy, shape: { ...edit.second, id: copy } }] }, "commit");
+    },
+    mirrorMoving: async (direction) => {
+      const st = stateRef.current;
+      const fp = st.footprint;
+      const name = st.name;
+      const pivot = st.moveOriginNm;
+      const refs = st.movePreview?.refs ?? [...st.selection];
+      if (!fp || !name || !pivot || refs.length === 0 || !fpCanMirror(fp, refs)) return;
+      const step: CarryStep = carryRef.current ? "hold" : "begin";
+      carryRef.current = true;
+      const ok = await runCmd({ op: "fp_item", verb: "mirror", footprint: name, ids: refs, pivot: { x: pivot.x, y: pivot.y }, direction }, step);
+      if (!ok && step === "begin") carryRef.current = false;
+    },
     cancelPickUp: async () => {
+      // a drag's Mirror began a carry (no pick-up pending): Escape reverts it with the move (`commit.Revert()`)
+      if (!pendingRef.current && carryRef.current) {
+        carryRef.current = false;
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        const reply = await postCarry("cancel");
+        if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
+        await refresh();
+        return;
+      }
       if (!pendingRef.current) return;
       pendingRef.current = false;
       dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });

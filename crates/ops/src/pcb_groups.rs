@@ -151,6 +151,10 @@ impl Board<'_> {
         if cmd.domain() == super::Domain::Schematic {
             return self.sch_in_group(group, cmd);
         }
+        // a Footprint Editor command joins the group of the footprint it edits (`fp_items.rs`, UI-LEFT-3 F3-3)
+        if cmd.domain() == super::Domain::FootprintEditor {
+            return self.fp_in_group(group, cmd);
+        }
         let before = universe(&self.design);
         self.apply(cmd)?;
         self.join_group(group, &before);

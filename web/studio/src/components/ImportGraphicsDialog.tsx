@@ -13,7 +13,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { useFpApi, useFpState } from "../state/footprintEditorStore";
 import { fetchFootprint } from "../api/client";
-import { FP_EDITOR_LAYERS } from "../kicad-port/fpDrawDefaults";
+import { fpLayerChoices } from "../kicad-port/fpAppearance";
 import { fetchLibrarySymbol } from "../api/client";
 import { closeImportGraphics, openImportGraphics, useImportGraphicsDialog, type PickedFile } from "../state/importDialogs";
 import { DialogShell } from "./pcbDialogKit";
@@ -77,7 +77,10 @@ function PcbImportGraphics({ file, editor }: { file: PickedFile | null; editor: 
       .catch((e) => request.current === mine && setInfo({ ok: false, message: e instanceof Error ? e.message : String(e) }));
   }, [file, format, isDxf, values.dxfUnits, scale]);
 
-  const layers = inFootprint ? [...FP_EDITOR_LAYERS] : importLayers(state.board?.layers ?? ["F.Cu", "B.Cu"]);
+  // in the Footprint Editor the editor board's enabled layers, a user layer by its User Layer Names name (`PCB_LAYER_BOX_SELECTOR` with the frame's board, UI-LEFT-3 F3-1)
+  const fpLayers = inFootprint ? fpLayerChoices(null, state.prefs.fpUserLayerNames, state.prefs.fpUserLayerCount) : null;
+  const layers = fpLayers ? fpLayers.map((l) => l.value) : importLayers(state.board?.layers ?? ["F.Cu", "B.Cu"]);
+  const layerLabel = (l: string) => fpLayers?.find((c) => c.value === l)?.label ?? l;
   const polygonOutline = !inFootprint && !!state.board && !state.board.outline_is_shapes;
   const onEdge = values.setLayer && values.layer === "Edge.Cuts";
 
@@ -265,7 +268,7 @@ function PcbImportGraphics({ file, editor }: { file: PickedFile | null; editor: 
           <select aria-label="Layer" disabled={!values.setLayer} value={values.layer} onChange={(e) => set({ layer: e.target.value })}>
             {layers.map((l) => (
               <option key={l} value={l}>
-                {l}
+                {layerLabel(l)}
               </option>
             ))}
           </select>

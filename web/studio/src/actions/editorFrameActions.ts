@@ -33,6 +33,14 @@ import { ARC_EDIT_MODE_LABEL, incrementArcEditMode, type ArcEditMode } from "../
 import { fpArcEditMode, fpArcEditModeIndex } from "../kicad-port/fpPointEdit";
 import { setSymArcEditMode } from "../kicad-port/symPointEdit";
 import { snapGridNm } from "../components/canvas/gridHelper";
+import { createElement } from "react";
+import { readClipboardText } from "../api/libraryClient";
+import { clearNetsOffered, pasteSource } from "../kicad-port/pcbPasteSpecial";
+import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
+import { PcbPasteSpecialDialog } from "../components/PcbPasteSpecialDialog";
+import { openSweepDialog } from "./pcbSweepDialogs";
+import { fpSelectionAsText } from "../kicad-port/fpClipboard";
+import { FP_POINT_OP_ACTION, runFpPointOp } from "./fpPointEditActions";
 
 export interface EditorFrameContext {
   tab: string;
@@ -147,6 +155,9 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // (`FilterCollectorForLockedItems` acts in the board editor only, `IsType( FRAME_PCB_EDITOR )`).
     const mirror = (direction: "left_right" | "top_bottom") => () => {
       const st = ctx.fpApi.getState();
+      // While the selection is being moved (a drag, or what Duplicate / Paste carries): `EDIT_TOOL::Mirror` with `m_dragging` mirrors it about the point held
+      // (`updateModificationPoint` keeps the move's reference point), in the move's commit -- the drop is one undo step with it, Escape reverts it (UI-LEFT-3 F3-4).
+      if (st.movePreview || st.duplicatePending) return void ctx.fpApi.mirrorMoving(direction);
       if (st.selection.size > 0) return void ctx.fpApi.mirrorSelection(direction, gridSnap);
       const id = hoverItem();
       if (!id || !st.name || !st.footprint) return;
@@ -165,12 +176,42 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Escape while the Move tool carries what Duplicate or Paste made: `commit.Revert()` (once, whether the canvas or the window saw the key)
     const boardCancel = m.get("common.Interactive.cancel");
     m.set("common.Interactive.cancel", () => {
-      if (ctx.fpApi.getState().duplicatePending) void ctx.fpApi.cancelPickUp();
+      // (`cancelPickUp` also reverts what a drag's Mirror did: the drag's commit, UI-LEFT-3 F3-4)
+      void ctx.fpApi.cancelPickUp();
       boardCancel?.();
     });
     m.set("common.Interactive.copy", () => fpIdle() && void ctx.fpApi.copySelection(false));
     m.set("common.Interactive.cut", () => fpIdle() && void ctx.fpApi.copySelection(true));
     m.set("common.Interactive.paste", () => fpIdle() && void ctx.fpApi.pasteItems());
+    // Paste Special (Ctrl+Shift+V; `FOOTPRINT_EDIT_FRAME::setupUIConditions`: `Idle && NoActiveTool`, not in the context menu -- `EDIT_TOOL::Init`'s `!inFootprintEditor`):
+    // `PCB_CONTROL::Paste` from `ACTIONS::pasteSpecial` -- KiCad's clipboard text asks DIALOG_PASTE_SPECIAL first (the "Clear net assignments" box for a board's only:
+    // `HideClearNets`), Cancel pastes nothing; OK pastes as Paste does, since in the Footprint Editor the choices change nothing (the reference designators are the
+    // board editor's, `aReannotateDuplicates && m_isBoardEditor`; the nets are cleared anyway, `isFootprintEditor || clear_nets`). Any other text is pasted as a text at once
+    // (the dialog comes after the parse). UI-LEFT-3 F3-10.
+    m.set("common.Interactive.pasteSpecial", () => {
+      if (!fpIdle()) return;
+      void (async () => {
+        const source = pasteSource(await readClipboardText(), ctx.fpApi.sessionClipboard());
+        // nothing of KiCad's on the clipboard: a bitmap or a text is pasted at once (the dialog comes after `CLIPBOARD_IO::Parse`)
+        if (!source || source.kind === "text") return void ctx.fpApi.pasteItems();
+        // table cells selected and a table on a board's clipboard: "Paste Cells" before any dialog (`hasTableCells`)
+        const st = ctx.fpApi.getState();
+        if (source.kind === "board" && clipboardHasTable(source.text, 1) && hasTableCells(st.selection, st.footprint?.display?.tables ?? [])) return void ctx.fpApi.pasteItems();
+        openSweepDialog({ kind: "element", element: createElement(PcbPasteSpecialDialog, { showClearNets: clearNetsOffered(source), onOk: () => void ctx.fpApi.pasteItems() }) });
+      })();
+    });
+    // Copy as Text (Ctrl+Shift+C, `EDIT_TOOL::copyToClipboardAsText`; in the context menu by `canCopyAsText`): the selection's texts, fields, text boxes, dimensions and
+    // tables as their text, a newline between them (kicad-port/fpClipboard.ts `fpSelectionAsText`); with nothing selected the item under the cursor (`RequestSelection`,
+    // a hover selection, cleared after). UI-LEFT-3 F3-10.
+    m.set("common.Interactive.copyAsText", () => {
+      const st = ctx.fpApi.getState();
+      if (!st.footprint) return;
+      const hover = st.selection.size === 0 ? hoverItem() : null;
+      const ids = hover ? [hover] : [...st.selection];
+      const text = fpSelectionAsText(st.footprint, ids);
+      if (text === "") return;
+      navigator.clipboard.writeText(text).catch(() => toast("Could not write to the clipboard."));
+    });
     // `PCB_POINT_EDITOR::changeArcEditMode` in the Footprint Editor: Ctrl+Space (`cycleArcEditMode`) and the three `pointEditorArcKeep*` actions set
     // `FOOTPRINT_EDITOR_SETTINGS::m_ArcEditMode` (`frame()->GetFootprintEditorSettings()`), the mode its point editor drags an arc in and Preferences > Footprint Editor >
     // Editing Options shows (kicad-port/fpPointEdit.ts; UI-LEFT-2 FF7)
@@ -183,6 +224,14 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     m.set("pcbnew.PointEditor.arcKeepCenter", fpArcMode("keep_center_adjust_angle_radius"));
     m.set("pcbnew.PointEditor.arcKeepEndpoint", fpArcMode("keep_endpoints_or_start_direction"));
     m.set("pcbnew.PointEditor.arcKeepRadius", fpArcMode("keep_center_ends_adjust_angle"));
+    // The point editor's corner operations on the one selected graphic (`PCB_POINT_EDITOR::addCorner` -- Insert --, `removeCorner`, `chamferCorner`, `movePoint`;
+    // UI-LEFT-3 F3-2): with the cursor where it is (the context menu hands in where it was opened, components/footprint/FootprintCanvas.tsx).
+    for (const op of ["addCorner", "removeCorner", "chamferCorner", "moveCorner", "moveMidpoint"] as const) {
+      m.set(FP_POINT_OP_ACTION[op], () => {
+        const c = ctx.fpApi.getState().cursorNm;
+        if (c) runFpPointOp(ctx.fpApi, op, [c.x, c.y], ctx.prefs?.fpArcEditMode ?? 0);
+      });
+    }
     // Group / Ungroup (Ctrl+G / Ctrl+Shift+G, `PCB_GROUP_TOOL::Group` in the footprint editor, `GROUP_TOOL::Ungroup`).
     m.set("common.Interactive.group", () => void ctx.fpApi.groupSelection());
     m.set("common.Interactive.ungroup", () => void ctx.fpApi.ungroupSelection());

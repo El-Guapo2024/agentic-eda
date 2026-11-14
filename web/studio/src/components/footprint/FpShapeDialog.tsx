@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import type { CmdShape } from "../../api/types";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
-import { FP_EDITOR_LAYERS } from "../../kicad-port/fpDrawDefaults";
+import { useFpLayerChoices } from "./useFpLayerChoices";
 import { canFill, fillWidthError } from "../../kicad-port/shapeFill";
 import { FILL_CHOICES, LINE_STYLE_CHOICES, fillChoiceOf, fillOfChoice, shapeLookOf } from "../../kicad-port/fpKeep";
 
@@ -87,6 +87,8 @@ export function FpShapeDialog() {
   // "Line style:" (`m_lineStyleCombo`, UI-LEFT F5): kept by the graphic's id
   const [lineStyle, setLineStyle] = useState("solid");
   const [layer, setLayer] = useState("F.SilkS");
+  // the editor board's enabled layers by their names (`SetNotAllowedLayerSet( AllLayersMask() & ~GetEnabledLayers() )`, `SetBoardFrame`; UI-LEFT-3 F3-1)
+  const layerChoices = useFpLayerChoices();
   const [errors, setErrors] = useState<string[]>([]);
 
   useEffect(() => {
@@ -178,9 +180,9 @@ export function FpShapeDialog() {
             )}
             <span>Layer:</span>
             <select value={layer} data-testid="fp-shape-layer" onChange={(e) => setLayer(e.target.value)}>
-              {(FP_EDITOR_LAYERS.includes(layer) ? FP_EDITOR_LAYERS : [layer, ...FP_EDITOR_LAYERS]).map((l) => (
-                <option key={l} value={l}>
-                  {l}
+              {(layerChoices.some((l) => l.value === layer) ? layerChoices : [{ value: layer, label: layer }, ...layerChoices]).map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
                 </option>
               ))}
             </select>

@@ -191,3 +191,114 @@ fn slow_kicad_cli_reads_the_clipboard_footprint_our_copy_writes() {
     assert!(back.graphics.iter().any(|g| matches!(g, Shape::Segment { start, end, .. } if *start == p(Nm::ZERO, Nm::ZERO) && *end == p(mm(6.0), Nm::ZERO))), "{:?}", back.graphics);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A board's clipboard (what the board editor copies) pasted into the Footprint Editor (UI-LEFT-3 F3-10, `PCB_CONTROL::Paste` -> `pasteFootprintItemsToFootprintEditor`):
+/// the items of a footprint the board had at (10, 5) turned 90 degrees come in KiCad's frame -- a pad where the board had it, at its board angle (`SetParent` only); a
+/// text turned back by the footprint's angle in the footprint's frame; a dimension taken whole from the board's frame into the footprint's -- and the board's own
+/// drawings (a line, a text) and its group of them come too; the footprint, a member of that group, leaves it; a point of the footprint is not pasted.
+#[test]
+fn a_boards_clipboard_pastes_its_footprints_in_the_editors_frame_and_its_own_drawings() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    let before = fp(&b).clone();
+    let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+	(footprint "R" (layer "F.Cu") (uuid "f0000000-0000-4000-8000-000000000001") (at 10 5 90)
+		(fp_line (start -1 0) (end 1 0) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "f0000000-0000-4000-8000-000000000002"))
+		(fp_text user "Q" (at 0 -2 90) (layer "F.Fab") (uuid "f0000000-0000-4000-8000-000000000003") (effects (font (size 1 1) (thickness 0.15))))
+		(dimension (type aligned) (layer "F.Fab") (uuid "f0000000-0000-4000-8000-000000000004") (pts (xy 10 5) (xy 12 5)) (height 1)
+			(gr_text "2" (at 11 4 0) (layer "F.Fab") (uuid "f0000000-0000-4000-8000-000000000005") (effects (font (size 1 1) (thickness 0.15))))
+			(format (units 3) (units_format 1) (precision 4)) (style (thickness 0.1) (arrow_length 1.27) (text_position_mode 0) (extension_height 0.58642) (extension_offset 0.5) keep_text_aligned))
+		(point (at 10 5) (size 1) (layer "F.Fab") (uuid "f0000000-0000-4000-8000-000000000006"))
+		(pad "1" smd rect (at 1 0 90) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "f0000000-0000-4000-8000-000000000007"))
+	)
+	(gr_line (start 20 20) (end 25 20) (stroke (width 0.2) (type dash)) (layer "Dwgs.User") (uuid "f0000000-0000-4000-8000-000000000010"))
+	(gr_text "BOARD" (at 20 22 0) (layer "Dwgs.User") (uuid "f0000000-0000-4000-8000-000000000011") (effects (font (size 1 1) (thickness 0.15))))
+	(segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net 0) (uuid "f0000000-0000-4000-8000-000000000012"))
+	(group "" (uuid "f0000000-0000-4000-8000-000000000020") (members "f0000000-0000-4000-8000-000000000010" "f0000000-0000-4000-8000-000000000011" "f0000000-0000-4000-8000-000000000001"))
+)"#;
+    b.apply(&Cmd::FpItem(FpItemCmd::Paste { footprint: NAME.into(), text: board.into(), at: p(Nm::ZERO, Nm::ZERO) })).unwrap();
+    let f = fp(&b);
+    // the pad: `pad->SetParent( editorFootprint )` -- where the board had it, (10, 5) + (1, 0) turned 90 degrees counter-clockwise, at its board angle
+    let pad = f.pads.iter().find(|p| p.number == "1").expect("the pad");
+    assert_eq!(pad.at, p(mm(10.0), mm(4.0)));
+    // the graphic: in the footprint's frame, as the file holds it
+    assert!(f.graphics.iter().any(|g| matches!(g, Shape::Segment { start, end, .. } if *start == p(mm(-1.0), Nm::ZERO) && *end == p(mm(1.0), Nm::ZERO))));
+    // the text: its angle less the footprint's (`SetTextAngle( GetTextAngle() - aClipFootprint->GetOrientation() )`)
+    let q = f.texts.iter().find(|t| t.content == "Q").expect("the footprint's text");
+    assert_eq!((q.at, q.angle), (p(Nm::ZERO, mm(-2.0)), 0));
+    // the dimension: from the board's frame into the footprint's -- (10, 5)-(12, 5) less the footprint's place, turned back 90 degrees
+    let dim = f.items.dimensions.iter().find(|d| !before.items.dimensions.iter().any(|o| o.id == d.id)).expect("the dimension");
+    assert_eq!((dim.start, dim.end), (p(Nm::ZERO, Nm::ZERO), p(Nm::ZERO, mm(2.0))));
+    // no point (`Points()` is not taken)
+    assert_eq!(f.items.points.len(), before.items.points.len());
+    // the board's own drawings, where the board had them, with their looks; not its track
+    let line = f.graphics.iter().find(|g| matches!(g, Shape::Segment { start, .. } if *start == p(mm(20.0), mm(20.0)))).expect("the board's line");
+    assert_eq!(f.kicad.stroke_types.get(line.id()).map(String::as_str), Some("dash"));
+    let text = f.texts.iter().find(|t| t.content == "BOARD").expect("the board's text");
+    // and its group of them, the footprint (not pasted) gone from it
+    let g = f.items.groups.iter().find(|g| g.member_ids.contains(&line.id().to_string())).expect("the board's group");
+    assert_eq!(g.member_ids.len(), 2);
+    assert!(g.member_ids.contains(&text.id));
+}
+
+/// UI-LEFT-3 F3-3: with a group of the footprint entered, what a command adds joins it (`BOARD_COMMIT::Push`'s `enteredGroup->AddItem( boardItem )`): a drawn line, a
+/// pasted group as itself; a point does not (it is not groupable), nor an item a command left in a group of its own.
+#[test]
+fn what_is_added_while_a_footprint_group_is_entered_joins_that_group() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    let group = fp(&b).items.groups[0].id.clone();
+    let in_group = |cmd: Cmd| Cmd::InGroup { group: group.clone(), cmd: Box::new(cmd) };
+    let line = Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: p(mm(7.0), Nm::ZERO), end: p(mm(9.0), Nm::ZERO) };
+    let wrapped = in_group(Cmd::AddFootprintGraphic { footprint: NAME.into(), shape: line });
+    assert_eq!(wrapped.domain(), Domain::FootprintEditor, "the footprint editor's undo history keeps it");
+    b.apply(&wrapped).unwrap();
+    let f = fp(&b);
+    let added = f.graphics.iter().find(|g| matches!(g, Shape::Segment { start, .. } if *start == p(mm(7.0), Nm::ZERO))).unwrap().id().to_string();
+    let members = |b: &Board<'_>| fp(b).items.groups.iter().find(|g| g.id == group).unwrap().member_ids.clone();
+    assert!(members(&b).contains(&added), "the drawn line joined the entered group");
+    // a point is not groupable
+    b.apply(&in_group(Cmd::FpItem(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Point(eda_model::pcb_items::PcbPoint::new("F.Fab", p(mm(3.0), mm(3.0)))) }))).unwrap();
+    let point = fp(&b).items.points[0].id.clone();
+    assert!(!members(&b).contains(&point));
+    // a pasted group joins as itself, its members staying in it
+    let clip = clipboard_footprint(fp(&b), &[group.clone()], p(Nm::ZERO, Nm::ZERO), "00000000-0000-4000-8000-000000000002").unwrap();
+    let groups_before: Vec<String> = fp(&b).items.groups.iter().map(|g| g.id.clone()).collect();
+    b.apply(&in_group(Cmd::FpItem(FpItemCmd::Paste { footprint: NAME.into(), text: eda_kicad::export_kicad_mod(&clip), at: p(mm(1.0), Nm::ZERO) }))).unwrap();
+    let pasted = fp(&b).items.groups.iter().find(|g| !groups_before.contains(&g.id)).expect("the pasted group").clone();
+    assert!(members(&b).contains(&pasted.id), "the pasted group is a member of the entered one");
+    assert_eq!(pasted.member_ids.len(), 3, "its line, its text and the line drawn into it stay in it");
+    assert!(!members(&b).iter().any(|m| pasted.member_ids.contains(m)));
+    // with no group of that id the command is applied all the same
+    let other = Cmd::InGroup { group: "nothing".into(), cmd: Box::new(Cmd::AddFootprintGraphic { footprint: NAME.into(), shape: Shape::Circle { id: String::new(), layer: "F.Fab".into(), stroke_width: mm(0.1), filled: false, center: p(mm(20.0), Nm::ZERO), end: p(mm(21.0), Nm::ZERO) } }) };
+    b.apply(&other).unwrap();
+    assert!(fp(&b).graphics.iter().any(|g| matches!(g, Shape::Circle { center, .. } if *center == p(mm(20.0), Nm::ZERO))));
+}
+
+/// UI-LEFT-3 F3-10: with cells of a footprint table selected, a board's clipboard holding a table pastes into them (`PCB_CONTROL::Paste`'s `hasTableCells` branch,
+/// `pasteCellsIntoSelection`), and a selection KiCad refuses is refused with its words.
+#[test]
+fn a_boards_table_pastes_into_the_selected_cells_of_a_footprint_table() {
+    use super::table_clipboard_tests::{add_pcb, pcb_table};
+    use eda_model::table::cell_item_id;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = with_footprint(&m);
+    let mut source = pcb_table(1, 2, "F.SilkS");
+    for c in source.cells.iter_mut() {
+        c.text = format!("new {}", c.text);
+    }
+    let src = add_pcb(&mut b, source);
+    let text = eda_kicad::export_pcb_clipboard(b.design(), &m, &[src], p(Nm::ZERO, Nm::ZERO)).unwrap();
+    b.apply(&Cmd::FpItem(FpItemCmd::Add { footprint: NAME.into(), item: FpItem::Table(pcb_table(2, 2, "F.Fab")) })).unwrap();
+    let target = fp(&b).items.tables[0].id.clone();
+    let paste = |ids: Vec<String>| Cmd::FpItem(FpItemCmd::PasteCells { footprint: NAME.into(), ids, text: text.clone() });
+    b.apply(&paste(vec![cell_item_id(&target, 1, 0)])).unwrap();
+    let t = fp(&b).items.tables[0].clone();
+    assert_eq!(t.texts(), vec![vec!["r0c0", "r0c1"], vec!["new r0c0", "new r0c1"]]);
+    let e = b.apply(&paste(vec![cell_item_id(&target, 0, 0), cell_item_id(&target, 1, 1)])).unwrap_err();
+    assert_eq!(e[0].hint.clone().unwrap_or_default(), "Selected cells must form a contiguous block");
+    // a footprint's clipboard is no board: no table is looked for in it
+    let fp_clip = eda_kicad::export_kicad_mod(&clipboard_footprint(fp(&b), &[target.clone()], p(Nm::ZERO, Nm::ZERO), "00000000-0000-4000-8000-000000000003").unwrap());
+    let e = b.apply(&Cmd::FpItem(FpItemCmd::PasteCells { footprint: NAME.into(), ids: vec![cell_item_id(&target, 0, 0)], text: fp_clip })).unwrap_err();
+    assert_eq!(e[0].check, "ops_no_clipboard_table");
+}
