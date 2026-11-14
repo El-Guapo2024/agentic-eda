@@ -48,7 +48,10 @@ impl Board<'_> {
         };
         self.require_placed(&reference)?;
         let part = self.model.part(&reference).ok_or_else(|| fail("ops_unknown_part", &reference, "no part with this reference exists in the model"))?;
-        let before = self.unedited_footprint(part).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
+        // (the pads as the board has them, those taken off left out: `pads_footprint`; the copy is made of the whole footprint, so the removals' places stay true)
+        let base = self.unedited_footprint(part).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
+        let before = self.pads_footprint(part).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
+        let removed = self.design.footprint_edit(&reference).map(|e| e.removed_pads.clone()).unwrap_or_default();
         let Some(index) = eda_model::fp_edit::pad_index(&before, &old, nth) else {
             return Err(fail("ops_unknown_pad", id, format!("{reference} has no pad {old}")));
         };
@@ -87,8 +90,8 @@ impl Board<'_> {
         let split = kept_nets.as_ref().is_some_and(|k| k.iter().any(|(_, n)| *n != k[0].1));
 
         // The footprint's own copy, the pad renamed.
-        let mut fp = before.clone();
-        fp.pads[index].number = number.to_string();
+        let mut fp = base.clone();
+        fp.pads[eda_model::fp_edit::base_pad_index(&removed, index)].number = number.to_string();
         self.drawings_mut().set_footprint_assignment(FootprintAssignment { reference: reference.clone(), footprint: name, definition: Some(fp) });
 
         // The pad edits, each to the pad it was for.

@@ -367,14 +367,11 @@ impl Board<'_> {
 
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
-        // `PAD::Flip` takes a pad to the other side of the board, its footprint staying: the studio holds a pad on its footprint's side, so a pad is
-        // turned over with its footprint only (the studio's Flip promotes a selected pad to its footprint whatever "Allow free pads" says)
-        if x.is_flip() {
-            if let Some(pad) = targets.pads.first() {
-                return Err(vec![CheckResult::fail("ops_bad_transform", pad.as_str(), "a pad is turned over with its footprint")]);
-            }
+        // `PAD::Flip` of a free pad ("Allow free pads" keeps a selected pad as itself): the pad alone to the other side of the board (crate::free_pads)
+        match x {
+            Xform::Flip { pivot, dir } => self.flip_pads(&targets.pads, pivot, dir)?,
+            _ => self.transform_pads(&targets.pads, x, false)?,
         }
-        self.transform_pads(&targets.pads, x, false)?;
         let copper = self.model.board.layers.len();
         let outer = (self.model.board.layers.first().cloned(), self.model.board.layers.last().cloned());
 
@@ -534,7 +531,7 @@ impl Board<'_> {
     pub(crate) fn pad_of(&self, id: &str) -> Option<(String, String, u32, eda_model::Pad)> {
         let (reference, number, nth) = eda_model::fp_edit::parse_pad_id(id)?;
         self.pose_of(&reference)?;
-        let lib = self.unedited_footprint(self.model.part(&reference)?)?;
+        let lib = self.pads_footprint(self.model.part(&reference)?)?;
         let edits = self.design.footprint_edit(&reference).map(|e| e.pads.clone()).unwrap_or_default();
         let fp = eda_model::fp_edit::patched_footprint(&lib, &edits);
         let pad = fp.pads.get(eda_model::fp_edit::pad_index(&fp, &number, nth)?)?.clone();
@@ -595,7 +592,7 @@ impl Board<'_> {
 }
 
 /// The inverse of [`eda_model::footprint::to_board`]: a board point in the footprint's own frame (the top view's: a bottom-side footprint mirrors x).
-fn local_point(fp: &FootprintInstance, p: Point) -> Point {
+pub(crate) fn local_point(fp: &FootprintInstance, p: Point) -> Point {
     let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let (dx, dy) = ((p.x - fp.at.x).as_f64(), (p.y - fp.at.y).as_f64());

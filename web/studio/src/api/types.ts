@@ -2378,6 +2378,8 @@ export type Cmd =
   | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
   /** The Properties panel's "Pad Number" (`PAD::SetNumber`): the pad `pad` (`REF.NUM[#k]`) renamed, keeping its net (crates/ops/src/pad_renumber.rs). */
   | { op: "set_pad_number"; pad: string; number: string }
+  /** Delete of a pad with "Allow free pads" (`EDIT_TOOL::DeleteItems`' `case PCB_PAD_T`): the pad leaves its footprint (crates/ops/src/free_pads.rs). */
+  | { op: "remove_board_pad"; pad: string }
   /** `SetDefaultZoneSettings` (Zone Properties' OK, `Edit_Zone_Params`): the board's default zone settings become `zone`'s (a zone record with no outline or net). */
   | { op: "set_via_stack_presets"; presets: ViaStackPreset[] }
   | { op: "set_zone_defaults"; zone: ZoneDefaults & { net: string; layer: string; outline: [] }; locked?: boolean }

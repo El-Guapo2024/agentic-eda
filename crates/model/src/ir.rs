@@ -3295,7 +3295,9 @@ impl Design {
                 thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
             };
         } else if let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) {
-            let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
+            // (a pad taken off the board's footprint is not in `pad_count`: the library's pads are counted from before, `FootprintEdit::removed_pads`)
+            let removed = self.footprint_edit(fp_id).map(|e| e.removed_pads.as_slice()).unwrap_or_default();
+            let pad = if lib.pads.len() == pad_count + removed.len() { lib.pads.get(crate::fp_edit::base_pad_index(removed, pad_idx)) } else { None };
             pad_clearance = pad.and_then(|p| p.clearance_override);
             facts = PadZoneFacts {
                 pad_clearance: None,

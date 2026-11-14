@@ -129,6 +129,7 @@ mod pcb_swap;
 mod tuning;
 mod zone_overrides;
 mod pad_renumber;
+mod free_pads;
 mod poly_holes;
 pub mod zone_priority;
 pub mod autoplace;
@@ -1422,6 +1423,9 @@ pub enum Cmd {
     /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
     /// edit that changes nothing puts the pad back as the library has it.
     EditBoardPad { part: String, edit: eda_model::fp_edit::PadEdit },
+    /// Delete of a pad with "Allow free pads" (`EDIT_TOOL::DeleteItems`' `case PCB_PAD_T`, [`free_pads`]): the pad `pad` (`REF.NUM`, `REF.NUM#k`) leaves its footprint; the
+    /// later pads of its number are renamed `#k-1` with their edits. One undo step.
+    RemoveBoardPad { pad: String },
     /// The Properties panel's "Pad Number" (`PAD::SetNumber`, [`pad_renumber`]): the pad `pad` (`REF.NUM`, `REF.NUM#k`) is numbered `number`, keeping its net,
     /// its edits and its zone overrides. One undo step.
     SetPadNumber { pad: String, number: String },
@@ -2924,7 +2928,7 @@ impl Cmd {
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::SetFootprintSolderMask { part, .. } => vec![part.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
-            Cmd::SetPadNumber { pad, .. } => vec![pad.as_str()],
+            Cmd::SetPadNumber { pad, .. } | Cmd::RemoveBoardPad { pad } => vec![pad.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
             Cmd::SetExtrudedBody { part, .. } => vec![part.as_str()],
             Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
@@ -3724,6 +3728,7 @@ impl<'a> Board<'a> {
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
             Cmd::SetPadNumber { pad, number } => self.set_pad_number(pad, number),
+            Cmd::RemoveBoardPad { pad } => self.remove_board_pad(pad),
             Cmd::MigrateBoardModels { replacements } => self.migrate_board_models(replacements),
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
@@ -8104,6 +8109,8 @@ mod sym_units_tests;
 mod sym_graphic_tests;
 #[cfg(test)]
 mod fp_edit_tests;
+#[cfg(test)]
+mod free_pads_tests;
 #[cfg(test)]
 mod fp_models_tests;
 #[cfg(test)]

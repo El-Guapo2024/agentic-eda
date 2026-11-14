@@ -320,7 +320,7 @@ pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut C
             model.instance_footprints.insert(a.reference.clone(), def.clone());
         }
     }
-    for edit in dr.footprint_edits.iter().filter(|e| e.models3d.is_some() || e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
+    for edit in dr.footprint_edits.iter().filter(|e| e.models3d.is_some() || !e.removed_pads.is_empty() || e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
         let Some(part) = model.part(&edit.id).cloned() else { continue };
         // the edits are laid on the copy the board keeps, else on what the model resolves
         let Some(library) = model.instance_footprints.get(&edit.id).cloned().or_else(|| model.library_footprint_of(&part)) else { continue };
@@ -2554,6 +2554,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditBoardField { part, name, .. } => format!("field edit {part}:{name}"),
         Cmd::EditBoardPad { part, edit } => format!("pad edit {}", edit.pad_id(part)),
         Cmd::SetPadNumber { pad, number } => format!("pad number {pad} {number:?}"),
+        Cmd::RemoveBoardPad { pad } => format!("pad remove {pad}"),
         Cmd::SetZoneDefaults { .. } => "zone defaults".to_string(),
         Cmd::MigrateBoardModels { replacements } => format!("3d models migrate ({} name(s))", replacements.len()),
         Cmd::SetBoardModels { part, models } => format!("3d models {part} ({} model(s))", models.len()),
@@ -2908,6 +2909,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",
         Cmd::SetPadNumber { .. } => "pad-number",
+        Cmd::RemoveBoardPad { .. } => "pad-remove",
         Cmd::SetZoneDefaults { .. } => "zone-defaults",
         Cmd::SetBoardModels { .. } | Cmd::AddBoardModel { .. } | Cmd::RemoveBoardModel { .. } | Cmd::MoveBoardModel { .. } | Cmd::EditBoardModel { .. } | Cmd::MigrateBoardModels { .. } | Cmd::SetExtrudedBody { .. } => "3d-models",
 

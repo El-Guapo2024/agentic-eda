@@ -11,7 +11,8 @@ import { extraDeleteCmd, extraItems } from "./pcbExtraItems";
 import { cellById } from "./tables";
 import { editFieldCmd, fieldById } from "./fpFields";
 import { pointInRings } from "./pcbModify";
-import { fpTextById } from "./pcbItems";
+import { fpTextById, itemKind, padParent } from "./pcbItems";
+import { padStaysPad } from "./freePads";
 
 /** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
 export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
@@ -101,6 +102,20 @@ export function boardDeleteCmds(
     .sort((a, b) => a.id.slice(0, a.at).localeCompare(b.id.slice(0, b.at)) || Number(b.id.slice(b.at + 2)) - Number(a.id.slice(a.at + 2)));
   for (const { id } of fpTexts) {
     cmds.push({ op: "edit_board_footprint_text", id, delete: true });
+    deleted++;
+  }
+  // `case PCB_PAD_T: if( IsFootprintEditor() || m_AllowFreePads ) commit.Remove( board_item )`: a pad leaves its footprint (one of a footprint that is itself deleted goes
+  // with it) -- the later pads of its number first, as each removal renames the ones after it (`REF.NUM#k`). Without "Allow free pads" the caller has promoted it.
+  const pads = [...wanted]
+    .filter((id) => padStaysPad() && itemKind(board, id) === "pad" && !wanted.has(padParent(board, id) ?? ""))
+    .map((id) => {
+      // `REF.NUM` or `REF.NUM#k`: the footprint's reference holds no `.`
+      const hash = /#(\d+)$/.exec(id);
+      return { id, base: hash ? id.slice(0, hash.index) : id, nth: hash ? Number(hash[1]) : 1 };
+    })
+    .sort((a, b) => a.base.localeCompare(b.base) || b.nth - a.nth);
+  for (const { id } of pads) {
+    cmds.push({ op: "remove_board_pad", pad: id });
     deleted++;
   }
   for (const id of wanted) {

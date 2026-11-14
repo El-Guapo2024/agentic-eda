@@ -386,7 +386,7 @@ impl Board<'_> {
             }
             let Some((reference, number, nth)) = parse_pad_id(id) else { return Err(fail("ops_unknown_item", id, "no via or pad with this id")) };
             self.require_placed(&reference)?;
-            let footprint = self.model.part(&reference).and_then(|p| self.unedited_footprint(p)).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
+            let footprint = self.model.part(&reference).and_then(|p| self.pads_footprint(p)).ok_or_else(|| fail("ops_no_footprint", &reference, "this part has no footprint geometry to edit"))?;
             let Some(index) = pad_index(&footprint, &number, nth) else { return Err(fail("ops_unknown_pad", id, format!("{reference} has no pad {number}"))) };
             let mut edit = self.design.footprint_edit(&reference).and_then(|e| e.pad(&number, nth)).cloned().unwrap_or_else(|| PadEdit::none(&number, nth));
             edit.teardrops = params.copied();
