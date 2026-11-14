@@ -372,19 +372,43 @@ const TEXT_MAX_ERROR_NM: eda_model::ir::Nm = Nm::new(5_000);
 /// copper too), a table (`PCB_TABLE`), a knockout text's margin, and a text box (`gr_text_box` is not read by the importer).
 fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut crate::rule_resolver::RuleResolver) {
     let Some(d) = design.drawings.as_ref() else { return };
-    let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm| {
-        let (Some(layer), false) = (layers.index_of(layer), segs.is_empty()) else { return };
-        let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
+    // each piece with its half-width: a stroke at half the pen, an outline glyph's side at none (UI-LEFT-3 C3-3)
+    let mut add = |id: &str, layer: &str, at: Point, rot_deg: f64, pieces: &[(eda_drc::kimath::Seg, Nm)]| {
+        let (Some(layer), false) = (layers.index_of(layer), pieces.is_empty()) else { return };
+        let hull = text_bounding_hull_of(pieces, TEXT_MAX_ERROR_NM, at, rot_deg);
         let source = format!("{}{id}", Solid::TEXT_SOURCE);
         let rule = rules.add_text(&source, layer);
         node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, free_pad: false, anchor_points: Vec::new() }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
         if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
-            add(&format!("copper{i}"), &t.layer, t.at, eda_drc::board::footprint_text_draw_rotation(t), &segs, r);
+            add(&format!("copper{i}"), &t.layer, t.at, eda_drc::board::footprint_text_draw_rotation(t), &segs.iter().map(|s| (*s, r)).collect::<Vec<_>>());
         }
     }
     for t in d.texts.iter().filter(|t| t.layer.ends_with(".Cu")) {
+        // a text in an outline face (UI-LEFT-3 C3-3): the hull of its glyphs and overbars, laid out with its own size, justification and face
+        if let Some(x) = d.text_extra(&t.id).filter(|x| !eda_model::outline_font::is_stroke_face(x.face.as_deref())) {
+            let size = (x.width_nm.unwrap_or(t.size_nm), t.size_nm);
+            let thickness = if x.auto_thickness { Nm::ZERO } else { t.stroke_width };
+            let halign = match t.justify {
+                eda_model::ir::TextJustify::Left => -1,
+                eda_model::ir::TextJustify::Center => 0,
+                eda_model::ir::TextJustify::Right => 1,
+            };
+            let valign = match x.valign {
+                eda_model::ir::TextVAlign::Top => -1,
+                eda_model::ir::TextVAlign::Center => 0,
+                eda_model::ir::TextVAlign::Bottom => 1,
+            };
+            let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
+            let layout = eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: rot, mirror: t.mirror, halign, valign };
+            let spacing = if x.line_spacing_permille > 0 { x.line_spacing_permille as f64 / 1000.0 } else { 1.0 };
+            let face = eda_drc::stroke_font::TextFace { face: x.face.as_deref(), bold: x.bold, italic: x.italic, line_spacing: spacing };
+            if let Some(pieces) = eda_drc::stroke_font::outline_segments(&layout, &face) {
+                add(&t.id, &t.layer, t.at, rot, &pieces);
+                continue;
+            }
+        }
         // laid out as the silkscreen check lays out a plain text (`eda_drc::board::build`): square glyphs, vertically centred
         let size = (t.size_nm, t.size_nm);
         let pen = eda_drc::stroke_font::effective_pen_width(t.stroke_width, size, false);
@@ -395,7 +419,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: 
         };
         let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
         let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign: 0 });
-        add(&t.id, &t.layer, t.at, rot, &segs, pen / 2);
+        add(&t.id, &t.layer, t.at, rot, &segs.iter().map(|s| (*s, pen / 2)).collect::<Vec<_>>());
     }
 }
 
@@ -608,13 +632,23 @@ fn barcode_text_hull(b: &eda_model::barcode::Barcode) -> Option<Shape> {
 /// their box grown by `r` (half the pen, and the error), its four corners turned forward again (`RotatePoint( corner, GetDrawPos(), GetDrawRotation() )`).
 /// KiCad's rotation is counter-clockwise on screen, y down.
 fn text_bounding_hull(segs: &[eda_drc::kimath::Seg], r: eda_model::ir::Nm, at: Point, rot_deg: f64) -> Vec<Point> {
+    let pieces: Vec<(eda_drc::kimath::Seg, Nm)> = segs.iter().map(|s| (*s, Nm::ZERO)).collect();
+    text_bounding_hull_of(&pieces, r, at, rot_deg)
+}
+
+/// [`text_bounding_hull`] of pieces each with its own half-width (an outline font's glyph sides, none; its overbars, half the pen: UI-LEFT-3 C3-3), the box
+/// then grown by `r`.
+fn text_bounding_hull_of(pieces: &[(eda_drc::kimath::Seg, Nm)], r: eda_model::ir::Nm, at: Point, rot_deg: f64) -> Vec<Point> {
     let (sin, cos) = rot_deg.to_radians().sin_cos();
     // `RotatePoint( p, centre, angle )` with y down: x' = x cos + y sin, y' = -x sin + y cos (relative to the centre)
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn(((p.x - at.x).as_f64(), (p.y - at.y).as_f64()), -sin);
-        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    for (sg, h) in pieces {
+        let h = h.as_f64();
+        for p in [sg.a, sg.b] {
+            let q = turn(((p.x - at.x).as_f64(), (p.y - at.y).as_f64()), -sin);
+            (x0, y0, x1, y1) = (x0.min(q.0 - h), y0.min(q.1 - h), x1.max(q.0 + h), y1.max(q.1 + h));
+        }
     }
     let r = r.as_f64();
     [(x0 - r, y0 - r), (x1 + r, y0 - r), (x1 + r, y1 + r), (x0 - r, y1 + r)]

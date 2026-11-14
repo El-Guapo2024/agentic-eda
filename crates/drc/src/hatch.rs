@@ -10,10 +10,11 @@
 //! per line for a hatch or a reverse hatch, and for a cross-hatch the shape with a grid of squares cut out of it.
 //!
 //! The knockouts are KiCad's: the other shapes, texts and text boxes of the board on the layer, and the other footprints' Reference, Value and user fields, graphics and (on a courtyard
-//! layer) courtyards. Left out: a footprint's own texts (`PCB_TEXT_T` is not among the things `getHatchingKnockouts` takes), the text variables in a text and the outline fonts.
+//! layer) courtyards. Left out: a footprint's own texts (`PCB_TEXT_T` is not among the things `getHatchingKnockouts` takes) and the text variables in a text. A text in an
+//! outline font is its glyphs' polygons (UI-LEFT-3 C3-3, [`crate::stroke_font::outline_ink`]).
 //! Units are nanometres, as KiCad's; the errors of the curves are KiCad's (`ARC_HIGH_DEF` for the shape, `ARC_LOW_DEF` for the knockouts).
 
-use crate::stroke_font::{effective_pen_width, kicad_text_segments, TextLayout};
+use crate::stroke_font::{effective_pen_width, kicad_text_segments, outline_ink, TextFace, TextLayout};
 use eda_clipper2::Point64;
 use eda_model::footprint::to_board;
 use eda_model::fp_art::draw_rotation;
@@ -170,6 +171,10 @@ struct TextSpec<'a> {
     halign: i8,
     valign: i8,
     bold: bool,
+    /// `GetFontName()` (none: the stroke font), `IsItalic()`, `m_LineSpacing`.
+    face: Option<&'a str>,
+    italic: bool,
+    line_spacing: f64,
 }
 
 /// A text's knockout, `PCB_TEXT::TransformShapeToPolygon` (`buildBoundingHull`): the text as polygons (`TransformTextToPolySet`: an oval of the pen's width on every stroke, the error
@@ -180,16 +185,25 @@ fn text_hull(spec: &TextSpec, margin: Nm) -> Option<(LineChain, [i64; 4])> {
         return None;
     }
     let angle_deg = spec.draw_angle_mdeg as f64 / 1000.0;
-    let strokes = kicad_text_segments(&TextLayout { text: spec.text, pos: spec.pos, size: spec.size, thickness: spec.thickness, angle_deg, mirror: spec.mirror, halign: spec.halign, valign: spec.valign });
-    if strokes.is_empty() {
-        return None;
-    }
-    let pen = effective_pen_width(spec.thickness, spec.size, spec.bold);
-    let mut ink = ShapePolySet::new();
-    for seg in &strokes {
-        ink.add_outline(oval_polygon(p64(seg.a), p64(seg.b), pen.get(), KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside, 0));
-    }
-    ink.simplify();
+    let layout = TextLayout { text: spec.text, pos: spec.pos, size: spec.size, thickness: spec.thickness, angle_deg, mirror: spec.mirror, halign: spec.halign, valign: spec.valign };
+    let face = TextFace { face: spec.face, bold: spec.bold, italic: spec.italic, line_spacing: spec.line_spacing };
+    let mut ink = match outline_ink(&layout, &face, KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside) {
+        Some(ink) if !ink.polys.is_empty() => ink,
+        Some(_) => return None,
+        None => {
+            let strokes = kicad_text_segments(&layout);
+            if strokes.is_empty() {
+                return None;
+            }
+            let pen = effective_pen_width(spec.thickness, spec.size, spec.bold);
+            let mut ink = ShapePolySet::new();
+            for seg in &strokes {
+                ink.add_outline(oval_polygon(p64(seg.a), p64(seg.b), pen.get(), KNOCKOUT_ERROR_NM.get(), ErrorLoc::Outside, 0));
+            }
+            ink.simplify();
+            ink
+        }
+    };
     // `aClearance += aMaxError; textShape.Inflate( aClearance, ROUND_ALL_CORNERS, aMaxError )` of `ERROR_OUTSIDE`.
     ink.inflate(KNOCKOUT_ERROR_NM.get(), CornerStrategy::RoundAllCorners, KNOCKOUT_ERROR_NM.get() as i32, false);
     let a = angle_deg.to_radians();
@@ -251,6 +265,9 @@ fn text_knockout_with(text: &Text, extra: Option<&eda_model::board_text::TextExt
             TextVAlign::Bottom => 1,
         },
         bold: extra.is_some_and(|e| e.bold),
+        face: extra.and_then(|e| e.face.as_deref()),
+        italic: extra.is_some_and(|e| e.italic),
+        line_spacing: extra.map_or(1.0, |e| if e.line_spacing_permille > 0 { e.line_spacing_permille as f64 / 1000.0 } else { 1.0 }),
     };
     text_hull(&spec, margin)
 }
@@ -313,6 +330,9 @@ fn footprint_knockouts(out: &mut ShapePolySet, design: &Design, model: &Constrai
                 halign: layout.halign,
                 valign: layout.valign,
                 bold: layout.bold,
+                face: layout.face.as_deref(),
+                italic: layout.italic,
+                line_spacing: 1.0,
             };
             if let Some((hull, bbox)) = text_hull(&spec, margin) {
                 if boxes_meet(bbox, my_box) {
@@ -605,12 +625,32 @@ mod tests {
     }
 
     fn spec_at(angle_mdeg: i64) -> TextSpec<'static> {
-        TextSpec { text: "HELLO", pos: Point { x: mm(10.0), y: mm(10.0) }, size: (mm(2.0), mm(2.0)), thickness: mm(0.2), draw_angle_mdeg: angle_mdeg, mirror: false, halign: -1, valign: 0, bold: false }
+        TextSpec { text: "HELLO", pos: Point { x: mm(10.0), y: mm(10.0) }, size: (mm(2.0), mm(2.0)), thickness: mm(0.2), draw_angle_mdeg: angle_mdeg, mirror: false, halign: -1, valign: 0, bold: false, face: None, italic: false, line_spacing: 1.0 }
     }
 
     fn extent(hull: &LineChain) -> (i64, i64) {
         let (xs, ys): (Vec<i64>, Vec<i64>) = (hull.iter().map(|p| p.x).collect(), hull.iter().map(|p| p.y).collect());
         (xs.iter().max().unwrap() - xs.iter().min().unwrap(), ys.iter().max().unwrap() - ys.iter().min().unwrap())
+    }
+
+    /// UI-LEFT-3 C3-3: a text in an outline face knocks the hatch out by its glyphs (`OUTLINE_FONT`): DejaVu Sans' "HELLO" is wider than the stroke font's at the
+    /// same size (its em is 1.4 sizes), and its box starts at the anchor with no stroke-font offset.
+    #[test]
+    fn an_outline_face_is_knocked_out_by_its_glyphs() {
+        if eda_model::outline_font::OutlineFont::load(Some("DejaVu Sans"), false, false).is_none() {
+            return;
+        }
+        let stroke = spec_at(0);
+        let outline = TextSpec { face: Some("DejaVu Sans"), ..spec_at(0) };
+        let (s, _) = text_hull(&stroke, Nm::ZERO).unwrap();
+        let (o, _) = text_hull(&outline, Nm::ZERO).unwrap();
+        let ((ws, _), (wo, ho)) = (extent(&s), extent(&o));
+        assert!(wo > ws, "{wo} {ws}");
+        // H's stem is 0.098 em from the origin; the box is the glyphs grown by the knockout's error (0.02 mm)
+        let x0 = o.iter().map(|p| p.x).min().unwrap();
+        assert!((x0 - (10_000_000 + 2_800_000 * 201 / 2048 - 20_000)).abs() < 5_000, "{x0}");
+        // the O's overshoots (-29 .. 1520 of 2048) make the ink 0.756 em tall: 2.118 mm, and the error each side
+        assert!((ho - (2_800_000 * 1549 / 2048 + 40_000)).abs() < 15_000, "{ho}");
     }
 
     #[test]

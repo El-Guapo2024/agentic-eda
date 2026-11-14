@@ -170,6 +170,19 @@ impl TextStyle {
         Rect::new(rotate_about(a, anchor, quarter_turns), rotate_about(b, anchor, quarter_turns))
     }
 
+    /// [`TextStyle::text_box`] of a text in its face (UI-LEFT-3 C3-3): an outline face's `EDA_TEXT::GetTextBox` is that font's
+    /// ([`crate::kicad_font::text_box_face_iu`]); the stroke font's is [`TextStyle::text_box`]'s.
+    pub fn text_box_in_face(&self, text: &str, anchor: Pt, quarter_turns: i32, face: Option<&str>, bold: bool, italic: bool) -> Rect {
+        if crate::outline_font::is_stroke_face(face) {
+            return self.text_box(text, anchor, quarter_turns);
+        }
+        let style = crate::kicad_font::TextBoxStyle { width_iu: self.size_iu, height_iu: self.size_iu, h: self.h, v: self.v, mirrored: false, italic };
+        let (x0, y0, x1, y1) = crate::kicad_font::text_box_face_iu(text, self.pen(), style, face, bold);
+        let a = (anchor.0 + nm(x0), anchor.1 + nm(y0));
+        let b = (anchor.0 + nm(x1), anchor.1 + nm(y1));
+        Rect::new(rotate_about(a, anchor, quarter_turns), rotate_about(b, anchor, quarter_turns))
+    }
+
     /// The size of the box the pin layout measures a text with (`StringBoundaryLimits`, without the 17 % fudge): `(width, height)`.
     pub fn extents(&self, text: &str) -> (f64, f64) {
         let (w, h) = string_boundary_limits(text, self.size_iu, self.pen());

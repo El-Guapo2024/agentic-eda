@@ -217,6 +217,65 @@ pub fn bezier_polyline(start: Point, c1: Point, c2: Point, end: Point, max_error
     out.into_iter().map(|p| Point { x: Nm::new(ki_round(p.0)), y: Nm::new(ki_round(p.1)) }).collect()
 }
 
+fn approx_int(x: f64) -> f64 {
+    let d = 0.6744897501960817f64;
+    let d4 = d * d * d * d;
+    x / (1.0 - d + (d4 + x * x * 0.25).powf(0.25))
+}
+
+fn approx_inv_int(x: f64) -> f64 {
+    let p = 0.39538816f64;
+    x * (1.0 - p + (p * p + 0.25 * x * x).sqrt())
+}
+
+/// `BEZIER_POLY::getQuadPoly` (Raph Levien's flattening of a quadratic): the start, `n` points at parameters spread for an even error, the end.
+fn get_quad_poly(c: [V; 3], out: &mut Vec<V>, max_error: f64) {
+    let ddx = 2.0 * c[1].0 - c[0].0 - c[2].0;
+    let ddy = 2.0 * c[1].1 - c[0].1 - c[2].1;
+    let u0 = (c[1].0 - c[0].0) * ddx + (c[1].1 - c[0].1) * ddy;
+    let u2 = (c[2].0 - c[1].0) * ddx + (c[2].1 - c[1].1) * ddy;
+    let cr = (c[2].0 - c[0].0) * ddy - (c[2].1 - c[0].1) * ddx;
+    let x0 = u0 / cr;
+    let x2 = u2 / cr;
+    let scale = cr.abs() / (ddx.hypot(ddy) * (x2 - x0).abs());
+    let a0 = approx_int(x0);
+    let a2 = approx_int(x2);
+    let n = (0.5 * (a2 - a0).abs() * (scale / max_error).sqrt()).ceil();
+    let v0 = approx_inv_int(a0);
+    let v2 = approx_inv_int(a2);
+    let eval = |t: f64| {
+        let omt = 1.0 - t;
+        (omt * omt * c[0].0 + 2.0 * omt * t * c[1].0 + t * t * c[2].0, omt * omt * c[0].1 + 2.0 * omt * t * c[1].1 + t * t * c[2].1)
+    };
+    out.push(c[0]);
+    // a straight "curve" (`cross` 0) gives NaN parameters and no points between: its ends are the line
+    if n.is_finite() {
+        let mut ii = 0.0;
+        while ii < n {
+            let u = approx_inv_int(a0 + (a2 - a0) * ii / n);
+            let t = (u - v0) / (v2 - v0);
+            if t.is_finite() {
+                out.push(eval(t));
+            }
+            ii += 1.0;
+        }
+    }
+    out.push(c[2]);
+}
+
+/// `BEZIER_POLY( ctrlPts ).GetPoly( std::vector<VECTOR2D>&, aMaxError )`: a quadratic (three points) or cubic (four) curve as a polyline in doubles, start first and
+/// end last -- what `OUTLINE_DECOMPOSER::cubicTo` flattens a glyph's curves with (`web/studio/src/kicad-port/bezierPoly.ts::bezierPolyD`).
+pub fn bezier_poly_d(ctrl: &[(f64, f64)], max_error: f64) -> Vec<(f64, f64)> {
+    let err = if max_error <= 0.0 { 10.0 } else { max_error };
+    let mut out = Vec::new();
+    match ctrl {
+        [a, b, c] => get_quad_poly([*a, *b, *c], &mut out, err),
+        [a, b, c, d] => get_cubic_poly([*a, *b, *c, *d], &mut out, err),
+        _ => {}
+    }
+    out
+}
+
 /// `EDA_SHAPE::getMaxError()` for the board: `BOARD_DESIGN_SETTINGS::m_MaxError`
 /// defaults to 0.005 mm (`pcbIUScale.mmToIU( 0.005 )`), i.e. 5 um.
 pub const BEZIER_MAX_ERROR_NM: Nm = Nm::new(5_000);

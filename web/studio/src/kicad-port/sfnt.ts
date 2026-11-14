@@ -150,6 +150,43 @@ export function readSfnt(bytes: Uint8Array, index = 0): SfntFace | null {
 }
 
 /**
+ * Face `index` of an sfnt file or collection as a font file of its own (`FT_New_Face( library, file, faceIndex, .. )`'s face, for a loader that takes no index): a
+ * collection's (`ttcf`) table directory of that face, its tables copied after it (each on a four-byte boundary, as the OpenType file format asks); a file that is no
+ * collection is returned as it is. Null for an index past the collection's faces or a file that cannot be read.
+ */
+export function sfntFaceFile(bytes: Uint8Array, index = 0): Uint8Array | null {
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  try {
+    if (bytes.byteLength < 12 || v.getUint32(0) !== 0x74746366 /* ttcf */) return index === 0 ? bytes : null;
+    if (index >= v.getUint32(8)) return null;
+    const at = v.getUint32(12 + 4 * index);
+    const n = v.getUint16(at + 4);
+    const recs: Array<{ rec: number; off: number; len: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const rec = at + 12 + 16 * i;
+      recs.push({ rec, off: v.getUint32(rec + 8), len: v.getUint32(rec + 12) });
+    }
+    const pad = (x: number) => (x + 3) & ~3;
+    let size = 12 + 16 * n;
+    for (const r of recs) size += pad(r.len);
+    const out = new Uint8Array(size);
+    const w = new DataView(out.buffer);
+    // the offset table: the face's own sfnt version, its table count and search fields
+    out.set(bytes.subarray(at, at + 12), 0);
+    let pos = 12 + 16 * n;
+    recs.forEach((r, i) => {
+      out.set(bytes.subarray(r.rec, r.rec + 16), 12 + 16 * i);
+      w.setUint32(12 + 16 * i + 8, pos);
+      out.set(bytes.subarray(r.off, r.off + r.len), pos);
+      pos += pad(r.len);
+    });
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The ink of `text` at an em of 1, y down (`[left, top, right, bottom]` from the run's origin): each glyph's box at the advance `advanceTo` gives the text before it
  * (the browser's shaping, or the sum of `hmtx`'s advances); null for a text with no outline, undefined when the font has no glyph boxes.
  */

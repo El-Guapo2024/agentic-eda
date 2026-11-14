@@ -192,6 +192,37 @@ pub fn text_box_styled_iu(text: &str, thickness_iu: i64, s: TextBoxStyle) -> (i6
     (x0, y0, x0 + w, y0 + height)
 }
 
+/// [`text_box_styled_iu`] of a text in its face (UI-LEFT-3 C3-3): an outline face's box is `EDA_TEXT::GetTextBox` in that font
+/// ([`crate::text_shape::text_box`]: its runs' advances, its ascender and descender, no stroke-font fudge on the height); the stroke font's is
+/// [`text_box_styled_iu`]'s.
+pub fn text_box_face_iu(text: &str, thickness_iu: i64, s: TextBoxStyle, face: Option<&str>, bold: bool) -> (i64, i64, i64, i64) {
+    use crate::text_shape::{text_box, Font, TextShape};
+    let Some(font) = crate::outline_font::OutlineFont::load(face, bold, s.italic) else { return text_box_styled_iu(text, thickness_iu, s) };
+    let t = TextShape {
+        text: text.to_string(),
+        size: [s.width_iu, s.height_iu],
+        thickness: thickness_iu,
+        mirror: s.mirrored,
+        italic: s.italic,
+        bold,
+        h_align: match s.h {
+            HJustify::Left => -1,
+            HJustify::Center => 0,
+            HJustify::Right => 1,
+        },
+        v_align: match s.v {
+            VJustify::Top => -1,
+            VJustify::Center => 0,
+            VJustify::Bottom => 1,
+        },
+        line_spacing: 1.0,
+        face: face.map(str::to_string),
+        ..Default::default()
+    };
+    let [x0, y0, x1, y1] = text_box(&t, &Font::Outline(font), false);
+    (x0, y0, x1, y1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +265,25 @@ mod tests {
         let wide = text_box_styled_iu("R1", 2_382, TextBoxStyle { width_iu: 25_400, height_iu: 12_700, h: HJustify::Left, v: VJustify::Center, mirrored: false, italic: false });
         assert_eq!(wide.2 - wide.0, text_advance_iu("R1", 25_400) + 2 * 3_573, "the advance is the width's");
         assert_eq!(wide.3 - wide.1, square(HJustify::Left, false, false).3 - square(HJustify::Left, false, false).1, "the height is the height's");
+    }
+
+    /// UI-LEFT-3 C3-3: a box in an outline face is `GetTextBox` in that font -- its runs' advance wide, its size's ascender to descender tall, no stroke-font fudge
+    /// on the height; the stroke font's is [`text_box_styled_iu`]'s.
+    #[test]
+    fn a_box_in_an_outline_face_is_that_fonts() {
+        let s = TextBoxStyle { width_iu: 12_700, height_iu: 12_700, h: HJustify::Left, v: VJustify::Top, mirrored: false, italic: false };
+        assert_eq!(text_box_face_iu("R1", 2_382, s, None, false), text_box_styled_iu("R1", 2_382, s));
+        assert_eq!(text_box_face_iu("R1", 2_382, s, Some("KiCad Font"), false), text_box_styled_iu("R1", 2_382, s));
+        if crate::outline_font::OutlineFont::load(Some("DejaVu Sans"), false, false).is_none() {
+            return;
+        }
+        let (x0, y0, x1, y1) = text_box_face_iu("H", 2_382, s, Some("DejaVu Sans"), false);
+        let em = 1.4 * 12_700.0;
+        // H's advance (1540 of 2048), a top justification's fudge up (0.17 of the height, whatever the font), the size's ascender and descender (pixel-rounded)
+        assert_eq!(x0, 0);
+        assert!(((x1 - x0) as f64 - em * 1540.0 / 2048.0).abs() < 20.0, "{x1}");
+        assert!(((y1 - y0) as f64 - em * (1901.0 + 483.0) / 2048.0).abs() < 60.0, "{}", y1 - y0);
+        assert_eq!(y0, -kiround((y1 - y0) as f64 * 0.17));
     }
 
     #[test]

@@ -210,3 +210,21 @@ test("quotes are stored as {dblquote} and shown as quotes", () => {
   assert.equal(escapeQuoted('say "hi"'), "say {dblquote}hi{dblquote}");
   assert.equal(unescapeQuoted("say {dblquote}hi{dblquote}"), 'say "hi"');
 });
+
+import { setFontResolver, STROKE, type OutlineFace } from "./kicadText";
+
+test("minSizeNm in an outline face: the text's GetTextBox in that font -- from the ascender to the descender, an interline of 1.68 sizes, no stroke-font fudge (UI-LEFT-3 C3-3)", () => {
+  // DejaVu Sans' metrics (2048 to the em; 1901 / -483), every glyph 0.6 em wide
+  const face: OutlineFace = { family: "t", unitsPerEm: 2048, ascender: 1901, descender: -483, height: 2384, fakeBold: false, fakeItalic: false, advance: (t) => Array.from(t).length * 0.6, ink: () => null };
+  setFontResolver((f) => (f === "DejaVu Sans" ? { kind: "outline", face } : STROKE));
+  try {
+    const min = minSizeNm(box({ text: "ab\ncd", end: [30_000, 10_100], face: "DejaVu Sans" }), measure);
+    const em = 1.4 * 1000;
+    const oneLine = Math.trunc((em * 1901) / 2048) + Math.trunc((em * 483) / 2048);
+    assert.equal(min.h, oneLine + Math.round(1000 * 1.68) + 600 + 800);
+    // the stroke font's box is the old one
+    assert.notEqual(min.h, minSizeNm(box({ text: "ab\ncd", end: [30_000, 10_100] }), measure).h);
+  } finally {
+    setFontResolver(() => STROKE);
+  }
+});

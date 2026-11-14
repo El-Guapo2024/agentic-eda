@@ -15,8 +15,8 @@
 //! `segCircleIntersection`): the text's box (`EDA_TEXT::GetTextBox` in the stroke font's metrics, [`eda_model::kicad_font::text_box_iu`], grown as each
 //! kind's `updateGeometry` grows it and turned by the text angle) cuts every line it crosses, wherever the text is -- inline, outside or placed by hand
 //! (`DIM_TEXT_POSITION::MANUAL`, kept in [`Dimension::text_pos`]). A leader's `DIM_TEXT_BORDER` draws the box (`RECTANGLE`) or the circle through it
-//! (`CIRCLE`) around its text, as `PCB_DIM_LEADER::updateGeometry` does (UI-LEFT P13). An outline font's metrics are the stroke font's here (the studio
-//! draws every text in the stroke font).
+//! (`CIRCLE`) around its text, as `PCB_DIM_LEADER::updateGeometry` does (UI-LEFT P13). A label in an outline face is measured in that font
+//! ([`eda_model::kicad_font::text_box_face_iu`], UI-LEFT-3 C3-3).
 
 use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextBorder, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Millideg, Point, Nm};
 
@@ -205,12 +205,12 @@ fn text_pen(dim: &Dimension) -> Nm {
 }
 
 /// The four corners of the text's box as the dimension's `updateGeometry` collides its lines with it: `GetTextBox( nullptr ).Inflate( grow_x, grow_y )`
-/// (the box of the text at `text_at`, `EDA_TEXT::GetTextBox`, in the stroke font's metrics: its width and height, horizontal justification, mirror and
+/// (the box of the text at `text_at`, `EDA_TEXT::GetTextBox`, in its face's metrics: its width and height, horizontal justification, mirror and
 /// italic lean, UI-LEFT-2 PP11), as `polyBox` is built (origin, (origin.x, end.y), end, (end.x, origin.y)) and turned about its centre by the text angle
 /// (`polyBox.Rotate( GetTextAngle(), textBox.GetCenter() )`, counter-clockwise on the screen). Also the box's centre and width, which a leader's circle
 /// frame is made from.
 fn text_poly(dim: &Dimension, text: &str, text_at: Point, angle: Millideg, grow_x: Nm, grow_y: Nm) -> ([Point; 4], Point, Nm) {
-    use eda_model::kicad_font::{text_box_styled_iu, HJustify, TextBoxStyle, VJustify};
+    use eda_model::kicad_font::{text_box_face_iu, HJustify, TextBoxStyle, VJustify};
     let style = TextBoxStyle {
         width_iu: dim.text_width_nm().get(),
         height_iu: dim.text_size_nm.get(),
@@ -223,7 +223,7 @@ fn text_poly(dim: &Dimension, text: &str, text_at: Point, angle: Millideg, grow_
         mirrored: dim.text_mirrored(),
         italic: dim.text_effects.italic,
     };
-    let (x0, y0, x1, y1) = text_box_styled_iu(text, text_pen(dim).get(), style);
+    let (x0, y0, x1, y1) = text_box_face_iu(text, text_pen(dim).get(), style, dim.text_effects.face.as_deref(), dim.text_effects.bold);
     let (x0, y0) = (text_at.x + Nm::new(x0) - grow_x, text_at.y + Nm::new(y0) - grow_y);
     let (x1, y1) = (text_at.x + Nm::new(x1) + grow_x, text_at.y + Nm::new(y1) + grow_y);
     let centre = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };

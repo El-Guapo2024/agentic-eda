@@ -317,3 +317,72 @@ fn silkscreen_texts_of_every_kind_reach_kicad_cli() {
     eprintln!("{} text exclusions matched by kicad-cli", rows.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-3 C3-3: silkscreen texts in outline faces reach kicad-cli -- DejaVu Sans with an overbar, Liberation Serif on two lines, IPAGothic in a fake bold
+/// (the face has no bold), DejaVu Sans in a fake italic (this machine's has no oblique), each across a footprint's silkscreen line. Their shapes are
+/// `OUTLINE_FONT`'s glyphs (`eda_model::text_shape`) in triangles; kicad-cli reports each overlap and every one is excluded. kicad-cli matches the one whose
+/// marker is a field's stroke start inside a glyph; a marker on a side of a glyph's triangle is on KiCad's hinted outline (FreeType's TrueType hinting at 358
+/// pixels to the em, not ported, moves a corner by up to a few micrometres), which no place offered can be.
+#[test]
+fn silkscreen_texts_in_outline_faces_reach_kicad_cli() {
+    if slow_tests_off() {
+        return;
+    }
+    if !std::path::Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").exists() {
+        eprintln!("skipped: no DejaVu Sans");
+        return;
+    }
+    let dir = scratch("review_drc_outline_texts");
+    setup(&dir);
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    for (a, b) in [((-1.5, -0.8), (1.5, -0.8)), ((1.5, -0.8), (1.5, 0.8))] {
+        let shape: eda_model::fp_art::FpShape = serde_json::from_value(json!({ "shape": { "kind": "segment", "layer": "F.SilkS", "stroke_width": 120000,
+            "start": { "x": mm(a.0).get(), "y": mm(a.1).get() }, "end": { "x": mm(b.0).get(), "y": mm(b.1).get() } } }))
+        .unwrap();
+        model.footprints[0].art.shapes.push(shape);
+    }
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    let text = |id: &str, content: &str, x: f64, y: f64| -> eda_model::ir::Text {
+        serde_json::from_value(json!({ "id": id, "content": content, "at": { "x": mm(x).get(), "y": mm(y).get() }, "layer": "F.SilkS", "size_nm": mm(1.0).get(), "stroke_width": mm(0.15).get() })).unwrap()
+    };
+    let (_, mut design, _) = load(&dir).unwrap();
+    let drawings = design.drawings.get_or_insert_with(Default::default);
+    // U1's silkscreen line runs along y = 4.2 from x = 3.5 to 6.5 and down x = 6.5; U2's the same 10 mm right
+    drawings.texts.push(text("txt_dejavu", "A~{Vg}", 4.3, 4.2));
+    drawings.texts.push(text("txt_serif", "To\nWa", 6.5, 5.3));
+    drawings.texts.push(text("txt_bold", "Hb", 14.5, 4.2));
+    drawings.texts.push(text("txt_ital", "Wy", 16.5, 5.3));
+    for (id, face, bold, italic) in [("txt_dejavu", "DejaVu Sans", false, false), ("txt_serif", "Liberation Serif", false, false), ("txt_bold", "IPAGothic", true, false), ("txt_ital", "DejaVu Sans", false, true)] {
+        drawings.text_extras.push(serde_json::from_value(json!({ "id": id, "face": face, "bold": bold, "italic": italic })).unwrap());
+    }
+    save(&dir, &design).unwrap();
+    let every = eda_kicad_engine::DrcOptions { all_track_errors: true, ..Default::default() };
+    let first = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let all = first["violations"].as_array().unwrap().clone();
+    eprintln!("{}", all.iter().map(describe).collect::<Vec<_>>().join("\n"));
+    let texts = |v: &Value| v["items"].as_array().unwrap().iter().filter(|i| i["description"].as_str().unwrap_or("").contains("PCB text")).map(|i| i["description"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    let rows: Vec<Value> = all.iter().filter(|v| v["type"] == "silk_overlap" && !texts(v).is_empty()).cloned().collect();
+    for want in ["A~{Vg}", "To", "Hb", "Wy"] {
+        assert!(rows.iter().any(|v| texts(v).iter().any(|d| d.contains(&format!("'{want}")))), "kicad-cli reports the text '{want}..' over a silkscreen line");
+    }
+    step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    let after = crate::kicad_engine::drc_with_options(&dir, every).expect("kicad-cli ran");
+    let now: Vec<&Value> = after["violations"].as_array().unwrap().iter().collect();
+    let mut bad = Vec::new();
+    let mut matched = Vec::new();
+    for r in &rows {
+        // a field's stroke whose start is inside a glyph: the marker is that start (`SHAPE_LINE_CHAIN_BASE::Collide( SEG )`), which kicad-cli matches; where the
+        // marker is on a side of a glyph's triangle, FreeType's hinting (not ported) has moved KiCad's corners by a few micrometres: excluded in the studio only
+        match now.iter().find(|v| row_key(v) == row_key(r)) {
+            Some(v) if v["excluded"] == true && v["kicad_matched"] == true => matched.push(describe(v)),
+            Some(v) if v["excluded"] == true => {}
+            Some(v) => bad.push(format!("not matched by kicad-cli: {} (tried {} places)", describe(v), r["marker_nm"].as_array().map_or(0, Vec::len))),
+            None => bad.push(format!("gone: {}", describe(r))),
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    assert!(!matched.is_empty(), "a field across a glyph is matched by kicad-cli");
+    eprintln!("{} outline text exclusions, matched by kicad-cli: {matched:?}", rows.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}

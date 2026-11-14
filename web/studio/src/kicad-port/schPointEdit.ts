@@ -18,6 +18,9 @@ import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 import { addCorner, canAddCorner, eeDrag, eeFindHandle, eeMakePoints, handlePos, removableCorner, removeCorner, type EeDragResult, type EeEditPoints, type EeEditShape, type EeHandle, type P } from "./eePointEdit";
 import type { ArcEditMode } from "./pcbPointEdit";
 import { CAP_HEIGHT_RATIO, INTERLINE_PITCH, textBoxMargins, wrapText, type Measure } from "./schTextBox";
+import { kicadTextBox } from "./kicadText";
+import { resolveSchFont } from "./schDefaultFont";
+import { schTextBoxDrawSpec } from "./schTextSpecs";
 
 /** `SCH_SHAPE`'s default line width (`schIUScale.MilsToIU( DEFAULT_LINE_WIDTH_MILS )`, 6 mil), what a text box's default margin is made from. */
 const DEFAULT_WIDTH_NM = 152_400;
@@ -30,13 +33,23 @@ export function hasPointEditor(g: SchGraphic): boolean {
   return ["rectangle", "circle", "arc", "bezier", "polygon", "text_box", "rule_area"].includes(g.shape.type);
 }
 
-/** `SCH_TEXTBOX::GetMinSize` of a box with its text: the text's height and the margins across the text's direction (vertical text: a width, horizontal: a height). */
-export function textBoxMinSize(g: SchGraphic, start: P, end: P, measure: Measure): P {
+/**
+ * `SCH_TEXTBOX::GetMinSize` of a box with its text: the text's height and the margins across the text's direction (vertical text: a width, horizontal: a height). In an outline
+ * face (`face`, the box's `text_attrs` font; none is the default font) the height is `GetTextBox`'s in that font, the text broken to the box in it (UI-LEFT-3 C3-3).
+ */
+export function textBoxMinSize(g: SchGraphic, start: P, end: P, measure: Measure, face?: string | null): P {
   const s = g.shape;
   if (s.type !== "text_box" || s.text === "") return [0, 0];
   const width = g.width_nm && g.width_nm > 0 ? g.width_nm : DEFAULT_WIDTH_NM;
   const [ml, mt, mr, mb] = textBoxMargins(s, width);
   const vertical = Math.round((s.angle ?? 0) / 1000) % 180 === 90;
+  const font = resolveSchFont(face, !!s.bold, !!s.italic);
+  if (font.kind === "outline") {
+    const look = { start, end, margins: [ml, mt, mr, mb] as const, text: s.text, angleDeg: vertical ? 90 : 0, size_nm: s.size_nm, h: s.h_align ?? "left", v: s.v_align ?? "top", bold: !!s.bold, italic: !!s.italic };
+    const b = kicadTextBox(schTextBoxDrawSpec(look, font), font);
+    const textHeight = Math.abs(b.y1 - b.y0);
+    return vertical ? [textHeight + ml + mr, 0] : [0, textHeight + mt + mb];
+  }
   const along = vertical ? Math.abs(end[1] - start[1]) : Math.abs(end[0] - start[0]);
   // `GetShownText`'s column: the box less the margins along the text; `GetMinSize`: the text's height and the margins across it
   const lines = wrapText(s.text, Math.max(along - (vertical ? mt + mb : ml + mr), 0), s.size_nm, measure);
@@ -45,7 +58,7 @@ export function textBoxMinSize(g: SchGraphic, start: P, end: P, measure: Measure
 }
 
 /** The graphic as its behaviour sees it, or null for a graphic the point editor has none for (a directive label, an image, a table ...). */
-export function schEditShape(g: SchGraphic, measure: Measure): EeEditShape | null {
+export function schEditShape(g: SchGraphic, measure: Measure, face?: string | null): EeEditShape | null {
   const s = g.shape;
   switch (s.type) {
     case "rectangle":
@@ -61,7 +74,7 @@ export function schEditShape(g: SchGraphic, measure: Measure): EeEditShape | nul
     case "rule_area":
       return { kind: "polygon", pts: s.pts.map(p), closed: true, ruleArea: true };
     case "text_box":
-      return { kind: "text_box", start: p(s.start), end: p(s.end), minSize: textBoxMinSize(g, p(s.start), p(s.end), measure) };
+      return { kind: "text_box", start: p(s.start), end: p(s.end), minSize: textBoxMinSize(g, p(s.start), p(s.end), measure, face) };
     default:
       return null;
   }
@@ -90,19 +103,19 @@ export function schShapeFrom(e: EeEditShape, was: SchGraphicShape): SchGraphicSh
  * One drag step of handle `h` of graphic `g` to `to` (the snapped cursor), in `mode`: the shape the behaviour makes (a text box's minimum size is that of the box as the
  * drag has it, as KiCad's `GetMinSize` reads the box it is editing), or null when it makes none.
  */
-export function schDrag(g: SchGraphic, h: EeHandle, to: readonly [number, number], mode: ArcEditMode, measure: Measure): EeDragResult | null {
-  const e = schEditShape(g, measure);
+export function schDrag(g: SchGraphic, h: EeHandle, to: readonly [number, number], mode: ArcEditMode, measure: Measure, face?: string | null): EeDragResult | null {
+  const e = schEditShape(g, measure, face);
   if (!e) return null;
   const first = eeDrag(e, h, to, mode);
   if (!first || e.kind !== "text_box" || first.shape.kind !== "text_box") return first;
-  return eeDrag({ ...e, minSize: textBoxMinSize(g, first.shape.start, first.shape.end, measure) }, h, to, mode);
+  return eeDrag({ ...e, minSize: textBoxMinSize(g, first.shape.start, first.shape.end, measure, face) }, h, to, mode);
 }
 
 /** The edit points of a graphic as a drag leaves it (or as it is), and the graphic itself as drawn. */
-export function schPointEditor(g: SchGraphic, drag: { handle: EeHandle; to: readonly [number, number] } | null, mode: ArcEditMode, measure: Measure): { edit: EeEditPoints; graphic: SchGraphic } | null {
-  const e = schEditShape(g, measure);
+export function schPointEditor(g: SchGraphic, drag: { handle: EeHandle; to: readonly [number, number] } | null, mode: ArcEditMode, measure: Measure, face?: string | null): { edit: EeEditPoints; graphic: SchGraphic } | null {
+  const e = schEditShape(g, measure, face);
   if (!e) return null;
-  const dragged = drag ? schDrag(g, drag.handle, drag.to, mode, measure) : null;
+  const dragged = drag ? schDrag(g, drag.handle, drag.to, mode, measure, face) : null;
   const shown = dragged?.shape ?? e;
   return { edit: eeMakePoints(shown), graphic: dragged ? { ...g, shape: schShapeFrom(shown, g.shape) } : g };
 }

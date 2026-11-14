@@ -2084,7 +2084,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `FontFace`, measured by the canvas, its metrics and glyph boxes read from the file; a fake italic is slanted glyph by glyph. A knockout text or field is drawn (its box is
   what is drawn, grown by `GetKnockoutTextMargin`). The Font rows of a board text, a field, a text box, the Footprint Editor's texts and fields and the Symbol Editor's texts and
   text boxes, and the Font choice of the board's and the Footprint Editor's Text Properties, set the face.
-- Left: the server measures texts in the stroke font whatever their face (the hatch knockouts, a via's clearance to a text, the dimension crossbar's cut, a table cell's line
-  breaks); a fake bold is not drawn (1/358 of the em); a collection's face is its first; the hit tests and boxes of a board text (UI-LEFT-2 PP2), a sheet's texts and fields,
-  and a text box's minimum size keep the stroke font's metrics; a dimension's label is drawn in its face since UI-LEFT-2 PP11 (PARITY-pcb section 100), its crossbar cut measured in the stroke font; pins, pad numbers and the 3D view's silkscreen texts are as before.
+- Done 2026-11-14 on `task-v16-fonts` (UI-LEFT-3 C3-3, C3-8; PARITY-common section 28): the server lays texts out in their outline face (`eda_model::outline_font`, a glyph
+  reader of our own; `eda_model::text_shape`, one `FONT` layout for both fonts): the hatch knockouts, a via's clearance to a text, the dimension crossbar's cut, a table cell's
+  line breaks, a sheet text's box, the DRC's and the router's text shapes, the silkscreen exclusions of an outline text; a text box's minimum size in its face; a fake bold
+  drawn; a collection's face the one fontconfig named.
+- Left: FreeType's hinting (a few micrometres at 358 pixels to the em), so an outline text's exclusion on a glyph's side holds in the studio only; HarfBuzz's contextual
+  substitutions and mark attachment; pins, pad numbers as before.
 - Port from: `common/font/*.cpp`, `common/eda_text.cpp`, `pcbnew/pcb_painter.cpp`, `pcbnew/pcb_text.cpp`, `eeschema/sch_painter.cpp`, `eeschema/sch_label.cpp`.

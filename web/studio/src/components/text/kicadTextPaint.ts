@@ -7,7 +7,7 @@
 //
 // The browser checks read what was last drawn through `window.__edaText[tag][id]`: the text, its font, its ink's box, its `GetTextBox` corners and its lines' starts on the
 // board, and `on`, a point on its first stroke (a press there is on the text, as a person presses on it).
-import { FAKE_ITALIC_ANGLE, frameToWorld, inkBox, kicadTextBox, knockoutBox, layoutKicadText, boxCorners, resolveFont, runInk, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "../../kicad-port/kicadText";
+import { FAKE_ITALIC_ANGLE, frameToWorld, inkBox, kicadTextBox, knockoutBox, layoutKicadText, boxCorners, resolveFont, runGlyphs, runInk, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "../../kicad-port/kicadText";
 import { RUN_FONT_PX, setRunFont } from "./outlineFonts";
 import { strokeOverbarHeight } from "./strokeFont";
 
@@ -143,6 +143,20 @@ export function paintLayout(ctx: CanvasRenderingContext2D, l: KicadTextLayout, o
     ctx.fillStyle = color;
     const face = l.font.face;
     for (const r of l.runs) {
+      // a fake bold (`FT_Outline_Embolden( .., 1 << 6 )`, 1/358 of the em) is drawn from its emboldened outlines (kicad-port/sfnt.ts `sfntGlyphPolys`), as KiCad fills
+      // its `OUTLINE_GLYPH`s; the browser's own rendering of the face has no such stroke (UI-LEFT-3 C3-8)
+      const polys = face.fakeBold ? runGlyphs(l, r) : null;
+      if (polys) {
+        ctx.beginPath();
+        for (const g of polys) {
+          for (const ring of [g.outer, ...g.holes]) {
+            ring.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+            ctx.closePath();
+          }
+        }
+        ctx.fill("evenodd");
+        continue;
+      }
       // a fake italic slants each glyph about its own origin (`m_fakeItal`'s `FT_Matrix`, x' = x cos 12 + y sin 12 with y up, set before each glyph is loaded), the
       // advances HarfBuzz gave the run kept: glyph by glyph, each where the run's shaping puts it
       const pieces = l.fakeItalic ? Array.from(r.text).map((ch, i, all) => ({ text: ch, dx: face.advance(all.slice(0, i).join("")) * r.emX })) : [{ text: r.text, dx: 0 }];

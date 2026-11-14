@@ -589,6 +589,30 @@ pub fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
     }
 }
 
+/// `GetEffectiveShape` of a free board text in an outline face (UI-LEFT-3 C3-3): its glyphs' triangles (`SHAPE_SIMPLE`) and its overbars (`SHAPE_SEGMENT`s at
+/// the pen), laid out with the text's width, justification, face, bold, italic and line spacing; `None` for a text in the stroke font.
+pub fn outline_text_shape(t: &eda_model::ir::Text, x: &eda_model::board_text::TextExtra) -> Option<Shape> {
+    let size = (x.width_nm.unwrap_or(t.size_nm), t.size_nm);
+    let thickness = if x.auto_thickness { Nm::ZERO } else { t.stroke_width };
+    let halign = match t.justify {
+        eda_model::ir::TextJustify::Left => -1,
+        eda_model::ir::TextJustify::Center => 0,
+        eda_model::ir::TextJustify::Right => 1,
+    };
+    let valign = match x.valign {
+        eda_model::ir::TextVAlign::Top => -1,
+        eda_model::ir::TextVAlign::Center => 0,
+        eda_model::ir::TextVAlign::Bottom => 1,
+    };
+    let layout = crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: (t.angle as f64 / 1000.0).rem_euclid(360.0), mirror: t.mirror, halign, valign };
+    let spacing = if x.line_spacing_permille > 0 { x.line_spacing_permille as f64 / 1000.0 } else { 1.0 };
+    let sh = crate::stroke_font::outline_shape(&layout, &crate::stroke_font::TextFace { face: x.face.as_deref(), bold: x.bold, italic: x.italic, line_spacing: spacing })?;
+    let pt = |q: [i64; 2]| Point { x: Nm::new(q[0]), y: Nm::new(q[1]) };
+    let mut parts: Vec<Shape> = sh.polys.iter().flat_map(eda_model::outline_font::triangulate).map(|tri| Shape::Polygon { pts: tri.iter().map(|q| pt(*q)).collect() }).collect();
+    parts.extend(sh.segments.iter().map(|[a, b]| Shape::Stadium { a: pt(*a), b: pt(*b), r: Nm::new(sh.pen / 2) }));
+    (!parts.is_empty()).then_some(Shape::Compound { parts })
+}
+
 /// `PCB_TEXT::GetDrawRotation`, in degrees: footprint text that keeps itself upright is folded into (-90, 90] degrees, any other text is
 /// normalised to [0, 360).
 pub fn footprint_text_draw_rotation(t: &eda_model::ir::FootprintText) -> f64 {
@@ -813,6 +837,11 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 eda_model::ir::TextJustify::Center => 0,
                 eda_model::ir::TextJustify::Right => 1,
             };
+            // a text in an outline face (UI-LEFT-3 C3-3): its glyphs' triangles and its overbars, laid out with its own size and justification
+            if let Some(shape) = design.drawings.as_ref().and_then(|d| d.text_extra(&t.id)).and_then(|x| outline_text_shape(t, x)) {
+                mask.silk.push(DrcSilk { fp: None, id: t.id.clone(), desc: format!("Text '{}' on {}", t.content, t.layer), pos: t.at, layer: t.layer.clone(), shapes: vec![shape], is_shape: false });
+                continue;
+            }
             let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: (t.angle as f64 / 1000.0).rem_euclid(360.0), mirror: t.mirror, halign, valign: 0 });
             if !segs.is_empty() {
                 mask.silk.push(DrcSilk { fp: None, id: t.id.clone(), desc: format!("Text '{}' on {}", t.content, t.layer), pos: t.at, layer: t.layer.clone(), shapes: vec![Shape::Strokes { segs, r: pen / 2 }], is_shape: false });
