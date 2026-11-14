@@ -4,7 +4,7 @@ import { linePositions, layoutKicadText, STROKE, type KicadFont, type OutlineFac
 import { measureStrokeText } from "../components/text/strokeFont";
 import { schTextLines } from "./schTextItem";
 import { textOrigin } from "./schText";
-import { deviceTextDrawSpec, labelTextBoxWidth, labelTextOffset, schDrawPen, schFieldDrawSpec, schLabelDrawSpec, schOwnPen, schTextBoxDrawPos, schTextBoxDrawSpec, schTextDrawSpec } from "./schTextSpecs";
+import { deviceTextDrawSpec, labelTextBoxWidth, labelTextOffset, schDrawPen, schFieldDrawSpec, schLabelDrawSpec, schOwnPen, schTextBoundsInFace, schTextBoxDrawPos, schTextBoxDrawSpec, schTextDrawSpec } from "./schTextSpecs";
 
 const MIL50 = 1_270_000;
 const MM = 1_000_000;
@@ -121,4 +121,28 @@ test("a free text with a glyph width of its own (an imported DXF text) is that w
   assert.deepEqual(spec.size, [3_600_000, 4_000_000]);
   assert.equal(spec.pen, 3_600_000 / 8, "GetPenSizeForNormal( GetTextWidth() )");
   assert.deepEqual(schTextDrawSpec({ ...t, width_nm: null }, 0).size, [4_000_000, 4_000_000], "no width: as wide as it is high");
+});
+
+test("a symbol's text with a pen of its own is drawn and boxed with it (`getTextThickness`: `GetEffectiveTextPenWidth`, UI-LEFT-3 S3-5)", () => {
+  const at: [number, number] = [0, 0];
+  const auto = deviceTextDrawSpec("IN", { at, h: "left", v: "center", vertical: false, size_nm: MIL50 });
+  const own = deviceTextDrawSpec("IN", { at, h: "left", v: "center", vertical: false, size_nm: MIL50, pen_nm: 300_000 });
+  assert.equal(auto.pen, schDrawPen(MIL50, false));
+  assert.equal(own.pen, 300_000);
+  // too wide a pen is clamped to the size (`ClampTextPenSize`: a quarter of it)
+  assert.equal(deviceTextDrawSpec("IN", { at, h: "left", v: "center", vertical: false, size_nm: MIL50, pen_nm: 2 * MIL50 }).pen, MIL50 / 4);
+});
+
+test("a text's bounds in an outline face are its GetTextBox in that face, turned about its position (`SCH_TEXT::GetBoundingBox`, UI-LEFT-3 S3-29)", () => {
+  const half: OutlineFace = { family: "t", unitsPerEm: 1000, ascender: 800, descender: -200, height: 1200, fakeBold: false, fakeItalic: false, advance: (t) => Array.from(t).length / 2, ink: () => null };
+  const font: KicadFont = { kind: "outline", face: half };
+  const flat = schTextBoundsInFace({ text: "ABCD", pos: [0, 0], size: [MIL50, MIL50], pen: 0, halign: "left", valign: "bottom", angleDeg: 0, multiline: true, iu: 100 }, font);
+  assert.equal(flat.minX, 0, "a left-justified text starts at its anchor");
+  assert.ok(flat.maxX > 0 && flat.minY < 0 && flat.maxY <= 0 + MIL50, `it lies to the right of and above the anchor (${JSON.stringify(flat)})`);
+  const up = schTextBoundsInFace({ text: "ABCD", pos: [0, 0], size: [MIL50, MIL50], pen: 0, halign: "left", valign: "bottom", angleDeg: 90, multiline: true, iu: 100 }, font);
+  // a quarter turn counter-clockwise on the screen: (x, y) -> (y, -x)
+  assert.deepEqual([up.minX, up.maxX, up.minY, up.maxY], [flat.minY, flat.maxY, -flat.maxX, -flat.minX || 0]);
+  // wider in a face whose glyphs are wider
+  const wide: KicadFont = { kind: "outline", face: { ...half, advance: (t) => Array.from(t).length } };
+  assert.ok(schTextBoundsInFace({ text: "ABCD", pos: [0, 0], size: [MIL50, MIL50], pen: 0, halign: "left", valign: "bottom", angleDeg: 0, multiline: true, iu: 100 }, wide).maxX > flat.maxX);
 });

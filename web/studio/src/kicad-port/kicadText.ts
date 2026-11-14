@@ -97,9 +97,36 @@ export function setFontResolver(r: (face: string, bold: boolean, italic: boolean
   resolver = r;
 }
 
-/** `EDA_TEXT::GetDrawFont`: `FONT::GetFont( face, bold, italic )` -- the stroke font, or the outline face once the browser has it. */
+/**
+ * The face a text with none of its own is drawn in (`SCH_ITEM::GetDefaultFont`: the render settings' `GetDefaultFont()`, eeschema's Display Options "Default font",
+ * `EESCHEMA_SETTINGS::m_Appearance.default_font`, UI-LEFT-3 S3-29) while `withDefaultFace` runs; null outside one -- the board, the footprint and the Symbol
+ * Editor (`SYMBOL_EDIT_FRAME`: `SetDefaultFont( wxEmptyString )`), whose default is the stroke font.
+ */
+let defaultFace: string | null = null;
+
+/** `fn` with `face` as the default font of the texts it lays out (`RENDER_SETTINGS::SetDefaultFont`). */
+export function withDefaultFace<T>(face: string | null | undefined, fn: () => T): T {
+  const was = defaultFace;
+  defaultFace = face || null;
+  try {
+    return fn();
+  } finally {
+    defaultFace = was;
+  }
+}
+
+/** The default font in force (see `withDefaultFace`); null is the stroke font. */
+export function currentDefaultFace(): string | null {
+  return defaultFace;
+}
+
+/**
+ * `EDA_TEXT::GetDrawFont`: `FONT::GetFont( face, bold, italic )` -- the stroke font, or the outline face once the browser has it. A text with no face of its own (none,
+ * or "Default Font") takes the default font in force (`if( !font ) font = FONT::GetFont( GetDefaultFont( aSettings ), IsBold(), IsItalic() )`).
+ */
 export function resolveFont(face: string | null | undefined, bold = false, italic = false): KicadFont {
-  return isStrokeFace(face) ? STROKE : resolver(face!, bold, italic);
+  const f = !face || face === DEFAULT_FONT_NAME ? defaultFace : face;
+  return isStrokeFace(f) ? STROKE : resolver(f!, bold, italic);
 }
 
 /** What `FONT::Draw` takes of a text: `TEXT_ATTRIBUTES` and the position (`GetTextPos`), in the caller's units (nm on a board and a sheet). */

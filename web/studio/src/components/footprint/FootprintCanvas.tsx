@@ -72,6 +72,7 @@ import { hairlineNm } from "../../kicad-port/view";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { useBarcodeVersion } from "../canvas/barcodeCache";
 import { useImageVersion } from "../canvas/imageCache";
+import { useMenuHighlight } from "../../state/commonTool";
 
 /** The point editor's rows (`PCB_ACTIONS::pointEditorMoveCorner` .. friendly names). */
 const FP_POINT_OP_LABEL: Readonly<Record<FpPointOp, string>> = {
@@ -370,6 +371,8 @@ export function FootprintCanvas() {
 
   // Render loop, in the Footprint Editor's own colour theme (Preferences > Footprint Editor > Colors), redrawn when it changes.
   const themeStamp = useColorThemeStamp();
+  // the items the clarification menu's row under the pointer stands for, drawn brightened (UI-LEFT-3 S3-24)
+  const menuHighlight = useMenuHighlight();
   // a footprint's barcode shape or image pixels arrived (UI-LEFT-2 FF6): repaint
   const barcodeStamp = useBarcodeVersion();
   const imageStamp = useImageVersion();
@@ -411,6 +414,7 @@ export function FootprintCanvas() {
     const draw = state.drawState;
     const constrained = draw && rubber && !draw.arc && !draw.bezier ? rubberEndFor(state.lineMode, draw, [rubber.x, rubber.y]) : null;
     paintFootprint(ctx, state.view, width, height, painted, {
+      brightened: menuHighlight,
       selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible && state.layerVisible["obj:grid"] !== false,
@@ -458,7 +462,7 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, zonePreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, zonePreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

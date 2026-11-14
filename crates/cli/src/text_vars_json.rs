@@ -504,6 +504,54 @@ impl SchShown {
         (!out.is_empty()).then(|| Value::Object(out))
     }
 
+    /// The shown texts of the library texts (`SCH_TEXT` on `LAYER_DEVICE`) of the symbol with the field key `key`, drawn from `lib` -- `{"<stored text>": shown}`,
+    /// only for a text whose shown text is not its stored one; none when no text's is. `SCH_PAINTER::draw( const SCH_SYMBOL* )` sets the text of a text of the temp
+    /// copy that has variables to `expandLibItemTextVars( text, aSymbol )` (the symbol's `ResolveTextVar`, then its sheet's), as for a text box
+    /// ([`Self::text_box_shown_json`]); what a text shows depends only on what it says, so the stored text names it (UI-LEFT-3 S3-5).
+    pub(crate) fn text_shown_json(&self, key: &str, lib: &eda_model::LibSymbol) -> Option<Value> {
+        let sym = &self.sheet.symbols[*self.by_key.get(key)?];
+        self.lib_texts_shown(sym, lib)
+    }
+
+    /// [`Self::text_shown_json`] of the symbol `sym`.
+    fn lib_texts_shown(&self, sym: &SchSymbol, lib: &eda_model::LibSymbol) -> Option<Value> {
+        let level = self.sheet.levels.len().saturating_sub(1);
+        let mut out = serde_json::Map::new();
+        let bodies = std::iter::once(&lib.graphics).chain(lib.alternate.iter().map(|a| &a.graphics)).chain(lib.connectivity.extra_bodies.iter().map(|b| &b.graphics));
+        for g in bodies.flatten() {
+            let eda_model::SymbolGraphic::Text { text: raw, .. } = g else { continue };
+            if out.contains_key(raw) || (!eda_model::text_vars::has_text_vars(raw) && !raw.contains('{')) {
+                continue;
+            }
+            let shown = self.sheet.field_shown(level, Some(sym), raw, 0);
+            if shown != *raw {
+                out.insert(raw.clone(), json!(shown));
+            }
+        }
+        (!out.is_empty()).then(|| Value::Object(out))
+    }
+
+    /// The shown texts of a power symbol's library texts and text boxes (`text_shown`, `text_box_shown` as a symbol's): a power symbol is a symbol to KiCad, so
+    /// `SCH_PAINTER::draw( const SCH_SYMBOL* )` resolves them through its `ResolveTextVar` (UI-LEFT-3 S3-5, S3-8). `fields` are its fields as the state lists them.
+    pub(crate) fn power_texts_shown(&self, p: &eda_model::ir::PowerSymbol, fields: &Value, lib: &eda_model::LibSymbol) -> (Option<Value>, Option<Value>) {
+        let pairs: Vec<(String, String)> = fields.as_array().map(|a| a.iter().map(|f| (f["name"].as_str().unwrap_or("").to_string(), f["text"].as_str().unwrap_or("").to_string())).collect()).unwrap_or_default();
+        let (nickname, item) = p.lib_id.split_once(':').unwrap_or(("", p.lib_id.as_str()));
+        let sym = SchSymbol { fields: pairs, reference: p.id.clone(), short_reference: p.id.clone(), lib_nickname: nickname.into(), lib_item_name: item.into(), ..Default::default() };
+        let level = self.sheet.levels.len().saturating_sub(1);
+        let mut boxes = serde_json::Map::new();
+        for (i, t) in lib.connectivity.text_boxes.iter().enumerate() {
+            let eda_model::ir::LibrarySymbolGraphic::TextBox { text: raw, .. } = t else { continue };
+            if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
+                continue;
+            }
+            let shown = self.sheet.field_shown(level, Some(&sym), raw, 0);
+            if shown != *raw {
+                boxes.insert(i.to_string(), json!(shown));
+            }
+        }
+        (self.lib_texts_shown(&sym, lib), (!boxes.is_empty()).then(|| Value::Object(boxes)))
+    }
+
     /// `SCH_FIELD::GetShownText` of a power symbol's fields: a power symbol is a symbol to KiCad, so its fields resolve through `SCH_SYMBOL::ResolveTextVar` --
     /// its own fields by name, `${REFERENCE}`, `${VALUE}`, `${SYMBOL_NAME}` ... -- then the sheet's. `shown` on each field whose shown text is not its stored one
     /// (UI-LEFT B5). `fields` are `{name, text}`s, the power symbol's as the state lists them.

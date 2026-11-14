@@ -54,7 +54,9 @@ export function PlotSchematicDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postSchPlot({ ...buildSchPlotRequest({ ...form, currentSheetIds }, scope), ...(variant ? { variant } : {}) });
+      // the default font of Display Options (`SetDefaultFont( cfg->m_Appearance.default_font )`), when it is not the KiCad font
+      const defaultFont = state.prefs.schDefaultFont && state.prefs.schDefaultFont !== "KiCad Font" ? { default_font: state.prefs.schDefaultFont } : {};
+      const reply = await postSchPlot({ ...buildSchPlotRequest({ ...form, currentSheetIds }, scope), ...(variant ? { variant } : {}), ...defaultFont });
       const files = reply.files ?? [];
       // `SCH_PLOTTER`'s reporter ("Plotted to '%s'.", "Done.", and any warning) is what kicad-cli printed: the Messages panel shows it (r5 X5-1)
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? (reply.log ?? summarizeOutputs(files)) : "Plot failed."), files });

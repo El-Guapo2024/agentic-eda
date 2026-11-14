@@ -9,6 +9,7 @@ import type { LabelShape, Schematic, Sheet } from "../api/types";
 import type { Box, P } from "./schItemGeom";
 import { defaultPenNm } from "./schText";
 import { textOffsetNm } from "./schFormattingLook";
+import { schPlainMeasure } from "./schDefaultFont";
 
 export type SheetSide = "left" | "right" | "top" | "bottom";
 
@@ -74,6 +75,8 @@ export interface SheetPinItem {
   side: SheetSide;
   /** The size the pin's text is set in (`EDA_TEXT::GetTextWidth`), micrometres: Sheet Pin Properties' own, else 50 mil. */
   sizeNm: number;
+  /** The face Sheet Pin Properties set (absent: the schematic's default font), which its box is measured in (UI-LEFT-3 S3-29). */
+  font?: string | null;
 }
 
 const cache = new WeakMap<Schematic, SheetPinItem[]>();
@@ -83,7 +86,7 @@ export function sheetPinItems(sch: Schematic): SheetPinItem[] {
   let items = cache.get(sch);
   if (!items) {
     items = [];
-    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at), sizeNm: p.size_nm && p.size_nm > 0 ? p.size_nm : SHEET_PIN_TEXT_SIZE_NM });
+    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at), sizeNm: p.size_nm && p.size_nm > 0 ? p.size_nm : SHEET_PIN_TEXT_SIZE_NM, font: p.font ?? null });
     cache.set(sch, items);
   }
   return items;
@@ -103,7 +106,8 @@ export type Measure = (text: string, sizeNm: number) => number;
 
 /** The box of a sheet pin (`SCH_SHEET_PIN::GetBoundingBox`). */
 export function sheetPinBox(pin: SheetPinItem, measure: Measure): Box {
-  return sheetPinBodyBox(pin.at, pin.side, measure(pin.name, pin.sizeNm), pin.sizeNm);
+  // the text measured in the pin's face, else the schematic's default font (`measure` is the stroke font's), UI-LEFT-3 S3-29
+  return sheetPinBodyBox(pin.at, pin.side, schPlainMeasure(measure, pin.font)(pin.name, pin.sizeNm), pin.sizeNm);
 }
 
 /** `SCH_SHEET_PIN::HitTest( aPoint, aAccuracy )`: the box, grown by the accuracy. */

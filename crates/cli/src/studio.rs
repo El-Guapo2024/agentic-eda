@@ -2338,6 +2338,10 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
                 symbol["shown"] = shown;
             }
+            // the shown texts of its library texts (`expandLibItemTextVars`, UI-LEFT-3 S3-5), by their stored text
+            if let Some(texts) = shown.as_ref().zip(resolved.as_ref()).and_then(|(sh, lib)| sh.text_shown_json(&owner, lib)) {
+                symbol["text_shown"] = texts;
+            }
             // the shown texts of its library text boxes where a variable changes one (`expandLibItemTextVars`), by the box's `index` in `lib_symbols`
             if let Some(boxes) = shown.as_ref().zip(resolved.as_ref()).and_then(|(sh, lib)| sh.text_box_shown_json(&owner, lib)) {
                 symbol["text_box_shown"] = boxes;
@@ -2532,6 +2536,16 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             // what its Symbol Properties set beyond the Reference and Value (`SchExtras::power_props`): its Footprint, Datasheet, flags and user fields
             if let Some(props) = sch.extras.power_props.get(&p.id) {
                 v["props"] = json!(props);
+            }
+            // the shown texts of its library texts and text boxes (`expandLibItemTextVars`: a power symbol is a symbol, UI-LEFT-3 S3-5, S3-8)
+            if let (Some(sh), Some(lib)) = (&shown, model.placed_symbol_of(&p.lib_id)) {
+                let (texts, boxes) = sh.power_texts_shown(p, &v["fields"], &lib);
+                if let Some(t) = texts {
+                    v["text_shown"] = t;
+                }
+                if let Some(b) = boxes {
+                    v["text_box_shown"] = b;
+                }
             }
             v
         })
@@ -3075,6 +3089,30 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
                 v["corner_radius_mm"] = json!(l.looks.radius_mm);
             }
         }
+        // a text's justification, bold, italic, face, colour, pen and hidden flag (`LibConnectivity::text_looks`, `SCH_PAINTER::draw( SCH_TEXT )` of the placed
+        // symbol's temp copy; UI-LEFT-3 S3-5), each left out when it is the default
+        if let Some(l) = s.connectivity.text_look(g) {
+            v["h_align"] = json!(l.h_align);
+            v["v_align"] = json!(l.v_align);
+            if l.bold {
+                v["bold"] = json!(true);
+            }
+            if l.italic {
+                v["italic"] = json!(true);
+            }
+            if let Some(f) = &l.font {
+                v["font"] = json!(f);
+            }
+            if let Some(c) = l.text_color {
+                v["text_color"] = json!(c);
+            }
+            if let Some(t) = l.thickness_mm {
+                v["thickness_mm"] = json!(t);
+            }
+            if l.hidden {
+                v["hidden"] = json!(true);
+            }
+        }
         v
     };
     let pin = |p: &eda_model::LibPin, style: u32| {
@@ -3109,11 +3147,15 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     // rectangle above. `index` is the box's place in `LibConnectivity::text_boxes`, by which a placed symbol's `text_box_shown` gives its shown text; `margin_mm`
     // the margin it has (`GetLegacyTextMargin` when it says none)
     for (i, t) in s.connectivity.text_boxes.iter().enumerate() {
-        if let eda_model::ir::LibrarySymbolGraphic::TextBox { unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, text_color, .. } = t {
+        if let eda_model::ir::LibrarySymbolGraphic::TextBox { unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, text_color, font, .. } = t {
             let style = if !multi { 0 } else { *body_style };
             let mut j = json!({ "kind": "text_box", "index": i, "unit": unit, "body_style": style, "text": text, "start": pt(*start), "end": pt(*end), "angle_deg": angle_deg, "size_mm": size_mm, "bold": bold, "italic": italic, "h_align": h_align, "v_align": v_align, "margin_mm": eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm) });
             if let Some(c) = text_color {
                 j["text_color"] = json!(c);
+            }
+            // the text's face (`(font (face ..))`, UI-LEFT-3 S3-8): drawn in it, not in the stroke font
+            if let Some(f) = font.as_deref().filter(|f| !f.is_empty()) {
+                j["font"] = json!(f);
             }
             graphics.push(j);
         }
@@ -3488,6 +3530,24 @@ mod tests {
         let g = gnd["graphics"].as_array().unwrap();
         assert_eq!((g[0]["fill"].as_str(), g[1]["fill"].as_str(), g[1]["radius"].as_f64()), (Some("background"), Some("outline"), Some(0.5)));
         assert_eq!(g[2]["content"], "hi");
+        assert!(g[2].get("h_align").is_none(), "a text of no look of its own is sent as before");
+    }
+
+    #[test]
+    fn a_library_texts_looks_and_a_text_boxs_face_reach_the_painter() {
+        // UI-LEFT-3 S3-5, S3-8: what `SCH_PAINTER::draw( SCH_TEXT )` draws a placed symbol's text with, and a text box's face
+        let text = eda_model::SymbolGraphic::Text { unit: 0, text: "${REFERENCE}".into(), at: eda_model::symbol::SPoint::new(1.0, 2.0), angle_deg: 0.0, size_mm: 1.27 };
+        let mut sym = eda_model::symbol::builtin("Device:R").expect("the built-in resistor");
+        sym.graphics.push(text.clone());
+        sym.connectivity.text_looks.push(eda_model::symbol::TextLook::of(text, eda_model::sym_fields::FieldHAlign::Left, eda_model::sym_fields::FieldVAlign::Top, true, false, Some("DejaVu Sans".into()), None, Some(0.3), true).unwrap());
+        let parsed = eda_model::ir::LibrarySymbolGraphic::TextBox { id: String::new(), unit: 0, body_style: 1, text: "B".into(), start: eda_model::symbol::SPoint::new(0.0, 0.0), end: eda_model::symbol::SPoint::new(2.0, -1.0), angle_deg: 0.0, size_mm: 1.0, bold: false, italic: false, h_align: eda_model::sym_fields::FieldHAlign::Left, v_align: eda_model::sym_fields::FieldVAlign::Top, margin_mm: 0.0, stroke_mm: 0.2, fill: eda_model::ir::LibraryFill::None, private: false, font: Some("DejaVu Serif".into()), text_color: None, stroke_color: None, fill_color: None };
+        sym.connectivity.text_boxes.push(parsed);
+        let j = lib_symbol_json(&sym);
+        let g = j["graphics"].as_array().unwrap();
+        let t = g.iter().find(|g| g["kind"] == "text").expect("the text");
+        assert_eq!((t["h_align"].as_str(), t["v_align"].as_str(), t["bold"].as_bool(), t["font"].as_str(), t["thickness_mm"].as_f64(), t["hidden"].as_bool()), (Some("left"), Some("top"), Some(true), Some("DejaVu Sans"), Some(0.3), Some(true)));
+        let tb = g.iter().find(|g| g["kind"] == "text_box").expect("the text box");
+        assert_eq!(tb["font"].as_str(), Some("DejaVu Serif"));
     }
 
     #[test]

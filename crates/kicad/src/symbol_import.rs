@@ -685,6 +685,14 @@ fn text_color(item: &[Sexpr]) -> Option<eda_model::sch_extras::SchColor> {
     sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "color")).and_then(crate::sch_extras_io::parse_color).filter(|c| !is_unspecified(c))
 }
 
+/// The look of a symbol's `(text ..)` (UI-LEFT-3 S3-5, [`eda_model::symbol::TextLook`]) for the text `graphic` the engine's reader makes of it: `parseEDA_TEXT`'s
+/// justification, bold, italic, face, colour, pen and `hide`.
+pub(crate) fn text_look(item: &[Sexpr], graphic: eda_model::SymbolGraphic) -> Option<eda_model::symbol::TextLook> {
+    let style = text_style(item);
+    let (h, v) = text_justify(&style.justify);
+    eda_model::symbol::TextLook::of(graphic, h, v, style.bold, style.italic, font_face(item), text_color(item), style.thickness_mm, style.hidden)
+}
+
 /// A flag of a node that is a bare token or `(key yes)` (`parseMaybeAbsentBool`).
 fn bare_or_yes(node: &[Sexpr], key: &str) -> bool {
     node.iter().skip(1).any(|c| match c {
