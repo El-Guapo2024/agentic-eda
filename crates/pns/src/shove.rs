@@ -1099,7 +1099,10 @@ impl<'a> Shove<'a> {
 
     /// `SHOVE::onCollidingSolid`: the pad cannot move, so the current line walks
     /// around the cluster of items touching it (`WALKAROUND`, `WP_SHORTEST`,
-    /// restricted to that cluster) and replaces itself in the node.
+    /// restricted to that cluster) and replaces itself in the node. The board edge is such a solid: where there is no room between the pushed line
+    /// and the edge, the walk's own clusters (`AssembleCluster( .., 0.0, .. )`: every side of the outline touches the next) take it the long way round
+    /// inside the outline, and KiCad keeps that walk as any other (UI-LEFT-3 R3-1: the port's old bound of 2 x `WalkaroundHugLengthThreshold` of the
+    /// line's length is gone).
     fn on_colliding_solid(&mut self, cur: &SLine, obstacle: ItemId, info: &ObstacleInfo) -> Status {
         if let Some(lv) = &cur.via {
             // the line ends in a via that collides with the obstacle: push the via instead
@@ -1112,11 +1115,6 @@ impl<'a> Shove<'a> {
         let current_rank = self.line_rank(cur);
         let mut skip: HashSet<ItemId> = self.head_marked.clone();
         skip.extend(cur.line.segment_ids.iter().copied());
-        // The board outline is a closed ring of solids: when there is no room between a pushed line and the edge,
-        // the shortest walk that clears everything is the long way round the whole ring. That is a path, but never
-        // what a shove is for, so a walk around an edge may not grow past `WalkaroundHugLengthThreshold` x 2 (the
-        // bound `LINE_PLACER::rhWalkBase` puts on a head's detour) times the line's own length -- KiCad has none here.
-        let edge_walk_bound = matches!(self.node.get(obstacle), Some(Item::Solid(s)) if s.edge).then(|| 2.0 * self.settings.walkaround_hug_length_threshold * cur.line.length());
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
@@ -1139,9 +1137,6 @@ impl<'a> Shove<'a> {
                 walk_line.line.pts = outcome.line_of(WalkPolicy::Shortest).to_vec();
                 walk_line.line.simplify2();
                 if walk_line.line.has_loops() {
-                    continue;
-                }
-                if edge_walk_bound.is_some_and(|bound| walk_line.line.length() > bound) {
                     continue;
                 }
                 if let Some(last_line) = self.line_stack.first() {

@@ -13,6 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
+import { getAllowFreePads } from "./freePads";
 import { stitchPosition } from "./viaStitch";
 import { effectiveTextPenWidth } from "./kicadText";
 import type { TeardropParams } from "../api/types";
@@ -585,8 +586,9 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     const delta = Math.round(num(v)) - at[axis];
     if (delta === 0) return [];
     const [dx, dy] = axis === 0 ? [delta, 0] : [0, delta];
-    // `PCB_PROPERTIES_PANEL::valueChanged`: "In the PCB Editor, we generally restrict pad movement to the footprint (like dragging)."
-    if (i.type === "PAD") return moveCmd([i.part!.ref], dx, dy);
+    // `PCB_PROPERTIES_PANEL::valueChanged`: "In the PCB Editor, we generally restrict pad movement to the footprint (like dragging)." -- unless "Allow free
+    // pads" is on (`!m_frame->GetPcbNewSettings()->m_AllowFreePads`), when the pad moves on its own (UI-LEFT-3 R3-7)
+    if (i.type === "PAD" && !getAllowFreePads()) return moveCmd([i.part!.ref], dx, dy);
     // `PCB_DIMENSION_BASE::SetPosition` sets the first feature point alone.
     if (i.dim) {
       const d = toCmdDimension(i.dim);

@@ -34,6 +34,7 @@
 import { previewClearancesOf, type PreviewClearances } from "./pcbDisplayOptions";
 import type { BoardState, DragPreview } from "../api/types";
 import { itemKind, padParent } from "./pcbItems";
+import { padStaysPad } from "./freePads";
 import { lockedForTools } from "./pcbTransform";
 
 /** Mirrors `state/store.tsx`'s `DrawState`'s "drag" variant exactly --
@@ -174,7 +175,8 @@ export type GroupDragTarget = { kind: "footprints"; refs: string[] } | { kind: "
 export function findGroupDragTarget(board: BoardState, selection: readonly string[], hovered: string | null, freeAngle: boolean): { target: GroupDragTarget | null; lockedOut: boolean } {
   const isHover = selection.length === 0;
   const items = isHover ? (hovered ? [hovered] : []) : [...selection];
-  const asItem = (id: string) => (itemKind(board, id) === "pad" ? (padParent(board, id) ?? id) : id);
+  // (with "Allow free pads" a pad stays a pad, which `ROUTER_TOOL::InlineDrag` does not drag: kicad-port/freePads.ts)
+  const asItem = (id: string) => (itemKind(board, id) === "pad" && !padStaysPad() ? (padParent(board, id) ?? id) : id);
   const ids = [...new Set(items.map(asItem))];
   const footprints = ids.filter((id) => itemKind(board, id) === "part");
   if (footprints.length > 0 && (!isHover || ids.length === 1)) {

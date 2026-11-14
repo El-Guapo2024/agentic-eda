@@ -44,6 +44,7 @@ import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad
 import { flipCarriedText, rotateCarriedText } from "../kicad-port/carriedText";
 import { carryPress } from "../kicad-port/pcbCarry";
 import { itemKind, padById, padParent } from "../kicad-port/pcbItems";
+import { padStaysPad } from "../kicad-port/freePads";
 import { padsOnly } from "../kicad-port/gateSwap";
 import { extraItemById } from "../kicad-port/pcbExtraItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
@@ -245,8 +246,8 @@ export function useActionRunner() {
       // `selectPoint`'s `HighlightSelectionFilter( rejected )` when the filter refused everything under the cursor
       const flash = rowsToFlash(rejected);
       if (flash.length > 0) flashSelectionFilter(flash);
-      // a pad stands for its footprint
-      const asItem = (id: string, kind: string) => (kind === "pad" ? (padParent(board, id) ?? id) : id);
+      // a pad stands for its footprint (but with "Allow free pads": kicad-port/freePads.ts)
+      const asItem = (id: string, kind: string) => (kind === "pad" && !padStaysPad() ? (padParent(board, id) ?? id) : id);
       // outside an action (nothing to replay) the best candidate is taken, as before
       if (guessed.length <= 1 || forcedSelection.depth === 0) return guessed.slice(0, 1).map((c) => asItem(c.id, c.kind));
       const kinds = new Map(all.map((c) => [c.id, c.kind] as const));

@@ -27,7 +27,7 @@
 //!   of the selection the tool then works on; the item's own `Move`/`Rotate`/`Flip` never look at them.
 
 use super::{rotate_point_about, Board};
-use eda_model::fp_edit::parse_field_id;
+use eda_model::fp_edit::{parse_field_id, PadEdit};
 use eda_model::ir::{tessellate_arc, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, Shape, Side, Text, Track, Nm, Via, Zone, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -133,11 +133,13 @@ struct Targets {
     fp_texts: BTreeSet<String>,
     /// Tuning patterns (`PCB_TUNING_PATTERN`, a `PCB_GENERATOR`): their tracks are in `tracks`, their origin, end and base lines move with them.
     patterns: BTreeSet<String>,
+    /// Pads on their own (`REF.NUM`, `REF.NUM#k`): with "Allow free pads" the studio sends a pad without its footprint (UI-LEFT-3 R3-7).
+    pads: BTreeSet<String>,
 }
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty() && self.fp_texts.is_empty() && self.patterns.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.board_items.is_empty() && self.tables.is_empty() && self.fields.is_empty() && self.fp_texts.is_empty() && self.patterns.is_empty() && self.pads.is_empty()
     }
 }
 
@@ -168,6 +170,10 @@ impl Board<'_> {
         }
         if self.resolve_fp_text(id).is_some() {
             out.fp_texts.insert(id.to_string());
+            return true;
+        }
+        if self.pad_of(id).is_some() {
+            out.pads.insert(id.to_string());
             return true;
         }
         let Some(dr) = &self.design.drawings else { return false };
@@ -261,10 +267,17 @@ impl Board<'_> {
     /// image is not mirrorable (`MirrorableItems` has no `PCB_REFERENCE_IMAGE_T`) and is refused with the other unknown ids.
     pub(crate) fn mirror_items(&mut self, ids: &[String], pivot: Point, direction: FlipDirection) -> Result<(), Vec<CheckResult>> {
         let x = Xform::Flip { pivot, dir: direction };
+        // a pad on its own ("Allow free pads"): `mirrorPad` (UI-LEFT-3 R3-7)
+        let pads: BTreeSet<String> = ids.iter().filter(|id| self.pad_of(id).is_some()).cloned().collect();
+        self.transform_pads(&pads, x, true)?;
+        let ids: Vec<String> = ids.iter().filter(|id| !pads.contains(*id)).cloned().collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_item", ids.join(","), "the board has no drawings")])?;
-        for id in ids {
+        for id in &ids {
             if !dr.board_items.text_boxes.iter().any(|t| &t.id == id) && !dr.tuning_patterns.iter().any(|p| &p.id == id) {
-                return Err(vec![CheckResult::fail("ops_unknown_item", id.as_str(), "no text box or tuning pattern with this id")]);
+                return Err(vec![CheckResult::fail("ops_unknown_item", id.as_str(), "no text box, tuning pattern or pad with this id")]);
             }
         }
         for t in dr.board_items.text_boxes.iter_mut().filter(|t| ids.contains(&t.id)) {
@@ -354,6 +367,14 @@ impl Board<'_> {
 
     pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
+        // `PAD::Flip` takes a pad to the other side of the board, its footprint staying: the studio holds a pad on its footprint's side, so a pad is
+        // turned over with its footprint only (the studio's Flip promotes a selected pad to its footprint whatever "Allow free pads" says)
+        if x.is_flip() {
+            if let Some(pad) = targets.pads.first() {
+                return Err(vec![CheckResult::fail("ops_bad_transform", pad.as_str(), "a pad is turned over with its footprint")]);
+            }
+        }
+        self.transform_pads(&targets.pads, x, false)?;
         let copper = self.model.board.layers.len();
         let outer = (self.model.board.layers.first().cloned(), self.model.board.layers.last().cloned());
 
@@ -506,6 +527,81 @@ impl Board<'_> {
         }
         Ok(())
     }
+}
+
+impl Board<'_> {
+    /// The pad a pad id (`REF.NUM`, `REF.NUM#k`) names on a placed footprint: its reference, number and `nth`, and the pad as the footprint's edits make it.
+    pub(crate) fn pad_of(&self, id: &str) -> Option<(String, String, u32, eda_model::Pad)> {
+        let (reference, number, nth) = eda_model::fp_edit::parse_pad_id(id)?;
+        self.pose_of(&reference)?;
+        let lib = self.unedited_footprint(self.model.part(&reference)?)?;
+        let edits = self.design.footprint_edit(&reference).map(|e| e.pads.clone()).unwrap_or_default();
+        let fp = eda_model::fp_edit::patched_footprint(&lib, &edits);
+        let pad = fp.pads.get(eda_model::fp_edit::pad_index(&fp, &number, nth)?)?.clone();
+        Some((reference, number, nth, pad))
+    }
+
+    /// Pads moved, turned or mirrored on their own, as "Allow free pads" lets the board editor do (`PCBNEW_SETTINGS::m_AllowFreePads`: "pads can be moved with
+    /// respect to the rest of the footprint"; the edit tools' `FilterCollectorForFreePads` then keeps a pad as itself; UI-LEFT-3 R3-7): `PAD::Move`, `PAD::Rotate`
+    /// (`RotatePoint( m_pos, aRotCentre, aAngle )`, `SetOrientation( GetOrientation() + aAngle )`), and with `mirror` `EDIT_TOOL`'s `mirrorPad` -- the position
+    /// mirrored, the orientation negated (`SetOrientation( -GetOrientation() )`), the offset, a trapezoid's delta and a custom pad's basic shapes mirrored in the
+    /// pad's own frame (`FlipPrimitives`). The pad keeps what it was moved to as a pad edit of its footprint (`PadEdit::at`, `rot`, `offset` ..), in the
+    /// footprint's frame, so the footprint moved later takes it along. (A pad of a bottom-side footprint is held in the top view's frame: its offset and shapes
+    /// mirror there.)
+    pub(crate) fn transform_pads(&mut self, pads: &BTreeSet<String>, x: Xform, mirror: bool) -> Result<(), Vec<CheckResult>> {
+        for id in pads {
+            let Some((reference, number, nth, pad)) = self.pad_of(id) else {
+                return Err(vec![CheckResult::fail("ops_unknown_item", id.as_str(), "no pad with this id")]);
+            };
+            let fp = self.require_placed(&reference)?;
+            let bottom = fp.side == Side::Bottom;
+            // the pad's orientation on the board, clockwise millidegrees (a bottom-side footprint's pads turn the other way, `footprint::placed_pads`)
+            let sense: i64 = if bottom { -1 } else { 1 };
+            let orientation = fp.rot as i64 + sense * pad.rot as i64;
+            let at = x.point(eda_model::footprint::to_board(&fp, pad.at));
+            let orientation = match x {
+                Xform::Move { .. } => orientation,
+                Xform::Rotate { angle, .. } => orientation + angle,
+                Xform::Flip { .. } => -orientation,
+            };
+            let mut edit = self.design.footprint_edit(&reference).and_then(|e| e.pad(&number, nth)).cloned().unwrap_or_else(|| PadEdit::none(&number, nth));
+            edit.at = Some(local_point(&fp, at));
+            edit.rot = Some(norm360(sense * (orientation - fp.rot as i64)) as Millideg);
+            if let (true, Xform::Flip { dir, .. }) = (mirror, x) {
+                let origin = Point { x: Nm::ZERO, y: Nm::ZERO };
+                let m = |p: Point| match dir {
+                    FlipDirection::LeftRight => Point { x: -p.x, y: p.y },
+                    FlipDirection::TopBottom => Point { x: p.x, y: -p.y },
+                };
+                if let Some((ox, oy)) = pad.ext.offset {
+                    edit.offset = Some(m(Point { x: ox, y: oy }));
+                }
+                if let Some((dx, dy)) = pad.ext.trapezoid_delta {
+                    let d = m(Point { x: dx, y: dy });
+                    edit.trapezoid_delta = Some((d.x, d.y));
+                }
+                if let Some(mut custom) = pad.ext.custom.clone() {
+                    for prim in &mut custom.primitives {
+                        crate::fp_items::mirror_shape(&mut prim.shape, origin, dir);
+                    }
+                    edit.custom = Some(custom);
+                }
+            }
+            self.edit_slot(&reference).set_pad(edit);
+            self.tidy_edit(&reference);
+        }
+        Ok(())
+    }
+}
+
+/// The inverse of [`eda_model::footprint::to_board`]: a board point in the footprint's own frame (the top view's: a bottom-side footprint mirrors x).
+fn local_point(fp: &FootprintInstance, p: Point) -> Point {
+    let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = rad.sin_cos();
+    let (dx, dy) = ((p.x - fp.at.x).as_f64(), (p.y - fp.at.y).as_f64());
+    let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+    let mirror = if fp.side == Side::Bottom { -1.0 } else { 1.0 };
+    Point { x: Nm::kiround(lx * mirror), y: Nm::kiround(ly) }
 }
 
 // ----------------------------------------------------------------- footprints

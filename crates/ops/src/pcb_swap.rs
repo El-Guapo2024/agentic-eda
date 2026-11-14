@@ -2,7 +2,8 @@
 //!
 //! Ports `EDIT_TOOL::Swap` (`pcbnew/tools/edit_tool_move_fct.cpp` at KiCad 8303b2ad; 25ec2335's differs only by `ReportFilteredLockedItems`, which the studio's tool
 //! half does) down to what each item class does with it. The tool half -- which items (`FilterCollectorForMarkers`, `FilterCollectorForHierarchy`: a group's member
-//! stands for its top group; `FilterCollectorForFreePads`: on the board a pad stands for its footprint; a straight track left out; `FilterCollectorForLockedItems`)
+//! stands for its top group; `FilterCollectorForFreePads`: on the board a pad stands for its footprint, unless "Allow free pads" is on (UI-LEFT-3 R3-7: two pads of the
+//! board then swap their copper's places, kept as pad edits); a straight track left out; `FilterCollectorForLockedItems`)
 //! and their selection order (`GetItemsSortedBySelectionOrder`) -- is the caller's, as for the other edit tools (`web/studio/src/kicad-port/pcbSwap.ts`). Here, in
 //! the order given:
 //!
@@ -234,6 +235,10 @@ impl SwapHost for Board<'_> {
         if self.pose_of(id).is_some() {
             return Ok(SwapType::Footprint);
         }
+        // a pad on its own: the studio sends one with "Allow free pads" (`FilterCollectorForFreePads` keeps it, UI-LEFT-3 R3-7)
+        if self.pad_of(id).is_some() {
+            return Ok(SwapType::Pad);
+        }
         if let Some(rt) = &self.design.routing {
             if let Some(t) = rt.tracks.iter().find(|t| t.id == id) {
                 // `if( item->Type() == PCB_TRACE_T ) aCollector.Remove( item );`
@@ -296,6 +301,8 @@ impl SwapHost for Board<'_> {
         let dr = self.design.drawings.as_ref();
         let found = match t {
             SwapType::Footprint => self.pose_of(id).map(|f| f.at),
+            // `PAD::GetPosition`: the pad's position (its hole), on the board
+            SwapType::Pad => self.pad_of(id).and_then(|(r, _, _, pad)| self.pose_of(&r).map(|fp| eda_model::footprint::to_board(fp, pad.at))),
             SwapType::Via => rt.and_then(|rt| rt.vias.iter().find(|v| v.id == id)).map(|v| v.at),
             SwapType::Arc => rt.and_then(|rt| rt.tracks.iter().find(|t| t.id == id)).and_then(|t| t.arc()).map(|(s, m, e)| crate::sch_scene::arc_center_of(s, m, e)),
             SwapType::Zone => rt.and_then(|rt| rt.zones.iter().find(|z| z.id == id)).and_then(|z| z.outline.first().copied()),
@@ -314,7 +321,7 @@ impl SwapHost for Board<'_> {
             SwapType::Image => dr.and_then(|d| d.board_items.images.iter().find(|x| x.id == id)).map(|i| i.at),
             SwapType::Barcode => dr.and_then(|d| d.barcodes.iter().find(|x| x.id == id)).map(|b| b.at),
             SwapType::Table => dr.and_then(|d| d.tables.iter().find(|x| x.id == id)).map(|t| t.at),
-            SwapType::Pad | SwapType::Group => None,
+            SwapType::Group => None,
         };
         found.unwrap_or_default()
     }
@@ -345,6 +352,24 @@ impl SwapHost for Board<'_> {
                 self.move_items(&[id.to_string()], dx, dy)
             }
         }
+    }
+
+    /// `PAD::SwapShapePositions( a, b )` of two pads on the board ("Allow free pads"): each pad moves by what takes its copper's centre (`ShapePos`: the position
+    /// and the offset turned with the pad) to the other's, as one `move_items` each.
+    fn swap_pad_shapes(&mut self, a: &str, b: &str) -> Result<(), Vec<CheckResult>> {
+        let shape_pos = |board: &Self, id: &str| -> Result<Point, Vec<CheckResult>> {
+            let (r, _, _, pad) = board.pad_of(id).ok_or_else(|| fail("ops_unknown_item", id, "no pad with this id"))?;
+            let fp = board.pose_of(&r).ok_or_else(|| fail("ops_unknown_item", id, "no pad with this id"))?;
+            let off = pad.ext.offset.map(|(x, y)| crate::pad_edit::rotate(Point { x, y }, pad.rot as i64)).unwrap_or_default();
+            Ok(eda_model::footprint::to_board(fp, (pad.at.0 + off.x, pad.at.1 + off.y)))
+        };
+        let (sa, sb) = (shape_pos(self, a)?, shape_pos(self, b)?);
+        let (dx, dy) = delta(sb, sa);
+        if dx != Nm::ZERO || dy != Nm::ZERO {
+            self.move_items(&[a.to_string()], dx, dy)?;
+            self.move_items(&[b.to_string()], -dx, -dy)?;
+        }
+        Ok(())
     }
 
     fn swap_layer(&mut self, id: &str, t: SwapType) -> Option<String> {

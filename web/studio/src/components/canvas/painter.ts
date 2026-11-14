@@ -57,7 +57,7 @@ import { drawGridItems, gridItemCovers, shownGridItems } from "./gridItemPaint";
 import { drawViaStitches } from "./viaStitchPaint";
 import { viaMaxDiameter, viaWidthOn } from "../../kicad-port/viaPadstack";
 import type { PreviewClearances } from "../../kicad-port/pcbDisplayOptions";
-import { boardShowsTrackClearance, netNamesOnPads, netNamesOnTracks, netNamesOnVias, routerShowsClearance, shortNetname, trackNetNameLabels, viaNetNameLayout, type NetNamesMode, type TrackClearanceMode, type ViewBox } from "../../kicad-port/pcbDisplayOptions";
+import { boardShowsTrackClearance, netNamesOnPads, netNamesOnTracks, padNetText, netNamesOnVias, routerShowsClearance, shortNetname, trackNetNameLabels, viaNetNameLayout, type NetNamesMode, type TrackClearanceMode, type ViewBox } from "../../kicad-port/pcbDisplayOptions";
 import { unescapeString } from "../../kicad-port/schNetName";
 import { padContours, padPlacement } from "../../kicad-port/padShape3d";
 import { drawDrillItems } from "./drillPaint";
@@ -478,9 +478,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     }
   }
 
-  // Courtyard.
+  // Courtyard (not of the copy that carries a pad alone: kicad-port/pcbCarry.ts `splitCarried`).
   const courtyardKey = part.side === "bottom" ? "b_courtyard" : "f_courtyard";
-  if (selected || isHot || opts.layerVisible[courtyardKey] !== false) {
+  if (!part.carriedPadsOnly && (selected || isHot || opts.layerVisible[courtyardKey] !== false)) {
     withLayer(ctx, opts, courtyardKey, 1, () => {
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
@@ -670,8 +670,10 @@ function drawPads(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part
       if (look(pad, "copper", nameLayer) !== "active") continue;
       scoped(() => {
         const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
-        // `if( displayOpts->m_NetNames == 1 || displayOpts->m_NetNames == 3 ) netname = aPad->GetDisplayNetname();` (UI-LEFT-3 P3-1)
-        const named = !!pad.net && netNamesOnPads(opts.netNamesMode ?? 3) && pad.w * view.scale > 22 && pad.h * view.scale > 10;
+        // `if( displayOpts->m_NetNames == 1 || displayOpts->m_NetNames == 3 ) netname = aPad->GetDisplayNetname();` (UI-LEFT-3 P3-1), then
+        // `if( aPad->IsNoConnectPad() ) netname = wxT( "x" ); else if( aPad->IsFreePad() ) netname = wxT( "*" );` (UI-LEFT-3 R3-7)
+        const netText = padNetText(pad, netNamesOnPads(opts.netNamesMode ?? 3));
+        const named = !!netText && pad.w * view.scale > 22 && pad.h * view.scale > 10;
         if (named) {
           ctx.fillStyle = "rgba(0,0,0,0.75)";
           const fontNm = Math.min(pad.w, pad.h) * 0.35;
@@ -679,7 +681,7 @@ function drawPads(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
-          ctx.fillText(pad.net!, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
+          ctx.fillText(netText, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
         }
         if (numbered) drawPadNumber(ctx, pad, named, layerColor("pad_netname"), opts.viewFlipped);
       });

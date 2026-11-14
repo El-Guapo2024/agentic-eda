@@ -1360,6 +1360,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
     // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
     let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
     let flashed = eda_connectivity::flashed_layers_with_forced(&design, &model, &forced);
+    // the free pads (`PAD::IsFreePad`), for the pad json's `free`
+    let free_pads = eda_drc::board::free_pads(&design, &model);
     let block_of: std::collections::HashMap<String, String> = view["parts"]
         .as_array()
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
@@ -1418,6 +1420,10 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                         // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
                         Some((pad, nth)) => {
                             let mut v = crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net, &flashed);
+                            // `PAD::IsFreePad` (UI-LEFT-3 R3-7): the painter writes "*" on it
+                            if free_pads.contains(&format!("{}.{}", part.reference, q.number)) {
+                                v["free"] = json!(true);
+                            }
                             // The pad's own layers, for the 3D viewer's paste (r6 V6-5).
                             if let (Some(f), Some(obj)) = (footprint.as_ref(), v.as_object_mut()) {
                                 obj.insert("layers".into(), json!(crate::fp_json::pad_file_layers(&design, fp, f, pad)));

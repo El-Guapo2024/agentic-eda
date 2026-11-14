@@ -15,6 +15,7 @@
 import { stitchFilteredAsVia } from "../../kicad-port/viaStitch";
 import type { BoardState, Dimension, FieldInfo, Part } from "../../api/types";
 import { fpTextById, padIds, padParent } from "../../kicad-port/pcbItems";
+import { padStaysPad } from "../../kicad-port/freePads";
 import { ancestors } from "../../kicad-port/groupTree";
 import { artBounds, artHitDistance, artTextAsField, artTextShown, graphicsOf, layersOf, unionBox } from "../../kicad-port/fpArt";
 import { fpItemsHitDistance, fpPoints } from "../../kicad-port/fpBoardItems";
@@ -521,6 +522,11 @@ export function applyToolFilter(board: BoardState, candidates: readonly Selectio
     }
     const ref = padParent(board, c.id);
     if (!ref || parts.has(ref)) continue;
+    // with "Allow free pads" the pad stays a pad (`FilterCollectorForFreePads`, kicad-port/freePads.ts; UI-LEFT-3 R3-7)
+    if (padStaysPad()) {
+      out.push(c);
+      continue;
+    }
     const p = board.parts.find((q) => q.ref === ref);
     const hit = p ? partHit(p, xNm, yNm, layerVisible) : null;
     // the footprint of a pad on a side not shown, or of one without a courtyard, still stands for the pad: it is what the tool works on

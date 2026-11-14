@@ -150,8 +150,12 @@ fn a_shove_toward_the_edge_stops_at_the_clearance() {
     let pushed = pushed_toward_the_edge(true, mm(1.0)).expect("exactly the clearance is room enough");
     assert!(gap_to_outline(&pushed, mm(0.2)) >= 499_500.0, "{pushed:?}");
 
-    // SIG's tip at 800 would need GND at 400, 300 nm from the edge: the shove refuses instead of pushing it there.
-    assert!(pushed_toward_the_edge(true, mm(0.8)).is_none(), "a track is not pushed past the board's edge clearance");
+    // SIG's tip at 800 would need GND at 400, 300 um from the edge: GND is not pushed there but walks round the outline's cluster -- its sides touch
+    // one another, so the walk (`AssembleCluster( .., 0.0, .. )`) hugs them all -- the long way round, inside the edge clearance and round SIG's
+    // start, as KiCad's `SHOVE::onCollidingSolid` keeps it (no bound on the walk's length, UI-LEFT-3 R3-1).
+    let pushed = pushed_toward_the_edge(true, mm(0.8)).expect("GND walks round");
+    assert!(gap_to_outline(&pushed, mm(0.2)) >= 499_500.0, "a track is not pushed past the board's edge clearance: {pushed:?}");
+    assert!(pushed.iter().any(|q| q.y > mm(8.0)), "the long way round, past SIG's start at y = 8 mm: {pushed:?}");
     // Without the outline there is nothing to stop it, and GND ends 300 um from where the edge would be.
     let pushed = pushed_toward_the_edge(false, mm(0.8)).expect("with no outline the shove goes through");
     assert!(gap_to_outline(&pushed, mm(0.2)) < 400_000.0, "{pushed:?}");

@@ -82,7 +82,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
                     while end + 1 < idx.len() && idx[end + 1] == idx[end] + 1 {
                         end += 1;
                     }
-                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), anchor_points: Vec::new() }));
+                    node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::new(idx[k], idx[end]), pos: pad.center, shape: shape.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), free_pad: pad.free, anchor_points: Vec::new() }));
                     k = end + 1;
                 }
             }
@@ -100,7 +100,7 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
         let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
-        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), free_pad: pad.free, anchor_points: Vec::new() }));
     }
 
     // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
@@ -224,7 +224,7 @@ fn add_edge_solids<'a>(node: &mut Node, shapes: impl Iterator<Item = &'a eda_mod
                     continue;
                 }
                 let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: edge_source(prefix, index, shape.id()), edge: true, rule: 0, anchor_points: Vec::new() }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: band }, source: edge_source(prefix, index, shape.id()), edge: true, rule: 0, free_pad: false, anchor_points: Vec::new() }));
             }
         }
     }
@@ -305,7 +305,7 @@ fn add_keepouts(node: &mut Node, design: &Design, layers: &LayerMap, rules: &mut
             for pts in &pieces {
                 let n = pts.len() as i64;
                 let pos = Point { x: pts.iter().map(|p| p.x).sum::<Nm>() / n, y: pts.iter().map(|p| p.y).sum::<Nm>() / n };
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts: pts.clone() }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule, anchor_points: Vec::new() }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: Shape::Polygon { pts: pts.clone() }, source: format!("{}{}#{k}", Solid::KEEPOUT_SOURCE, z.id), edge: false, rule, free_pad: false, anchor_points: Vec::new() }));
                 k += 1;
             }
         }
@@ -377,7 +377,7 @@ fn add_copper_texts(node: &mut Node, design: &Design, layers: &LayerMap, rules: 
         let hull = text_bounding_hull(segs, r + TEXT_MAX_ERROR_NM, at, rot_deg);
         let source = format!("{}{id}", Solid::TEXT_SOURCE);
         let rule = rules.add_text(&source, layer);
-        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, free_pad: false, anchor_points: Vec::new() }));
     };
     for (i, t) in d.copper_texts.iter().enumerate() {
         if let Some(Shape::Strokes { segs, r }) = eda_drc::board::footprint_text_shape(t) {
@@ -472,7 +472,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
                 Shape::Strokes { segs, r } if curved => Shape::Strokes { segs, r: r + eda_model::outline::MAX_ERROR_NM },
                 piece => piece,
             };
-            node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: anchors.clone() }));
+            node.add(Item::Solid(Solid { net: net.clone(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, free_pad: false, anchor_points: anchors.clone() }));
         }
     };
     let add_obstacle = |node: &mut Node, rules: &mut crate::rule_resolver::RuleResolver, id: &str, layer: i32, pieces: Vec<Shape>, class: Class, type_name: Option<&str>| {
@@ -481,7 +481,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
         for (k, piece) in pieces.into_iter().enumerate() {
             let (x0, y0, x1, y1) = piece.bbox(Nm::ZERO);
             let pos = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
-            node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, anchor_points: Vec::new() }));
+            node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos, shape: piece, source: format!("{source}#{k}"), edge: false, rule, free_pad: false, anchor_points: Vec::new() }));
         }
     };
     if let Some(d) = design.drawings.as_ref() {
@@ -569,7 +569,7 @@ fn add_copper_graphics(node: &mut Node, design: &Design, model: &ConstraintModel
                 let hull = text_bounding_hull(&segs, r + TEXT_MAX_ERROR_NM, t.at, eda_drc::board::footprint_text_draw_rotation(&t));
                 let source = format!("{}{fp}:{i}", Solid::TEXT_SOURCE);
                 let rule = rules.add_text(&source, layer);
-                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: t.at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, anchor_points: Vec::new() }));
+                node.add(Item::Solid(Solid { net: crate::item::not_a_net(), layers: crate::layer::LayerRange::single(layer), pos: t.at, shape: Shape::Polygon { pts: hull }, source, edge: false, rule, free_pad: false, anchor_points: Vec::new() }));
             }
         }
     }
@@ -697,6 +697,29 @@ mod tests {
         // off the hole, the edge is the edge even for the world
         let off = Shape::Stadium { a: Point { x: mm(11.0), y: mm(0.3) }, b: Point { x: mm(11.0), y: mm(0.3) }, r: mm(0.1) };
         assert!(node.colliding_with(&off, &net_of("N1"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts { root_world: true, ..Default::default() }).iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.edge)));
+    }
+
+    /// UI-LEFT-3 R3-7: a free through-hole pad (`IsFreePad`: J1.1 alone on its net, `unconnected-(J1-Pad1)`, pin type "free") is a free solid, and its
+    /// hole is free too (`HOLE`'s `IsFreePad()` is its parent pad's): a track of another net ending in its middle collides with neither. The same pad with
+    /// a passive pin keeps both clearances.
+    #[test]
+    fn a_free_pad_and_its_hole_have_no_clearance_to_another_net() {
+        let into = Shape::Stadium { a: Point { x: mm(10.0), y: mm(5.0) }, b: Point { x: mm(10.0), y: Nm::ZERO }, r: mm(0.1) };
+        for (pin_type, free) in [("free", true), ("passive", false)] {
+            let (mut design, mut model) = edge_pad_board(Default::default(), false);
+            model.nets.clear();
+            let info = &mut design.drawings.as_mut().unwrap().footprint_extras[0].pads[0];
+            info.net = Some("unconnected-(J1-Pad1)".into());
+            info.pin_type = pin_type.into();
+            let (node, _) = build_node(&design, &model);
+            let pad = node.iter().find_map(|(_, it)| match it {
+                Item::Solid(s) if s.source == "J1.1" => Some(s.free_pad),
+                _ => None,
+            });
+            assert_eq!(pad, Some(free), "{pin_type}");
+            let hits = node.colliding_with(&into, &net_of("SIG"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts::default());
+            assert_eq!(hits.iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if !s.edge)), !free, "{pin_type}: {:?}", hits.iter().map(|o| node.get(o.id).map(|i| i.kind())).collect::<Vec<_>>());
+        }
     }
 
     /// UI-LEFT-2 RR6: `isStartingPointRoutable`'s pair half asks the world itself too (`m_world->CheckColliding( &dummyStartLineA / B, ITEM::ANY_T )`),

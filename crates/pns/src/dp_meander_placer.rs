@@ -827,7 +827,7 @@ mod tests {
     }
 
     fn pad(net: &str, at: Point) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() })
     }
 
     fn seg(net: &str, a: Point, b: Point) -> Item {
@@ -933,7 +933,7 @@ mod tests {
     /// downwards: P from (0, 0) along to (20, 0) mm, round to (25, 5) mm and down to (25, 30) mm; N alongside.
     fn arc_board() -> (Node, ItemId, ItemId, ItemId) {
         let mut w = Node::new();
-        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.15) }, source: name.into(), edge: false, rule: 0, anchor_points: Vec::new() });
+        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.15) }, source: name.into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() });
         w.add(named("USB_P", p(0, 0), "J1.1"));
         w.add(named("USB_N", p(0, 400_000), "J1.2"));
         w.add(named("USB_P", p(25_000_000, 30_000_000), "U1.1"));

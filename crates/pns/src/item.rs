@@ -45,8 +45,12 @@ pub fn net_of(name: &str) -> Net {
 /// **Differs:** the board outline, a copper text and a non-plated hole are given [`not_a_net`] instead, which is the net of nothing a route
 /// can be on: a route of no net keeps its clearance from them. (KiCad's outline shapes and NPTH pads carry `OrphanedItem()` too, so its
 /// no-net route would not; a copper text has no net handle at all, `nullptr`, and collides there as here.)
+/// Whether `n` is no net (`None` or `""`): KiCad's orphaned net, net code 0 (`NETINFO_LIST::OrphanedItem()`, `GetNetCode( aNet ) <= 0`).
+pub fn no_net(n: &Net) -> bool {
+    n.as_deref().is_none_or(str::is_empty)
+}
+
 pub fn same_net(a: &Net, b: &Net) -> bool {
-    let no_net = |n: &Net| n.as_deref().is_none_or(str::is_empty);
     match (a, b) {
         (Some(x), Some(y)) if x == y => true,
         _ => no_net(a) && no_net(b),
@@ -89,6 +93,10 @@ pub struct Solid {
     /// arc's ends and middle, a polygon's corners, a filled shape's centre. Empty for everything else, whose one anchor is `pos`
     /// (`SOLID::Anchor`: `m_anchorPoints.empty() ? m_pos : m_anchorPoints[n]`).
     pub anchor_points: Vec<Point>,
+    /// `ITEM::IsFreePad` (`SetIsFreePad`, `syncPad`: `if( aPad->IsFreePad() ) solid->SetIsFreePad()`): a pad of a "free" pin alone on its net
+    /// ([`eda_drc::board::DrcPad::free`]). `collideSimple` gives it no clearance to an item of another net -- "a pad associated with a "free" pin (NIC)
+    /// doesn't have a net until it has been used" -- and `pickSingleItem` takes it as the end of a route of any net when the cursor is in it.
+    pub free_pad: bool,
 }
 
 impl Solid {

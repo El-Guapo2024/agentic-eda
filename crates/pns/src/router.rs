@@ -579,6 +579,12 @@ impl Router {
         self.session().map(|s| s.placer.preview(s.world.as_ref().unwrap_or(&self.world), &self.rules, &self.settings, at))
     }
 
+    /// `ROUTER::Move( aP, aEndItem )` with the end item given rather than picked ([`LinePlacer::preview_with_end_item`]): KiCad's log player replays a
+    /// recorded session with each event's logged items. `None` if no route is in progress.
+    pub fn preview_with_end_item(&self, at: Point, end: Option<ItemId>) -> Option<Preview> {
+        self.session().map(|s| s.placer.preview_with_end_item(s.world.as_ref().unwrap_or(&self.world), &self.rules, &self.settings, at, end))
+    }
+
     /// `ROUTER::movePlacing`'s clearances of a preview (UI-LEFT-3 P3-6): `GetRuleResolver()->Clearance( line, nullptr )` of the head, and of the
     /// via at its end `Clearance( &via, nullptr )`, raised to the hole's own clearance less the annular ring where that is more
     /// (`excessHoleClearance = holeClearance - annularWidth`). What `DisplayItem` draws the head's and the via's clearance outlines with.
@@ -1079,7 +1085,6 @@ impl Router {
     /// success, same as upstream's `StopRouting()` following a successful
     /// `CommitPlacement()`.
     pub fn finish(&mut self, at: Point) -> Option<RouteCommit> {
-        let net_name = self.session()?.placer.net.clone();
         let (width, layer) = {
             let s = self.session()?;
             (s.placer.width, s.placer.current_layer)
@@ -1096,6 +1101,8 @@ impl Router {
             }
             runs
         };
+        // read after `FixRoute`: in Highlight collisions a route of no net takes its end item's net (`m_currentNet = aEndItem->Net()`)
+        let net_name = self.session()?.placer.net.clone();
         let mut commit = self.build_commit(&net_name, runs, layer, width);
         // nothing placed, nothing committed (`CommitRouting`: "if( m_state == ROUTE_TRACK && !m_placer->HasPlacedAnything() ) return"),
         // and so no track is cut either

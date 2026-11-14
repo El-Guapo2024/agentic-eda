@@ -521,6 +521,8 @@ struct PadItem {
     layers: Vec<String>,
     /// `UNCONNECTED_LAYER_MODE` of the pad this is a piece of (see [`apply_unconnected_layers`]).
     unconnected: eda_model::padstack::UnconnectedLayers,
+    /// `PAD::IsFreePad` ([`eda_drc::board::free_pads`]): the first net whose track touches it is its net for `routing_clearance`.
+    free: bool,
 }
 
 /// A padstack pad is one `PadItem` for each group of layers that shares a shape (`PADSTACK::ForEachUniqueLayer`), all with the pad's `refpin`: the connectivity
@@ -663,6 +665,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // Pads.
     let mut pads: Vec<PadItem> = Vec::new();
     let mut fp_ok = true;
+    let free_pads = eda_drc::board::free_pads(design, model);
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(geoms) = placed_pads(model, part, fp) else {
@@ -694,7 +697,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
             };
             let unconnected = source.as_ref().map(|p| p.ext.stack.unconnected).unwrap_or_default();
             for (geom, copper, rect, layers) in pad_pieces_by_layer(model, fp, &source, g, copper, layers) {
-                pads.push(PadItem { refpin: refpin.clone(), net: net.clone(), rect, geom, copper, layers, unconnected });
+                pads.push(PadItem { refpin: refpin.clone(), net: net.clone(), rect, geom, copper, layers, unconnected, free: free_pads.contains(&refpin) });
             }
         }
     }
@@ -1337,9 +1340,23 @@ fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearan
             }
         }
     }
+    // `DRC_TEST_PROVIDER_COPPER_CLEARANCE::testTrackClearances`' free pads (`IsFreePad`): the first net whose track or via touches one
+    // (`other->GetEffectiveShape( layer )->Collide( trackShape )`) is its net (`freePadsUsageMap[ other ] = track->GetNetCode()`), and copper of that
+    // net touching it is no violation; another net's, or copper near it without touching, is tested as against any pad
+    let mut free_pad_nets: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    let mut takes_free_pad = |track: &Copper, k: usize| -> bool {
+        let p = &pad_copper[k];
+        if !pads[k].free || !track.layers.overlaps(&p.layers) || track.shape.gap_to(&p.shape) > 0.0 {
+            return false;
+        }
+        free_pad_nets.entry(pads[k].refpin.as_str()).or_insert_with(|| track.net.to_string()) == track.net
+    };
     // seg-pad
     for s in &segs {
-        for p in &pad_copper {
+        for (k, p) in pad_copper.iter().enumerate() {
+            if takes_free_pad(s, k) {
+                continue;
+            }
             if let Some(gap) = gap_of(s, p) {
                 fail(s, p, gap);
             }
@@ -1352,7 +1369,10 @@ fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearan
                 fail(v, s, gap);
             }
         }
-        for p in &pad_copper {
+        for (k, p) in pad_copper.iter().enumerate() {
+            if takes_free_pad(v, k) {
+                continue;
+            }
             if let Some(gap) = gap_of(v, p) {
                 fail(v, p, gap);
             }
@@ -1469,6 +1489,37 @@ mod tests {
             "expected routing_stackup to fail, got {:?}",
             out.iter().map(|c| (&c.check, &c.status)).collect::<Vec<_>>()
         );
+    }
+
+    /// UI-LEFT-3 R3-7: `testTrackClearances`' free pads. R1.1 alone on its net (`unconnected-(R1-Pad1)`) with the pin type "free" (a pad edit's,
+    /// `PAD::SetPinType`) is `IsFreePad`: the first net whose track touches it is its net, so net A's track ending in it is clean; net C's touching
+    /// it too then fails. With a passive pin the pad is no free pad, and A's track ending in it fails.
+    #[test]
+    fn a_free_pad_takes_the_first_net_that_touches_it() {
+        let free_r1_1 = |rt: RoutingSection, pin_type: &str| {
+            let (mut d, mut m) = wfixture(rt);
+            m.nets.retain(|n| n.name != "B");
+            m.nets.push(Net { name: "C".into(), pins: vec![] });
+            let mut edit = eda_model::fp_edit::FootprintEdit { id: "R1".into(), ..Default::default() };
+            edit.set_pad(eda_model::fp_edit::PadEdit { pin_type: Some(pin_type.into()), ..eda_model::fp_edit::PadEdit::none("1", 1) });
+            d.drawings = Some(eda_model::ir::DrawingsSection { footprint_edits: vec![edit], ..Default::default() });
+            (d, m)
+        };
+        // A comes from above into R1.1's centre (4175, 5000)
+        let a_in = track("A", &[(mm(4.175), mm(1.0)), (mm(4.175), mm(5.0))]);
+        let c_in = track("C", &[(mm(1.0), mm(5.0)), (mm(4.175), mm(5.0))]);
+        let rt = |tracks: Vec<Track>| RoutingSection { tracks, ..clean_routing() };
+        let (d, m) = free_r1_1(rt(vec![a_in.clone()]), "free");
+        assert_eq!(eda_drc::board::free_pads(&d, &m).into_iter().collect::<Vec<_>>(), ["R1.1"]);
+        assert!(fails(&d, &m, "routing_clearance").is_empty(), "A's track ends in the free pad: {:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = free_r1_1(rt(vec![a_in.clone(), c_in]), "free");
+        let f = fails(&d, &m, "routing_clearance");
+        assert!(f.iter().any(|c| c.location.as_deref().is_some_and(|l| l.starts_with("C#") && l.ends_with("/R1.1"))), "C's track touches a free pad A has taken: {f:?}");
+        assert!(!f.iter().any(|c| c.location.as_deref().is_some_and(|l| l.starts_with("A#") && l.ends_with("/R1.1"))), "{f:?}");
+        // the same pad with a passive pin is no free pad: A's track is a short to it
+        let (d, m) = free_r1_1(rt(vec![a_in]), "passive");
+        assert!(eda_drc::board::free_pads(&d, &m).is_empty());
+        assert!(!fails(&d, &m, "routing_clearance").is_empty());
     }
 
     #[test]

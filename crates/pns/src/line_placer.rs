@@ -60,7 +60,7 @@ fn head_effort(settings: &RoutingSettings, manually_forced: bool) -> u32 {
 use crate::arcs::ArcPts;
 use crate::direction45::Direction45;
 use crate::mouse_trail::MouseTrailTracer;
-use crate::item::{Item, ItemId, Net};
+use crate::item::{no_net, same_net, Item, ItemId, Net};
 use crate::layer::LayerRange;
 use crate::line::Line;
 use crate::node::Node;
@@ -103,6 +103,9 @@ pub struct Preview {
     /// `snapped_end` is in the middle of this same-net track (`SplitAdjacentSegments( m_lastNode, aEndItem, splitPoint )`): the route
     /// ends on it, and finishing splits it there.
     pub snapped_segment: Option<ItemId>,
+    /// The item `snapped_end` is on (`m_endItem`, what `updateEndItem` picked): of the route's net, or -- for a route of no net, whose orphaned net
+    /// handle has net code 0 (`GetNetCode( aNet ) <= 0`) -- of any net. `FixRoute` tells a real end by it (`m_currentNet == aEndItem->Net()`).
+    pub end_item: Option<ItemId>,
     /// Other tracks/vias `Mode::Shove` would displace if this preview were
     /// accepted right now -- empty in every other mode. Transient, exactly
     /// like `head`: nothing here is real until `fix`/`finish` absorbs it.
@@ -764,8 +767,26 @@ impl LinePlacer {
     /// the world this shove left); nothing is committed until
     /// [`Self::fix`]/[`Self::finish`] accepts it (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
+        self.preview_with(node, rules, settings, p, None)
+    }
+
+    /// `ROUTER::Move( aP, aEndItem )` with the end item given, not picked: what KiCad's log player does with a recorded session (`PNS_LOG_PLAYER`
+    /// passes each event's logged items, `uuids`), so a session recorded when the tool picked no end item replays with none. `end` of `None` is
+    /// `Move( aP, nullptr )`; `Some(id)` lands on the item as `snapToItem` does.
+    pub fn preview_with_end_item(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, end: Option<ItemId>) -> Preview {
+        self.preview_with(node, rules, settings, p, Some(end))
+    }
+
+    fn preview_with(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, given_end: Option<Option<ItemId>>) -> Preview {
         self.begin_move(p);
-        let (snapped_end, snapped_segment) = self.snap_end(node, settings, p);
+        let (snapped_end, snapped_segment, end_item) = match given_end {
+            None => self.snap_end(node, settings, p),
+            Some(None) => (None, None, None),
+            Some(Some(id)) => match node.snap_to_item(id, p) {
+                Some((at, track)) => (Some(at), track, Some(id)),
+                None => (None, None, None),
+            },
+        };
         let target = snapped_end.unwrap_or(p);
         let head_result = self.build_head(node, rules, settings, target);
         *self.last_world.borrow_mut() = head_result.world.clone();
@@ -775,7 +796,7 @@ impl LinePlacer {
         head.arcs = head_result.arcs;
         head.simplify();
         // a head kept from an earlier `Move` does not reach the end the cursor is on
-        let (snapped_end, snapped_segment) = if head_result.kept && snapped_end.is_some() && head.last() != snapped_end { (None, None) } else { (snapped_end, snapped_segment) };
+        let (snapped_end, snapped_segment, end_item) = if head_result.kept && snapped_end.is_some() && head.last() != snapped_end { (None, None, None) } else { (snapped_end, snapped_segment, end_item) };
         let mut snapped_end = snapped_end;
         // `Move`: a route that ends on a track it runs along (its last segment collinear with the track's and overlapping it) ends
         // where it first touches the track, not at the cursor further along it
@@ -817,30 +838,33 @@ impl LinePlacer {
         if let Some(w) = head.pts.windows(2).find(|w| w[0] != w[1]) {
             self.last_head_dir.set(Direction45::from_seg(w[0], w[1]));
         }
-        Preview { runs: head_result.world.placed_runs(&self.runs), head, colliding, via, snapped_end, snapped_segment, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
+        Preview { runs: head_result.world.placed_runs(&self.runs), head, colliding, via, snapped_end, snapped_segment, end_item, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
     }
 
     /// Where a cursor at `p` ends the route, if it does (`TOOL_BASE::updateEndItem`, `pickSingleItem` for the net, `snapToItem`): on
     /// the same-net pad, via or track end it is on or near; or, with "snap to tracks" (the magnetic setting), in the middle of the
     /// same-net track it is on -- the studio's own snapping has put it exactly on the centre line -- which is then split there. The
-    /// track the route started in the middle of is not an end. `(the point, the track when it is in the middle of one)`.
-    fn snap_end(&self, node: &Node, settings: &RoutingSettings, p: Point) -> (Option<Point>, Option<ItemId>) {
+    /// track the route started in the middle of is not an end. A route of no net takes an item of any net (`pickSingleItem`'s
+    /// `GetNetCode( aNet ) <= 0`: the orphaned net handle `LINE_PLACER::Start` gives a route started on nothing has net code 0; UI-LEFT-3 R3-2).
+    /// `(the point, the track when it is in the middle of one, the end item)`.
+    fn snap_end(&self, node: &Node, settings: &RoutingSettings, p: Point) -> (Option<Point>, Option<ItemId>, Option<ItemId>) {
         let layers = LayerRange::single(self.current_layer);
-        if let Some((_, a)) = node.nearest_anchor(p, layers, EXACT_NM, Some(&self.net)) {
-            return (Some(a), None);
+        let net = (!no_net(&self.net)).then_some(&self.net);
+        if let Some((id, a)) = node.nearest_anchor(p, layers, EXACT_NM, net) {
+            return (Some(a), None, Some(id));
         }
         if settings.snap_to_tracks {
-            if let Some(id) = node.segment_at(p, self.current_layer, Some(&self.net), Some(EXACT_NM), &self.exclude_end) {
+            if let Some(id) = node.segment_at(p, self.current_layer, net, Some(EXACT_NM), &self.exclude_end) {
                 match node.get(id) {
                     Some(Item::Segment(s)) => {
                         let seg = eda_drc::kimath::Seg::new(s.a, s.b);
                         let on = if seg.sq_distance_to_point(p) == 0 { p } else { seg.nearest_point(p) };
-                        return (Some(on), Some(id));
+                        return (Some(on), Some(id), Some(id));
                     }
                     // `snapToItem` for `ARC_T`: the point of the arc nearest the cursor (`AlignToArc`)
                     Some(Item::Arc(a)) => {
                         let on = if a.arc.distance_to(p) < 0.5 { p } else { a.arc.nearest_point(p) };
-                        return (Some(on), Some(id));
+                        return (Some(on), Some(id), Some(id));
                     }
                     _ => {}
                 }
@@ -849,12 +873,35 @@ impl LinePlacer {
         // with nothing exactly there, what `pickSingleItem( mousePos, net, layer, false, { m_startItem } )` finds within the grab radius -- the grid
         // (`maxSlopRadius`, UI-LEFT R7) -- by its copper, not its anchor; then `snapToItem` (a track's middle only with snap to tracks, `checkSnap`)
         let layer = if self.placing_via { None } else { Some(self.current_layer) };
-        let Some(id) = node.pick_single_item(p, Some(&self.net), layer, self.current_layer, settings.grab_radius, &self.exclude_end, settings.mode == Mode::MarkObstacles) else { return (None, None) };
+        let Some(id) = node.pick_single_item(p, net, layer, self.current_layer, settings.grab_radius, &self.exclude_end, settings.mode == Mode::MarkObstacles) else { return (None, None, None) };
         match node.snap_to_item(id, p) {
-            Some((at, None)) => (Some(at), None),
-            Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track)),
-            _ => (None, None),
+            Some((at, None)) => (Some(at), None, Some(id)),
+            Some((at, Some(track))) if settings.snap_to_tracks => (Some(at), Some(track), Some(id)),
+            _ => (None, None, None),
         }
+    }
+
+    /// `LINE_PLACER::FixRoute`'s `realEnd`: the head ends on an item (`aEndItem`) of the route's net (`m_currentNet == aEndItem->Net()`). In Highlight
+    /// collisions "the user has indicated a connection should be made. If either the trace or endItem is net-less, then allow the connection by adopting
+    /// the net of the other": a route of no net takes the end item's net (`m_currentNet = aEndItem->Net(); pl.SetNet( m_currentNet )`, here the whole
+    /// route's, as the board's net propagation would make it), and an end item of no net is taken as the route's (`aEndItem->SetNet( m_currentNet )`, the
+    /// router's copy; the board keeps the item as it is). An item of another net -- a pad of any net under a route of no net -- is not a real end.
+    /// The collision check that follows (`!Settings().AllowDRCViolations()`: `m_world->CheckColliding( &pl )`) asks the line with its new net, so
+    /// [`Preview::colliding`] is asked again after an adoption.
+    fn real_end(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, preview: &mut Preview) -> bool {
+        let (Some(_), Some(item)) = (preview.snapped_end, preview.end_item.and_then(|id| node.get(id))) else { return false };
+        if settings.mode == Mode::MarkObstacles {
+            if no_net(&self.net) {
+                self.net = item.net().clone();
+                preview.head.net = self.net.clone();
+                preview.colliding = walkaround::path_collides(node, rules, &self.net, self.current_layer, self.width, &preview.head.pts, &self.exclude());
+                return true;
+            }
+            if no_net(item.net()) {
+                return true;
+            }
+        }
+        same_net(item.net(), &self.net)
     }
 
     /// `LINE_PLACER::FixRoute`'s own `!Settings().AllowDRCViolations()`
@@ -900,16 +947,16 @@ impl LinePlacer {
     /// disagree) as a fixed run, advance posture from its last segment,
     /// and reset for the next leg.
     pub fn fix(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> FixOutcome {
-        let preview = self.preview(node, rules, settings, p);
+        let mut preview = self.preview(node, rules, settings, p);
+        let real_end = self.real_end(node, rules, settings, &mut preview);
         if preview.colliding && !Self::may_commit_despite_collision(settings) {
             return FixOutcome::Blocked;
         }
         if preview.head.point_count() < 2 {
             // Zero movement: only a legitimate "finish" if it's onto a
             // real anchor, otherwise there is nothing to fix.
-            return if preview.snapped_end.is_some() { FixOutcome::Fixed { real_end: true } } else { FixOutcome::Blocked };
+            return if real_end { FixOutcome::Fixed { real_end: true } } else { FixOutcome::Blocked };
         }
-        let real_end = preview.snapped_end.is_some();
         if real_end {
             self.record_end_split(&preview);
         }
@@ -1141,13 +1188,13 @@ impl LinePlacer {
     /// the session is left unmodified (idle/placement state untouched) so
     /// the caller can keep routing instead.
     pub fn finish(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Option<Vec<Line>> {
-        let preview = self.preview(node, rules, settings, p);
+        let mut preview = self.preview(node, rules, settings, p);
+        let real_end = self.real_end(node, rules, settings, &mut preview);
         if preview.colliding && !Self::may_commit_despite_collision(settings) {
             return None;
         }
         let world = self.last_world.borrow().clone();
         self.take_displacement(&world);
-        let real_end = preview.snapped_end.is_some();
         if real_end {
             self.record_end_split(&preview);
         }
@@ -1644,7 +1691,7 @@ mod tests {
     #[test]
     fn walks_around_an_obstacle_between_fixed_points() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.5), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.5), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -1657,7 +1704,7 @@ mod tests {
     #[test]
     fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(1.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(1.0), y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         assert!(!settings.can_violate_drc);
@@ -1723,7 +1770,7 @@ mod tests {
     #[test]
     fn a_via_placed_on_a_pad_is_pushed_off_within_the_via_force_iteration_limit() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let mut placer = LinePlacer::start(&node, Point { x: mm(3.0), y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
         placer.toggle_via(true, mm(0.6), mm(0.3));
@@ -1751,7 +1798,7 @@ mod tests {
     fn a_failed_route_head_keeps_the_last_good_head() {
         let free = Node::new();
         let mut blocked = Node::new();
-        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(0.3), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(0.3), y: Nm::ZERO }, r: mm(0.1) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(0.3), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(0.3), y: Nm::ZERO }, r: mm(0.1) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         for mode in [Mode::Walkaround, Mode::Shove] {
             let settings = RoutingSettings { mode, ..RoutingSettings::default() };
@@ -1791,13 +1838,37 @@ mod tests {
     #[test]
     fn snaps_onto_a_same_net_pad_and_reports_real_end() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
         let outcome = placer.fix(&node, &rules, &settings, Point { x: mm(3.01), y: mm(0.01) });
         assert_eq!(outcome, FixOutcome::Fixed { real_end: true }, "a click near a same-net pad must finish the route");
         assert_eq!(placer.runs[0].last(), Some(Point { x: mm(3.0), y: Nm::ZERO }), "the fixed point must snap exactly onto the pad centre");
+    }
+
+    /// UI-LEFT-3 R3-2: a route of no net (`LINE_PLACER::Start`'s orphaned net handle, net code 0) ends on an item of any net -- `pickSingleItem`'s
+    /// `GetNetCode( aNet ) <= 0` -- but it is no real end (`m_currentNet == aEndItem->Net()`), unless Highlight collisions adopts the item's net.
+    #[test]
+    fn a_route_of_no_net_takes_an_end_item_of_any_net() {
+        let mut node = Node::new();
+        let gnd = node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(3.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(3.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U2.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
+        let rules = rules();
+        let near = Point { x: mm(3.01), y: mm(0.01) };
+        let walk = RoutingSettings::default();
+        let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, None, 0, mm(0.2));
+        let pv = placer.preview(&node, &rules, &walk, near);
+        assert_eq!((pv.snapped_end, pv.end_item), (Some(Point { x: mm(3.0), y: Nm::ZERO }), Some(gnd)), "the GND pad is the end item of a route of no net");
+        let logged = placer.preview_with_end_item(&node, &rules, &walk, near, None);
+        assert_eq!((logged.snapped_end, logged.end_item), (None, None), "a move given no end item has none");
+        // a route of a net keeps to its net
+        let sig = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
+        assert_eq!(sig.preview(&node, &rules, &walk, near).end_item, None);
+        // Highlight collisions: the click ends the route there, and the route takes GND
+        let mark = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, None, 0, mm(0.2));
+        assert_eq!(placer.fix(&node, &rules, &mark, near), FixOutcome::Fixed { real_end: true });
+        assert_eq!(placer.net.as_deref(), Some("GND"), "the net of the end item is adopted");
     }
 
     #[test]
@@ -1846,7 +1917,7 @@ mod tests {
         use crate::item::{Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(2.0), y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: mm(2.0), y: Nm::ZERO }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: mm(4.3), y: mm(-2.5) }, b: Point { x: mm(4.3), y: mm(-0.3) }, width: mm(0.2), source_track: Some(("trkP".into(), 0)), locked: false }));
         let rules = rules();
         let placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -2167,7 +2238,7 @@ mod tests {
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let pads = |with_start: bool| {
             let mut node = Node::new();
-            let mut pad = |c: Point| node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.15) }, source: format!("U1.{}", c.x.get()), edge: false, rule: 0, anchor_points: Vec::new() }));
+            let mut pad = |c: Point| node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.15) }, source: format!("U1.{}", c.x.get()), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
             if with_start {
                 pad(at(0.0, 0.0));
             }
@@ -2200,7 +2271,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         let mut pv = None;
@@ -2223,7 +2294,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(3.0, 0.0), shape: Shape::Circle { c: at(3.0, 0.0), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::Walkaround, corner_mode: crate::direction45::CornerMode::Rounded45, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         let mut merged = false;
@@ -2276,7 +2347,7 @@ mod tests {
         assert_eq!((st.tail.clone(), st.head.len(), st.direction), (vec![at(0.0, 0.0)], 0, Direction45::E));
         // a pad on the straight run from the start: the walk back stops at the segment whose trace meets it, and the last clear one is taken
         let mut blocked = Node::new();
-        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(1.5, 0.3), shape: Shape::Circle { c: at(1.5, 0.3), r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        blocked.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(1.5, 0.3), shape: Shape::Circle { c: at(1.5, 0.3), r: mm(0.2) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let mut st = ts(&[(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0)], &[(3.0, 1.0), (4.0, 1.0)]);
         assert!(placer.reduce_tail(&mut st, &blocked, &rules, &settings, at(5.0, 0.0)));
         assert_eq!(st.tail, vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 1.0)]);
@@ -2290,7 +2361,7 @@ mod tests {
         let rules = rules();
         let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(5.0, 0.0), shape: Shape::Rect { x0: mm(4.5), y0: mm(-0.5), x1: mm(5.5), y1: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: at(5.0, 0.0), shape: Shape::Rect { x0: mm(4.5), y0: mm(-0.5), x1: mm(5.5), y1: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
         // the hull: the pad grown by the clearance and half the width, its left side at 4.5 - 0.2 - 0.1 = 4.2 mm
@@ -2369,7 +2440,7 @@ mod tests {
     #[test]
     fn a_head_via_on_a_pad_is_pushed_off_it_and_the_head_ends_at_the_via() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: mm(0.1) }, shape: Shape::Circle { c: Point { x: mm(4.0), y: mm(0.1) }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: mm(4.0), y: mm(0.1) }, shape: Shape::Circle { c: Point { x: mm(4.0), y: mm(0.1) }, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let rules = rules();
         let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
@@ -2480,7 +2551,7 @@ mod tests {
         use crate::item::Segment;
         let mut node = Node::new();
         for at in [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: mm(3.0), y: Nm::ZERO }] {
-            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "P".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+            node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: at, shape: Shape::Circle { c: at, r: mm(0.3) }, source: "P".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         }
         let detour = [Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::ZERO, y: mm(2.0) }, Point { x: mm(3.0), y: mm(2.0) }, Point { x: mm(3.0), y: Nm::ZERO }];
         for (k, w) in detour.windows(2).enumerate() {

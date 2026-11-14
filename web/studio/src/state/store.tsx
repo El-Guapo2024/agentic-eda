@@ -61,6 +61,7 @@ import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { newIdsAfter } from "../kicad-port/schClipboard";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { setAllowFreePads } from "../kicad-port/freePads";
 import { schCmdPrefsOf } from "../kicad-port/schCmdPrefs";
 import { type RouterSettings } from "../kicad-port/routerSettings";
 import { loadRouterSettings, saveRouterSettings } from "./routerSettingsStorage";
@@ -2009,6 +2010,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     savePreferences(browserStorage(), state.prefs);
     // what the commands carry to the server (Symbol Field Automatic Placement, a new sheet's colours: kicad-port/schCmdPrefs.ts)
     setSchCmdPrefs(schCmdPrefsOf(state.prefs));
+    // "Allow free pads", which the edit tools' pure modules read (kicad-port/freePads.ts, UI-LEFT-3 R3-7)
+    setAllowFreePads(state.prefs.allowFreePads);
   }, [state.prefs]);
   useEffect(() => saveAngleSnapMode(browserStorage(), state.pcbx.angleSnapMode), [state.pcbx.angleSnapMode]);
   const stateRef = useRef(state);
@@ -2695,8 +2698,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const board = stateRef.current.board;
       if (!board) return;
       // `Duplicate` filters markers, groups and free pads only: a locked item is copied too, and its copy is locked (`BOARD_ITEM::Duplicate` is a `Clone()`), a
-      // pad stands for its footprint.
-      const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
+      // pad stands for its footprint, "Allow free pads" or not (`FilterCollectorForFreePads( aCollector, true )`).
+      const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false, forcePromotion: true });
       if (ids.length === 0) return;
       // "Duplicating tuning patterns alone is not supported": `if( selection.Size() == 1 && selection.CountType( PCB_GENERATOR_T ) ) return 0;` (UI-LEFT-2 RR5)
       if (ids.length === 1 && (board.drawings?.tuning_patterns ?? []).some((p) => p.id === ids[0])) return;

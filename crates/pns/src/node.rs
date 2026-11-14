@@ -1126,6 +1126,8 @@ impl Node {
     ///   nets");
     /// - a keepout rule area (`IsKeepout( this, aHead, &enforce )`) is an exact boundary ("keepouts are exact boundary; no clearance") for what it
     ///   keeps out, and nothing for the rest ([`crate::rule_resolver::Keepout::keeps_out`]);
+    /// - a free pad (`IsFreePad()` of either side, [`crate::item::Solid::free_pad`]) has no clearance to another net, its hole neither (the hole's
+    ///   `IsFreePad()` is its parent pad's);
     /// - copper at the rules' clearance ([`Self::clearance_between`]), unless the item is a pad of a net-tie footprint and the collision is on a
     ///   pad of that footprint of the probe's own net (`checkNetTie`: `IsNetTieExclusion( aHead, pos, this )`, the position on the item as
     ///   `shapeH->Collide( shapeI, .., &pos )` gives it, the nearest point of the item);
@@ -1176,7 +1178,11 @@ impl Node {
             Side::Item(h) => r.is_flashed_on(h, item.layers()),
             _ => r.is_via_flashed_on(opts.head_via, layers, item.layers()),
         });
-        if !same && flashed && head_flashed {
+        // `else if( differentNetsOnly && ( IsFreePad() || aHead->IsFreePad() ) ) clearance = -1;`: "a pad associated with a "free" pin (NIC) doesn't
+        // have a net until it has been used" -- no clearance to another net, for its copper and its hole alike
+        let is_free = |it: &Item| matches!(it, Item::Solid(s) if s.free_pad);
+        let free = is_free(item) || matches!(head, Side::Item(h) if is_free(h));
+        if !same && !free && flashed && head_flashed {
             // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on): `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 um)
             let clearance = self.clearance_between(rules, Side::Item(item), head, opts.use_epsilon);
             match shape.collides(&item_shape, collide_clearance(clearance)) {
@@ -1216,8 +1222,9 @@ impl Node {
             _ => None,
         };
         let reach = |depth: Nm| clear_at.is_none_or(|c| r.hole_reach(c, depth));
-        let item_hole_counts = !same && head_flashed && reach(item_depth);
-        let head_counts = head_hole.is_some_and(|(_, _, d)| same || reach(d));
+        // a free pad's hole is free too (`IsFreePad()`: `m_isFreePad || ( ParentPadVia() && ParentPadVia()->m_isFreePad )`, the hole's parent pad)
+        let item_hole_counts = !same && !free && head_flashed && reach(item_depth);
+        let head_counts = !free && head_hole.is_some_and(|(_, _, d)| same || reach(d));
         if !item_hole_counts && !head_counts {
             return None;
         }
@@ -1526,11 +1533,10 @@ impl Node {
     /// a routable pad or via on the layer `tl` nearest by its centre (`prioritized[0]`), a track or arc there nearest by its nearer end (`[1]`), then
     /// the same kinds on any layer (`[2]`, `[3]`); with `net` (`aNet`) only items of that net -- but in Highlight collisions (`mark_obstacles`) an item
     /// of no net on `tl` as a last resort ("Allow unconnected items as last resort in RM_MarkObstacles mode", `prioritized[4]`, the last one found,
-    /// UI-LEFT-2 RR7); with `layer` (`aLayer >= 0`) only one on that layer is returned. **Not ported:** a free pad under the cursor (`IsFreePad`: the
-    /// studio's router has no free pads, a pad of a "free" pin is an item of no net); a route of no net (`net` of `None`) keeps to items of no net,
-    /// where 8303b2ad's tool, whose orphaned net handle has net code 0 (`GetNetCode( aNet ) <= 0`), takes any item -- KiCad's own recorded sessions
-    /// (`qa/data/pcbnew/pns_regressions/simple-shove-1`: no end item at any move of a route of no net) were made before, and replay exact only so;
-    /// the layers' visibility and high contrast (the studio's). UI-LEFT R7, findings p5 F2-11.
+    /// UI-LEFT-2 RR7); a free pad of another net when `pos` is inside it ("Allow free pads only when already inside pad", `prioritized[0]` at distance 0,
+    /// UI-LEFT-3 R3-7); with `layer` (`aLayer >= 0`) only one on that layer is returned. **Not ported:** the layers' visibility and high contrast (the studio's). A route
+    /// of no net passes `net` of `None` and takes any item, as 8303b2ad's tool does for its orphaned net handle, whose net code is 0 (`GetNetCode( aNet )
+    /// <= 0`, UI-LEFT-3 R3-2; [`crate::line_placer::LinePlacer`]'s end snap). UI-LEFT R7, findings p5 F2-11.
     #[allow(clippy::too_many_arguments)] // pickSingleItem's own, and the router's mode
     pub fn pick_single_item(&self, pos: Point, net: Option<&Net>, layer: Option<i32>, tl: i32, slop: Nm, avoid: &[ItemId], mark_obstacles: bool) -> Option<ItemId> {
         let sq = |a: Point| (a.x - pos.x).area(a.x - pos.x) + (a.y - pos.y).area(a.y - pos.y);
@@ -1547,6 +1553,16 @@ impl Node {
                 }
                 let on_tl = item.layers().overlaps_layer(tl);
                 if net.is_some_and(|n| !same_net(item.net(), n)) {
+                    // `else if( item->OfKind( ITEM::SOLID_T ) && item->IsFreePad() )`: "Allow free pads only when already inside pad" --
+                    // `if( item->Shape( -1 )->Collide( aWhere ) ) { prioritized[0] = item; dist[0] = 0; }`
+                    if let Item::Solid(s) = item {
+                        if s.free_pad {
+                            if s.shape.collides(&Shape::Circle { c: pos, r: Nm::ZERO }, Nm::ZERO).is_some() {
+                                prioritized[0] = Some((0, id));
+                            }
+                            continue;
+                        }
+                    }
                     // `else if ( item->Net() == 0 && m_router->Settings().Mode() == RM_MarkObstacles )`: `if( item->Layers().Overlaps( tl ) ) prioritized[4] = item;`
                     if mark_obstacles && item.net().is_none() && on_tl {
                         prioritized[4] = Some((0, id));
@@ -1689,7 +1705,7 @@ mod tests {
     #[test]
     fn pick_single_item_takes_an_item_of_no_net_in_highlight_collisions() {
         let mut n = Node::new();
-        let pad = |net: crate::item::Net, x: f64| Item::Solid(Solid { net, layers: LayerRange::new(0, 1), pos: Point { x: mm(x), y: Nm::ZERO }, shape: eda_drc::kimath::Shape::Circle { c: Point { x: mm(x), y: Nm::ZERO }, r: mm(0.5) }, source: format!("U1.{x}"), edge: false, rule: 0, anchor_points: Vec::new() });
+        let pad = |net: crate::item::Net, x: f64| Item::Solid(Solid { net, layers: LayerRange::new(0, 1), pos: Point { x: mm(x), y: Nm::ZERO }, shape: eda_drc::kimath::Shape::Circle { c: Point { x: mm(x), y: Nm::ZERO }, r: mm(0.5) }, source: format!("U1.{x}"), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() });
         let free = n.add(pad(None, 0.0));
         let gnd = n.add(pad(net_of("GND"), 5.0));
         let at = |x: f64| Point { x: mm(x), y: Nm::ZERO };
@@ -1698,6 +1714,26 @@ mod tests {
         assert_eq!(n.pick_single_item(at(0.0), Some(&sig), None, 0, mm(0.5), &[], true), Some(free), "Highlight collisions: the item of no net");
         assert_eq!(n.pick_single_item(at(5.0), Some(&sig), None, 0, mm(0.5), &[], true), None, "never another net's");
         assert_eq!(n.pick_single_item(at(5.0), None, None, 0, mm(0.5), &[], false), Some(gnd), "no net to keep to: any");
+    }
+
+    /// UI-LEFT-3 R3-7: a free pad (`IsFreePad`) has no clearance to the copper of another net (`collideSimple`), and `pickSingleItem` takes it for a
+    /// route of any net, but only with the cursor inside it.
+    #[test]
+    fn a_free_pad_has_no_clearance_to_another_net_and_is_picked_from_inside() {
+        let mut n = Node::new();
+        let pad = |x: f64, free_pad: bool| Item::Solid(Solid { net: None, layers: LayerRange::new(0, 1), pos: Point { x: mm(x), y: Nm::ZERO }, shape: eda_drc::kimath::Shape::Circle { c: Point { x: mm(x), y: Nm::ZERO }, r: mm(0.5) }, source: format!("U1.{x}"), edge: false, rule: 0, free_pad, anchor_points: Vec::new() });
+        let free = n.add(pad(0.0, true));
+        let plain = n.add(pad(5.0, false));
+        let rules: BoardRules = serde_yaml::from_str("track_width: 200000\nclearance: 200000\nvia_drill: 300000\nvia_diameter: 600000\n").unwrap();
+        let sig = net_of("SIG");
+        let into = |x: f64| Shape::Stadium { a: Point { x: mm(x - 3.0), y: Nm::ZERO }, b: Point { x: mm(x), y: Nm::ZERO }, r: mm(0.1) };
+        let hits = |x: f64| n.first_colliding(&into(x), &sig, LayerRange::single(0), &rules, &[]);
+        assert!(hits(0.0).is_none(), "SIG's track ends in the free pad");
+        assert_eq!(hits(5.0).map(|o| o.id), Some(plain), "a pad of no net that is not free keeps its clearance");
+        let at = |x: f64| Point { x: mm(x), y: Nm::ZERO };
+        assert_eq!(n.pick_single_item(at(0.2), Some(&sig), None, 0, mm(1.0), &[], false), Some(free), "inside the free pad: it is SIG's end");
+        assert_eq!(n.pick_single_item(at(0.7), Some(&sig), None, 0, mm(1.0), &[], false), None, "near it, not in it: not");
+        assert_eq!(n.pick_single_item(at(5.2), Some(&sig), None, 0, mm(1.0), &[], false), None, "a pad of no net that is not free is not SIG's");
     }
 
     #[test]
@@ -1762,7 +1798,7 @@ mod tests {
     fn collision_ignores_same_net_and_excluded() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(Nm::ZERO, Nm::ZERO), shape: Shape::Circle { c: p(Nm::ZERO, Nm::ZERO), r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let shape = Shape::Stadium { a: p(Nm::ZERO, Nm::ZERO), b: p(mm(1.0), Nm::ZERO), r: mm(0.1) };
         // Same net as the pad: must not collide.
         assert!(n.first_colliding(&shape, &net_of("GND"), LayerRange::single(0), &rules, &[]).is_none());
@@ -1776,7 +1812,7 @@ mod tests {
     #[test]
     fn nearest_anchor_finds_pad_within_threshold() {
         let mut n = Node::new();
-        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
         let hit = n.nearest_anchor(p(mm(1.05), mm(1.0)), LayerRange::single(0), mm(0.2), None);
         assert_eq!(hit.map(|(_, p)| p), Some(p(mm(1.0), mm(1.0))));
         assert!(n.nearest_anchor(p(mm(5.0), mm(5.0)), LayerRange::single(0), mm(0.2), None).is_none());
@@ -1790,7 +1826,7 @@ mod tests {
         // followed the table's iteration order would differ from round to round
         for _ in 0..40 {
             let mut n = Node::new();
-            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() }));
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(mm(1.0), mm(1.0)), shape: Shape::Circle { c: p(mm(1.0), mm(1.0)), r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
             n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(mm(1.0), mm(1.0)), b: p(mm(3.0), mm(1.0)), width: mm(0.2), source_track: None, locked: false }));
             assert_eq!(n.nearest_anchor(p(mm(1.1), mm(1.0)), LayerRange::single(0), mm(0.5), None).map(|(id, _)| id), Some(pad));
         }
@@ -1837,7 +1873,7 @@ mod tests {
     }
 
     fn pad_item(net: &str, c: Point, r: Nm) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0, anchor_points: Vec::new() })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() })
     }
 
     /// D12: `NearestObstacle` is the first hull the line enters, not the item it overlaps most.

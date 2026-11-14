@@ -10,7 +10,8 @@
 
 import type { BoardState, FieldInfo, Part } from "../api/types";
 import { carryAngleDeg, type FlipDirection } from "./pcbTransform";
-import { itemBounds, itemKind, padParent, unionBounds } from "./pcbItems";
+import { itemBounds, itemKind, padIds, padParent, unionBounds } from "./pcbItems";
+import { padStaysPad } from "./freePads";
 import { groupAndDescendants, groupLeaves } from "./groupTree";
 
 export type Matrix = readonly [number, number, number, number, number, number];
@@ -136,7 +137,8 @@ export function carriedIds(board: BoardState, refs: readonly string[]): Set<stri
   const out = new Set<string>();
   const groups = board.drawings?.groups ?? [];
   for (const raw of refs) {
-    const id = padParent(board, raw) ?? raw;
+    // (with "Allow free pads" a pad is carried as itself: kicad-port/freePads.ts)
+    const id = padStaysPad() ? raw : (padParent(board, raw) ?? raw);
     out.add(id);
     // A group's items, and the groups it holds (their boxes move with it too).
     for (const g of groupAndDescendants(groups, id)) out.add(g);
@@ -174,6 +176,17 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
     return { ...p, fields: p.fields.filter((f) => !ids.has(f.id)) };
   };
   parts.out = parts.out.map(stay);
+  // A pad in the hand without its footprint ("Allow free pads", UI-LEFT-3 R3-7): its footprint stays without it, and a copy of the footprint holding that pad
+  // alone (no courtyard drawn, no fields, texts or art) is what is carried.
+  const padsCarried: Part[] = [];
+  parts.out = parts.out.map((p) => {
+    if (!p.placed || !p.pads?.length) return p;
+    const pids = padIds(p);
+    if (!pids.some((id) => ids.has(id))) return p;
+    padsCarried.push({ ...p, pads: p.pads.filter((_, i) => ids.has(pids[i]!)), fields: [], texts: [], graphics: [], hidden_texts: [], courtyard_graphics: [], items: undefined, carriedPadsOnly: true });
+    return { ...p, pads: p.pads.filter((_, i) => !ids.has(pids[i]!)) };
+  });
+  parts.in = [...parts.in, ...padsCarried];
   const tracks = take(board.routing?.tracks);
   const vias = take(board.routing?.vias);
   const zones = take(board.routing?.zones);
@@ -194,7 +207,7 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
   return {
     still: { ...board, parts: parts.out, routing: routing("out"), drawings: drawings("out") },
     moving: { ...board, parts: parts.in, routing: routing("in"), drawings: drawings("in") },
-    partRefs: parts.in.map((p) => p.ref),
+    partRefs: parts.in.filter((p) => !p.carriedPadsOnly).map((p) => p.ref),
     fields,
   };
 }

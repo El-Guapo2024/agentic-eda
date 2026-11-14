@@ -362,6 +362,11 @@ mod tests {
         if design.nets.as_ref().is_some_and(|n| n.iter().any(|n| n.name.starts_with("NET_"))) {
             board::undo(&dir, "test", None).expect("one undo");
         }
+        // the box's `work/mcu30` is an empty scratch, not the user's board (on the Mac): nothing to push there
+        if !board::load(&dir).unwrap().1.placement.as_ref().is_some_and(|p| p.footprints.iter().any(|f| f.id == "D8")) {
+            eprintln!("work/mcu30 has no D8 (not the user's board); skipping");
+            return;
+        }
         let baseline = edge_and_copper_counts(&dir);
         eprintln!("mcu30: {} copper_edge_clearance, {} copper clearance violations before", baseline.0, baseline.1);
 
@@ -387,6 +392,105 @@ mod tests {
             board::undo(&dir, "test", None).expect("undo the commit");
         }
         assert!(pushed > 0, "none of the routes pushed a track: the test is not testing a shove");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// UI-LEFT-3 R3-1: a shove that has no room between the pushed track and the board edge walks the track round the outline (`SHOVE::onCollidingSolid`,
+    /// the walk's clusters taking every side of it, with no bound on its length, as KiCad's), and every commit of such a session is clean for
+    /// kicad-cli: no `copper_edge_clearance`, no copper clearance, short or crossing. A 20 mm square with GND along y = 1 mm (2 to 18 mm) and SIG's
+    /// stub coming down x = 10 mm from y = 9 to 8 mm; SIG is routed on toward the bottom edge, pushing GND ahead of it.
+    #[test]
+    fn a_shove_toward_the_board_edge_and_one_that_walks_round_it_leave_kicad_cli_no_copper_violation() {
+        if !kicad_available() {
+            return;
+        }
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let track = |id: &str, net: &str, pts: Vec<eda_model::ir::Point>| eda_model::ir::Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts, arc_mid_offset: None };
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: eda_model::ir::Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(eda_model::ir::PlacementSection { outline: vec![p(Nm::ZERO, Nm::ZERO), p(mm(20.0), Nm::ZERO), p(mm(20.0), mm(20.0)), p(Nm::ZERO, mm(20.0))], footprints: vec![], modules: vec![] }),
+            routing: Some(eda_model::ir::RoutingSection { tracks: vec![track("gnd", "GND", vec![p(mm(2.0), mm(1.0)), p(mm(18.0), mm(1.0))]), track("sig", "SIG", vec![p(mm(10.0), mm(9.0)), p(mm(10.0), mm(8.0))])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+        };
+        let mut model = ConstraintModel::default();
+        model.nets = ["GND", "SIG"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect();
+        let dir = scratch("edge_walk");
+        let before = pair_counts(&design, &model, &dir);
+        let (mut pushed, mut walked_round) = (0, 0);
+        for tip in [mm(1.4), mm(1.1), mm(1.0), mm(0.9), mm(0.8), mm(0.6)] {
+            let mut router = eda_pns::router::Router::new(&design, &model);
+            router.settings.mode = eda_pns::settings::Mode::Shove;
+            router.start(p(mm(10.0), mm(8.0)), "F.Cu", mm(0.2)).expect("SIG's stub end starts a route");
+            let Some(commit) = router.finish(p(mm(10.0), tip)) else {
+                eprintln!("tip {tip}: the router refuses it");
+                continue;
+            };
+            let moved: Vec<&eda_model::ir::Track> = commit.tracks.iter().filter(|t| t.net == "GND").collect();
+            pushed += usize::from(!moved.is_empty());
+            walked_round += usize::from(moved.iter().any(|t| t.pts.iter().any(|q| q.y > mm(8.0))));
+            let after = pair_counts(&apply_commit(&design, &commit), &model, &dir);
+            eprintln!("tip {tip}: GND {:?}; kicad-cli {after:?}", moved.iter().map(|t| &t.pts).collect::<Vec<_>>());
+            for kind in ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"] {
+                assert!(after.get(kind).copied().unwrap_or(0) <= before.get(kind).copied().unwrap_or(0), "tip {tip}: {kind} {after:?} (before {before:?})");
+            }
+        }
+        assert!(pushed > 0, "none of the routes pushed GND: the test is not testing a shove");
+        assert!(walked_round > 0, "no shove walked GND round the outline");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// UI-LEFT-3 R3-7: a free pad (`PAD::IsFreePad`: U2.2 alone on its net, `unconnected-(U2-Pad2)`, with the pin type "free" a pad edit gives it). The router
+    /// lets the route from U1.2 end in it (`pickSingleItem`'s free pad, `collideSimple`'s no clearance), the gate takes U1.2's net as its net, and kicad-cli -- whose
+    /// copper clearance check gives a free pad the first net that touches it -- reports no clearance or short for it. Then the pad moved on its own ("Allow free
+    /// pads") is where kicad-cli's board file has it.
+    #[test]
+    fn a_route_into_a_free_pad_and_a_free_pad_moved_on_its_own_are_clean_for_kicad_cli() {
+        if !kicad_available() {
+            return;
+        }
+        let dir = scratch("free_pad");
+        crate::board::tests::setup(&dir);
+        // U2.2 leaves VCC: alone on its net
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        model.nets.iter_mut().find(|n| n.name == "VCC").unwrap().pins.retain(|p| p != "U2.2");
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let free = eda_model::fp_edit::PadEdit { pin_type: Some("free".into()), ..eda_model::fp_edit::PadEdit::none("2", 1) };
+        board::step(&dir, eda_ops::Cmd::EditBoardPad { part: "U2".into(), edit: free }, false, "test").expect("the pin type is set");
+        let (_, design, model) = board::load(&dir).unwrap();
+        assert_eq!(eda_drc::board::free_pads(&design, &model).into_iter().collect::<Vec<_>>(), ["U2.2"]);
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let mut router = eda_pns::router::Router::new(&design, &model);
+        router.start(p(mm(6.0), mm(5.0)), "F.Cu", mm(0.25)).expect("U1.2 starts VCC's route");
+        let pv = router.preview(p(mm(16.1), mm(5.05))).expect("a route");
+        assert_eq!(pv.snapped_end, Some(p(mm(16.0), mm(5.0))), "the cursor inside the free pad ends the route in it");
+        let commit = router.finish(p(mm(16.1), mm(5.05))).expect("the route is not refused");
+        // (VCC with U1.2 alone is `unconnected-(U1-Pad2)` by KiCad's names)
+        let start_net = model.nets.iter().find(|n| n.pins.iter().any(|p| p == "U1.2")).map(|n| n.name.clone()).expect("U1.2 has a net");
+        assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.net == start_net), "{:?}", commit.tracks.iter().map(|t| (&t.net, &t.pts)).collect::<Vec<_>>());
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group: None, keep_track_ids: vec![] };
+        board::step(&dir, cmd, false, "test").expect("the commit applies");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let gate: Vec<_> = eda_gates::check_routing(&design, &model).into_iter().filter(|c| c.check == "routing_clearance" && c.status == CheckStatus::Fail).collect();
+        assert!(gate.is_empty(), "the gate takes the track into the free pad: {gate:?}");
+        let report = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
+        for kind in ["clearance", "shorting_items", "tracks_crossing", "copper_edge_clearance"] {
+            assert_eq!(count(kind), 0, "{kind}: {}", report["violations"]);
+        }
+        // "Allow free pads": the pad moved 1 mm down on its own; the board file has it there, in U2's frame
+        board::step(&dir, eda_ops::Cmd::MoveItems { ids: vec!["U2.2".into()], dx: Nm::ZERO, dy: mm(1.0) }, false, "test").expect("the pad moves");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "board" }).expect("export");
+        let u2 = text.split("(footprint ").find(|b| b.contains("\"U2\"")).expect("U2 is written");
+        assert!(u2.lines().any(|l| l.contains("(pad \"2\"") && l.contains("(at 1 1 ")), "{u2}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

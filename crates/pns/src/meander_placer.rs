@@ -523,7 +523,7 @@ mod tests {
     }
 
     fn pad(net: &str, at: Point, layers: LayerRange) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, anchor_points: Vec::new() })
+        Item::Solid(Solid { net: net_of(net), layers, pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() })
     }
 
     /// Two pads 40 mm apart on net SIG joined by a straight track.
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn the_pad_to_die_length_and_delay_of_the_end_pads_count_in_the_length() {
         let mut w = Node::new();
-        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: name.into(), edge: false, rule: 0, anchor_points: Vec::new() });
+        let named = |net: &str, at: Point, name: &str| Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r: mm(0.4) }, source: name.into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() });
         w.add(named("SIG", p(0, 0), "U1.1"));
         w.add(named("SIG", p(40_000_000, 0), "U2.7"));
         let seg = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(40_000_000, 0), width: mm(0.2), source_track: Some(("trk".into(), 0)), locked: false }));

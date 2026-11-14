@@ -14,6 +14,7 @@
 // the view is mirrored, we need to call the other one if mirrored." (`AlignLeft`: `if( getView()->IsMirroredX() ) return doAlignRight();`).
 import type { BoardState, Cmd, Nm } from "../api/types";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
+import { getAllowFreePads } from "./freePads";
 import { groupOf, isLocked, lockedForTools } from "./pcbTransform";
 
 export type AlignEdge = "top" | "bottom" | "left" | "right" | "centerX" | "centerY";
@@ -199,9 +200,13 @@ export function alignItems(board: BoardState, selection: readonly string[]): Ali
   const out: AlignItem[] = [];
   const listed = new Set<string>();
   const chosen = new Set(selection);
+  // `boardItem->Type() == PCB_PAD_T && ( !allowFreePads || ( allPads && differentParents ) )`: a pad stands for its footprint, unless "Allow free pads" is on and
+  // the selection is not all pads of different footprints -- then it aligns as itself (UI-LEFT-3 R3-7)
+  const allPads = selection.every((id) => itemKind(board, id) === "pad");
+  const promote = !getAllowFreePads() || (allPads && new Set(selection.map((id) => padParent(board, id))).size > 1);
   for (const raw of selection) {
     const isPad = itemKind(board, raw) === "pad";
-    const id = isPad ? padParent(board, raw) : raw;
+    const id = isPad ? (promote ? padParent(board, raw) : raw) : raw;
     if (id == null || listed.has(id) || itemKind(board, id) == null) continue;
     const group = groupOf(board, id);
     if (group != null && chosen.has(group)) continue;

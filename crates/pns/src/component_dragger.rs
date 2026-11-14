@@ -393,7 +393,7 @@ mod tests {
     /// A 1 mm square SMD pad `source` of `net` on F.Cu at `at`.
     fn pad(node: &mut Node, source: &str, net: &str, at: Point) -> ItemId {
         let h = mm(0.5);
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Rect { x0: at.x - h, y0: at.y - h, x1: at.x + h, y1: at.y + h }, source: source.into(), edge: false, rule: 0, anchor_points: Vec::new() }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Rect { x0: at.x - h, y0: at.y - h, x1: at.x + h, y1: at.y + h }, source: source.into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }))
     }
 
     /// A 0.2 mm track of `net` on F.Cu through `pts`, one segment per leg, all of IR track `track`.
