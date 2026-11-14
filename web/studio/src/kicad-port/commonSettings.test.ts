@@ -5,9 +5,9 @@ import { DIALOG_STATE_STORAGE_KEYS, STUDIO_STORAGE_PREFIXES, studioStorageKeys }
 import { edgeCutsDimFactor, hiContrastFactor, setHiContrastFactor, HI_CONTRAST_FACTOR } from "./color4d";
 
 test("COMMON_SETTINGS' defaults: icon theme Automatic, 24 px toolbar icons, no striping, 80 % dimming", () => {
-  assert.deepEqual(DEFAULT_COMMON_SETTINGS, { iconTheme: "auto", toolbarIconSize: 24, gridStriping: false, hicontrastDimmingFactor: 0.8 });
+  assert.deepEqual(DEFAULT_COMMON_SETTINGS, { iconTheme: "auto", toolbarIconSize: 24, gridStriping: false, hicontrastDimmingFactor: 0.8, hotkeyFeedback: true });
   assert.deepEqual(sanitizeCommonSettings(null), DEFAULT_COMMON_SETTINGS);
-  assert.deepEqual(sanitizeCommonSettings({ iconTheme: "dark", toolbarIconSize: 32, gridStriping: true, hicontrastDimmingFactor: 0.5 }), { iconTheme: "dark", toolbarIconSize: 32, gridStriping: true, hicontrastDimmingFactor: 0.5 });
+  assert.deepEqual(sanitizeCommonSettings({ iconTheme: "dark", toolbarIconSize: 32, gridStriping: true, hicontrastDimmingFactor: 0.5, hotkeyFeedback: false }), { iconTheme: "dark", toolbarIconSize: 32, gridStriping: true, hicontrastDimmingFactor: 0.5, hotkeyFeedback: false });
   assert.deepEqual(sanitizeCommonSettings({ iconTheme: "purple", toolbarIconSize: 8, gridStriping: "yes", hicontrastDimmingFactor: 4 }), { ...DEFAULT_COMMON_SETTINGS, hicontrastDimmingFactor: 1 });
 });
 

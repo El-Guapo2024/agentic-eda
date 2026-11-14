@@ -5,8 +5,9 @@
 //   common/tool/common_tools.cpp   COMMON_TOOLS::GridProperties / GridPreset / GridNext / GridPrev / GridFast1 / GridFast2 / GridFastCycle / OnGridChanged
 //   common/eda_draw_frame.cpp      EDA_DRAW_FRAME::OnSelectGrid ("Edit Grids..." at the end of the grid box -> `ACTIONS::gridProperties`)
 //
-// `OnGridChanged( aFromHotkey )` puts the cursor on the new grid and, when it came from a hotkey (Next / Previous Grid, the fast grids), shows which grid it is
-// (`EVENTS::GridChangedByKeyEvent`); the grid box and `gridPreset` do not.
+// `OnGridChanged( aFromHotkey )` puts the cursor on the new grid and, when it came from a hotkey (Next / Previous Grid, the fast grids), posts
+// `EVENTS::GridChangedByKeyEvent`, which only the schematic editor answers (`SCH_EDITOR_CONTROL::GridFeedback`: the "Grid" popup, state/hotkeyPopup.ts; UI-LEFT-3
+// C3-9) -- the board, the Footprint Editor and the Symbol Editor have no handler for it, their grid box shows the change; the grid box and `gridPreset` post nothing.
 import type { ActionHandler, CommonActionContext } from "./commonActions";
 import { currentGridRow, getGridSettings, getLastGridIndex, setLastGridIndex } from "../state/gridSettings";
 import { toggleGridOverrides } from "../state/gridOverrides";
@@ -16,6 +17,8 @@ import { fastGridCycleTarget, gridPresetIndex } from "../kicad-port/cursorContro
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { getSnapOrigin } from "../components/canvas/gridHelper";
 import { formatLength } from "../state/units";
+import { showHotkeyPopup } from "../state/hotkeyPopup";
+import { gridDefs, gridMessageText } from "../kicad-port/gridSettings";
 
 export function registerGridListActions(m: Map<string, ActionHandler>, ctx: CommonActionContext): void {
   const editor = gridEditorOfTab(ctx.tab);
@@ -35,7 +38,8 @@ export function registerGridListActions(m: Map<string, ActionHandler>, ctx: Comm
       const p = alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
       adapter.setCursor({ x: p.x, y: p.y });
     }
-    if (fromHotkey) ctx.dispatch({ type: "TOAST", message: `Grid: ${formatLength(um, ctx.state.units)}`, kind: "info" });
+    // `SCH_EDITOR_CONTROL::GridFeedback`: "Grid", every grid as `GRID::UserUnitsMessageText` words it, the current one (`last_size_idx`) selected
+    if (fromHotkey && editor === "schematic") showHotkeyPopup("Grid", gridDefs(getGridSettings(editor)).map((g) => gridMessageText(g, (nm) => formatLength(nm, ctx.state.units))), idx);
   };
 
   /** `GridPreset( idx, fromHotkey )`: `currentGrid = clamp( idx, 0, size - 1 )`. */

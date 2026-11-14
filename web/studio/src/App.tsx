@@ -100,6 +100,7 @@ import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import { useEdaTestHook } from "./actions/useEdaTestHook";
 import { useAppearanceSync } from "./components/panels/appearance/useAppearanceSync";
 import { useSnapOrigin } from "./actions/useSnapOrigin";
+import { HotkeyCyclePopup } from "./components/HotkeyCyclePopup";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -260,6 +261,8 @@ function StudioFrame() {
           {!is3d && <CommonOverlay />}
           {!is3d && <CommonToolHost />}
           <Toast />
+          {/* `HOTKEY_CYCLE_POPUP`: the setting a cycling hotkey just changed (UI-LEFT-3 C3-9) */}
+          <HotkeyCyclePopup />
           {/* `WX_PROGRESS_REPORTER`'s window of a long job (Auto-Place Footprints) */}
           <ProgressReporterDialog />
           {/* Migrate 3D Models when the board opens (`PCB_EDIT_FRAME::OnBoardLoaded`) and its load notice */}

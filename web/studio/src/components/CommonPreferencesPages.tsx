@@ -1,7 +1,8 @@
 // Two pages of the Preferences dialog that belong to no editor, at KiCad 8303b2ad:
 //
 //   * Common (`PANEL_COMMON_SETTINGS`, common/dialogs/panel_common_settings.cpp and _base): every row of KiCad's page in its place, the ones the studio honours
-//     live (kicad-port/commonSettings.ts: the icon theme, the toolbar icon size, the tables' alternating rows, High Contrast Mode's dimming factor), the
+//     live (kicad-port/commonSettings.ts: the icon theme, the toolbar icon size, the tables' alternating rows, High Contrast Mode's dimming factor, the hotkey
+//     popup indicator), the
 //     others greyed with the reason as the tooltip. `TransferDataFromWindow` on OK; `ResetPanel` is the dialog's "Reset Common to Defaults" (KiCad's
 //     `COMMON_SETTINGS` defaults; a `COMMON_SETTINGS defaultSettings; defaultSettings.ResetToDefaults()`).
 //   * Maintenance (`PANEL_MAINTENANCE`, common/dialogs/panel_maintenance.cpp and _base): Reset "Don't Show Again" Dialogs (`doClearDontShowAgain`: the kept
@@ -97,7 +98,10 @@ export function useCommonPage(open: boolean, shown: boolean): PreferencesPageHan
         {offCheck("Show icons in menus", true, COMMON_ROW_NOT_OFFERED.iconsInMenus)}
         {offCheck("Show scrollbars in editors", false, COMMON_ROW_NOT_OFFERED.scrollbars)}
         {offCheck("Focus follows mouse between schematic and PCB editors", false, COMMON_ROW_NOT_OFFERED.focusFollows)}
-        {offCheck("Show popup indicator when toggling settings with hotkeys", true, COMMON_ROW_NOT_OFFERED.hotkeyFeedback)}
+        <label className="filter-row" title="When enabled, certain hotkeys that cycle between settings will show a popup indicator briefly to indicate the change in settings.">
+          <input type="checkbox" data-testid="common-hotkey-feedback" checked={draft.hotkeyFeedback} onChange={(e) => set({ hotkeyFeedback: e.target.checked })} />
+          Show popup indicator when toggling settings with hotkeys
+        </label>
         <label className="filter-row" title="When enabled, use a different color for every other table row">
           <input type="checkbox" data-testid="common-grid-striping" checked={draft.gridStriping} onChange={(e) => set({ gridStriping: e.target.checked })} />
           Use alternating row colors in tables
