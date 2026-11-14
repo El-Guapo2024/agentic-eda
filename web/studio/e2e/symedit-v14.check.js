@@ -334,6 +334,67 @@
     t((await symbol(`${LIB}:Vb_1`)).extends != null, "the derived symbol stays");
   });
 
+  await scenario("Y3-5 Bulk Edit's grid as KiCad's: the Reference takes typing and OK drops it, an empty cell striped, a changed one bold, a column moved, copy and paste of a block, widths kept", async (t) => {
+    try { localStorage.removeItem("eda.symedit.libFieldEditor"); } catch { /* none */ }
+    await run("eeschema.SymbolLibraryControl.showLibraryFieldsTable");
+    if (!t(await until(() => tid("cell-Va-Value"), 5000), "the table opens")) return;
+    tid("view-show-Reference").click();
+    await sleep(150);
+    const prefix = (await symbol(ID)).reference_prefix;
+    t(tid("cell-Va-Reference") && !tid("cell-Va-Reference").readOnly, "a Reference cell takes typing");
+    await type(tid("cell-Va-Reference"), "QQ");
+    t(/bold/.test(tid("td-Va-Reference")?.dataset.look ?? ""), `shown changed (bold): ${tid("td-Va-Reference")?.dataset.look}`);
+    // an empty user cell is striped: Vb has no PN field
+    t(/striped/.test(tid("td-Vb-PN")?.dataset.look ?? ""), `an empty cell is striped: ${tid("td-Vb-PN")?.dataset.look}`);
+    // a column moved: Footprint dropped on Value comes before it
+    const heads = () => [...document.querySelectorAll('[data-testid^="fields-head-"]')].map((h) => h.dataset.testid.replace("fields-head-", ""));
+    const dt = new DataTransfer();
+    tid("fields-head-Footprint").dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+    tid("fields-head-Value").dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    tid("fields-head-Value").dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    await sleep(150);
+    t(heads().indexOf("Footprint") < heads().indexOf("Value"), `MoveColumn: ${heads().join(", ")}`);
+    const views = [...document.querySelectorAll('[data-testid^="view-row-"]')].map((r) => r.dataset.testid.replace("view-row-", ""));
+    t(views.indexOf("Value") < views.indexOf("Footprint"), "the view controls keep their order");
+    // a block: Va's and Vb's Keywords copied, pasted into their Datasheet cells
+    const press = (el, shift = false) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, shiftKey: shift }));
+    await type(tid("cell-Va-Keywords"), "kA");
+    await type(tid("cell-Vb-Keywords"), "kB");
+    press(tid("td-Va-Keywords"));
+    await sleep(100);
+    press(tid("td-Vb-Keywords"), true);
+    await sleep(100);
+    tid("cell-Vb-Keywords").dispatchEvent(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true }));
+    await sleep(200);
+    press(tid("td-Va-Datasheet"));
+    await sleep(100);
+    tid("cell-Va-Datasheet").dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
+    await sleep(50);
+    press(tid("td-Va-Datasheet"));
+    await sleep(50);
+    // the menu's Paste at the cursor
+    tid("td-Va-Datasheet").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }));
+    const item = (label) => [...document.querySelectorAll('[role="menuitem"]')].find((m) => m.textContent.trim().startsWith(label));
+    await until(() => item("Paste"), 2000);
+    t(item("Cut") && item("Copy") && item("Select All"), "GRID_TRICKS' entries in the menu");
+    item("Paste")?.click();
+    await sleep(400);
+    t(tid("cell-Va-Datasheet")?.value === "kA" && tid("cell-Vb-Datasheet")?.value === "kB", `the block pasted from the cursor down: ${tid("cell-Va-Datasheet")?.value}, ${tid("cell-Vb-Datasheet")?.value}`);
+    // a width dragged is kept by the field's name when the dialog closes
+    const h = tid("fields-resize-Value");
+    const r = h.getBoundingClientRect();
+    h.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: r.left, clientY: r.top }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: r.left + 60, clientY: r.top }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: r.left + 60, clientY: r.top }));
+    await sleep(150);
+    tid("fields-ok").click();
+    t(await until(() => !tid("fields-table"), 5000), "OK closes the table");
+    const kept = JSON.parse(localStorage.getItem("eda.symedit.libFieldEditor") ?? "{}");
+    t(kept.field_widths?.Value > 100, `the widths are kept: ${JSON.stringify(kept.field_widths)}`);
+    const va = await until(async () => { const x = await symbol(ID); return x.datasheet === "kA" ? x : null; }, 5000);
+    t(va && va.reference_prefix === prefix, `OK wrote the cells and not the Reference (${va?.reference_prefix} vs ${prefix})`);
+  });
+
   await scenario("Y3-6 Copy's SVG is on the selection's page", async (t) => {
     const rect = (await symbol(ID)).graphics.find((g) => g.kind === "rectangle" && near(g.start.x, 24 * G));
     if (!t(rect, "the rectangle")) return;

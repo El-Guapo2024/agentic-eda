@@ -217,3 +217,93 @@ export function expanderColumn(cols: readonly LibFieldsColumn[]): string | null 
 export function sortedBy(sort: LibFieldsSort, col: string): LibFieldsSort {
   return sort.col === col ? { col, ascending: !sort.ascending } : { col, ascending: true };
 }
+
+/** A cell of one symbol as the grid's data store keeps it (`LIB_DATA_ELEMENT`): what it was, what it is, whether the field was / is missing, whether it changed. */
+export interface LibFieldsElement {
+  original: string;
+  current: string;
+  originallyEmpty: boolean;
+  currentlyEmpty: boolean;
+  modified: boolean;
+}
+
+/** How a cell is drawn (`GetAttr`): striped (`STRIPED_CELL_RENDERER`, an empty cell), its background ("window" the grid's own, "frame" a changed row's, else an RGB), bold when changed. */
+export interface LibFieldsCellLook {
+  striped: boolean;
+  background: "window" | "frame" | string;
+  bold: boolean;
+}
+
+/**
+ * `LIB_FIELDS_EDITOR_GRID_DATA_MODEL::GetAttr` of a cell whose symbols' elements are `els` (one per symbol of the row), on a row where some cell changed (`rowModified`),
+ * in a column that can be striped (`isStripeableField`: not a check box). An empty cell -- every symbol's field missing, or missing at first and untouched -- is striped
+ * on the grid's background, coloured by what a change did: a field that was not there and still is not keeps the background, one emptied from nothing (180, 220, 180),
+ * one cleared of text (220, 180, 180), one emptied by typing (180, 200, 180), else (200, 180, 180). Any other cell of a changed row has the frame's colour, (192, 255,
+ * 192) when a symbol's text was changed to nothing. A changed cell is bold.
+ */
+export function cellLook(els: readonly LibFieldsElement[], rowModified: boolean, stripeable: boolean): LibFieldsCellLook {
+  const cellModified = els.some((e) => e.modified);
+  const cellEmpty = els.every((e) => e.currentlyEmpty || (e.originallyEmpty && !e.modified));
+  const blankModified = els.some((e) => e.current === "" && e.modified);
+  let background: LibFieldsCellLook["background"] = "window";
+  if (cellEmpty && stripeable) {
+    for (const e of els) {
+      if (!e.modified) continue;
+      if (e.currentlyEmpty) background = e.originallyEmpty ? "window" : e.original === "" ? "rgb(180, 220, 180)" : "rgb(220, 180, 180)";
+      else if (e.current === "") background = "rgb(180, 200, 180)";
+      else background = "rgb(200, 180, 180)";
+    }
+    return { striped: true, background, bold: cellModified };
+  }
+  if (rowModified) background = "frame";
+  if (blankModified) background = "rgb(192, 255, 192)";
+  return { striped: false, background, bold: cellModified };
+}
+
+/** `STRIPED_CELL_RENDERER::drawStripedBackground`'s stripe colour: light red on a dark background (luminance under 128), dark red on a light one. */
+export function stripeColor(backgroundLuminance: number): string {
+  return backgroundLuminance < 128 ? "rgb(220, 180, 180)" : "rgb(100, 10, 10)";
+}
+
+/** `MoveColumn( aCol, aNewPos )`: the column at `from` taken out and put back at `to` (`std::rotate`). */
+export function movedColumn<T>(list: readonly T[], from: number, to: number): T[] {
+  const out = [...list];
+  if (from < 0 || from >= out.length || to < 0 || to >= out.length || from === to) return out;
+  const [x] = out.splice(from, 1);
+  out.splice(to, 0, x!);
+  return out;
+}
+
+/**
+ * `SetupAllColumnProperties`: a shown column's width -- the one the settings keep for its field name (`m_LibFieldEditor.field_widths`, when above 0), else its data's
+ * width with the margin, between 100 px and a third of the dialog's default width.
+ */
+export function columnWidth(saved: Readonly<Record<string, number>>, name: string, dataWidthPx: number, dialogWidthPx = 1100): number {
+  const kept = saved[name];
+  if (kept !== undefined && kept > 0) return kept;
+  const COLUMN_MARGIN = 15;
+  return Math.min(Math.max(dataWidthPx + COLUMN_MARGIN, 100), Math.max(100, dialogWidthPx / 3));
+}
+
+/**
+ * `GRID_TRICKS::paste_text`: the cells a paste writes. With a selection of more than one cell the clipboard fills the selection, repeated as often as it fits; else
+ * the clipboard's block from the cursor on (rows and columns past the grid's dropped). Hidden columns are not in `cols` (the grid's shown ones). Returns
+ * [row, col, text] in the grid's row and shown-column indices.
+ */
+export function pasteTargets(cells: readonly (readonly string[])[], cursor: { row: number; col: number }, selection: { row0: number; col0: number; row1: number; col1: number } | null, rowCount: number, colCount: number): [number, number, string][] {
+  if (cells.length === 0) return [];
+  const out: [number, number, string][] = [];
+  const multi = selection && (selection.row1 > selection.row0 || selection.col1 > selection.col0);
+  if (multi) {
+    for (let r = selection.row0; r <= selection.row1; r++) {
+      const line = cells[(r - selection.row0) % cells.length]!;
+      for (let c = selection.col0; c <= selection.col1; c++) out.push([r, c, line[(c - selection.col0) % line.length] ?? ""]);
+    }
+    return out;
+  }
+  for (let i = 0; i < cells.length && cursor.row + i < rowCount; i++) {
+    const line = cells[i]!;
+    for (let j = 0; j < line.length && cursor.col + j < colCount; j++) out.push([cursor.row + i, cursor.col + j, line[j]!]);
+  }
+  return out;
+}

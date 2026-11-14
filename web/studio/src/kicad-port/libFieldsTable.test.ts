@@ -65,3 +65,23 @@ test("buildRows: filtered, grouped by the Group By columns, sorted, a group expa
   assert.equal(expanderColumn(cols), SYMBOL_NAME);
   assert.equal(expanderColumn(cols.map((c) => (c.name === SYMBOL_NAME ? { ...c, show: false } : c))), "Value");
 });
+
+test("cellLook: GetAttr's stripes, colours and bold; stripeColor; movedColumn; columnWidth; pasteTargets", async () => {
+  const { cellLook, stripeColor, movedColumn, columnWidth, pasteTargets } = await import("./libFieldsTable");
+  const el = (o: Partial<import("./libFieldsTable").LibFieldsElement>) => ({ original: "", current: "", originallyEmpty: false, currentlyEmpty: false, modified: false, ...o });
+  assert.deepEqual(cellLook([el({ original: "x", current: "x" })], false, true), { striped: false, background: "window", bold: false });
+  assert.deepEqual(cellLook([el({ original: "x", current: "y", modified: true })], true, true), { striped: false, background: "frame", bold: true });
+  assert.deepEqual(cellLook([el({ original: "x", current: "", modified: true })], true, true), { striped: false, background: "rgb(192, 255, 192)", bold: true });
+  assert.deepEqual(cellLook([el({ originallyEmpty: true, currentlyEmpty: true })], false, true), { striped: true, background: "window", bold: false }, "a field no symbol has: striped");
+  assert.deepEqual(cellLook([el({ original: "x", currentlyEmpty: true, modified: true })], true, true).background, "rgb(220, 180, 180)", "Clear cell of a text");
+  assert.equal(cellLook([el({ originallyEmpty: true, currentlyEmpty: true })], false, false).striped, false, "a check box is never striped");
+  assert.equal(stripeColor(40), "rgb(220, 180, 180)");
+  assert.equal(stripeColor(240), "rgb(100, 10, 10)");
+  assert.deepEqual(movedColumn(["a", "b", "c", "d"], 0, 2), ["b", "c", "a", "d"]);
+  assert.deepEqual(movedColumn(["a", "b", "c", "d"], 3, 1), ["a", "d", "b", "c"]);
+  assert.equal(columnWidth({ Value: 222 }, "Value", 10), 222);
+  assert.equal(columnWidth({}, "Value", 10), 100);
+  assert.equal(columnWidth({}, "Value", 1000), 1100 / 3);
+  assert.deepEqual(pasteTargets([["a", "b"]], { row: 1, col: 1 }, null, 3, 2), [[1, 1, "a"]], "a block from the cursor, cut at the grid's edge");
+  assert.deepEqual(pasteTargets([["a"]], { row: 0, col: 0 }, { row0: 0, col0: 0, row1: 1, col1: 1 }, 3, 3), [[0, 0, "a"], [0, 1, "a"], [1, 0, "a"], [1, 1, "a"]], "a selection is filled, the clipboard repeated");
+});
