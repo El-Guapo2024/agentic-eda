@@ -38,11 +38,12 @@ import { Navigator3D } from "./navigator";
 import { VIEW_OF } from "../../kicad-port/navigator3d";
 import { getViewer3DUserSettings, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, padShapeCounts, setMoving3d, type Board3d } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, bodyHoleCount, countByName, disposeObject3D, boardOutlineBounds, movingBodyOf, padShapeCounts, setMoving3d, type Board3d } from "./scene";
 import { isKicadLit, setKicadHeadlight } from "./glLighting";
 import type { JobResults } from "./cull3d";
 import type { PolyJob } from "../../kicad-port/layers3d";
 import { requestBarcodeShape, useBarcodeVersion } from "../canvas/barcodeCache";
+import { useImageVersion } from "../canvas/imageCache";
 import { copperColorKey, layerColor } from "../canvas/layers";
 import { parseColor } from "../../kicad-port/appearance3d";
 import { ROWS, isSceneRow, toggled } from "../../kicad-port/appearance3d";
@@ -616,7 +617,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       const skip = { holes: moving && movingPrefs().holesDisableOnMove, microvias: moving && movingPrefs().microviasDisableOnMove, thickness: moving && movingPrefs().thicknessDisableOnMove };
       if (skip.holes !== skipped.holes || skip.microvias !== skipped.microvias || skip.thickness !== skipped.thickness) {
         skipped = skip;
-        setMoving3d(threeRef.current?.boardGroup ?? boardGroup, skip);
+        viewer3dProbe.update({ movingBody: setMoving3d(threeRef.current?.boardGroup ?? boardGroup, skip) });
       }
       let active: THREE.Camera;
       if (proj.kind === "perspective") {
@@ -737,6 +738,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   }, []);
   // The barcodes' shapes (kicad-cli's plot of each, components/canvas/barcodeCache.ts): asked for, and the scene rebuilt when one arrives.
   const barcodeVersion = useBarcodeVersion();
+  // An outline font's file arriving (components/text/outlineFonts.ts `noteAssetArrived`): its texts are drawn in its glyphs from then on (`addText`), so the scene is rebuilt.
+  const assetVersion = useImageVersion();
   useEffect(() => {
     for (const b of [...(board?.drawings?.barcodes ?? []), ...(board?.parts ?? []).flatMap((p) => p.items?.barcodes ?? [])]) requestBarcodeShape(b);
   }, [board]);
@@ -793,6 +796,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       bodyFromServer: !!board3d,
       copperColors: { ...(nextGroup.userData.copperColors ?? {}) },
       layers3d: { ...(nextGroup.userData.layers3d ?? {}), jobs: jobs.length, jobsAnswered: jobs.filter((j) => jobResultsRef.current.has(j.key)).length, lit, unlit },
+      movingBody: movingBodyOf(nextGroup),
     });
 
     const bounds = board ? boardOutlineBounds(board) : null;
@@ -810,7 +814,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, sceneRows, resolved, zoneFill, board3d, innerKey, userSettings.prefs.copperThickness, renderKey, jobsVersion, barcodeVersion]);
+  }, [board, sceneRows, resolved, zoneFill, board3d, innerKey, userSettings.prefs.copperThickness, renderKey, jobsVersion, barcodeVersion, assetVersion]);
 
   navigatorShownRef.current = rows.shown("navigator");
   useEffect(() => {

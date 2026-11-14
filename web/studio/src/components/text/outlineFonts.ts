@@ -13,7 +13,7 @@
 // A collection's (`.ttc`) face is its first: `FontFace` takes no index.
 import { isStrokeFace, setFontResolver, STROKE, type KicadFont, type OutlineFace } from "../../kicad-port/kicadText";
 import { noteAssetArrived } from "../canvas/imageCache";
-import { readSfnt, sfntInk, type SfntFace } from "../../kicad-port/sfnt";
+import { readSfnt, sfntGlyphPolys, sfntInk, type GlyphPoly, type SfntFace } from "../../kicad-port/sfnt";
 
 type Entry = { state: "loading" } | { state: "ready"; face: OutlineFace; file: string; style: string } | { state: "failed"; reason: string };
 
@@ -113,6 +113,7 @@ function measuredFace(family: string, sfnt: SfntFace, fakeBold: boolean, fakeIta
     return t;
   };
   const advance = (text: string): number => (text ? measure(text).width / REF_PX : 0);
+  const glyphCache = new Map<string, GlyphPoly[] | undefined>();
   return {
     family,
     unitsPerEm: sfnt.unitsPerEm,
@@ -129,6 +130,14 @@ function measuredFace(family: string, sfnt: SfntFace, fakeBold: boolean, fakeIta
       const [l, r, a, d] = [-t.actualBoundingBoxLeft, t.actualBoundingBoxRight, t.actualBoundingBoxAscent, t.actualBoundingBoxDescent];
       if (!(r > l) || !(a + d > 0)) return null;
       return [l / REF_PX, -a / REF_PX, r / REF_PX, d / REF_PX];
+    },
+    // the 3D view's glyphs (`BOARD_ADAPTER::addText`'s triangles), at the browser's advances as the ink is
+    glyphs: (text) => {
+      if (!glyphCache.has(text)) {
+        if (glyphCache.size > 2000) glyphCache.clear();
+        glyphCache.set(text, sfntGlyphPolys(sfnt, text, advance, fakeItalic, fakeBold));
+      }
+      return glyphCache.get(text);
     },
   };
 }

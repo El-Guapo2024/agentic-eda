@@ -110,7 +110,7 @@ test("viewports: Save viewport... adds or updates, Delete viewport... removes, a
   const one = saveViewport([], "Front", cam);
   const two = saveViewport(one, "Iso", { ...cam, zoom: 1.2 });
   assert.deepEqual(two.map((v) => v.name), ["Front", "Iso"]);
-  assert.equal(saveViewport(two, "Front", { ...cam, zoom: 2 })[0]!.camera.zoom, 2);
+  assert.equal(saveViewport(two, "Front", { ...cam, zoom: 2 })[0]!.camera?.zoom, 2);
   assert.deepEqual(deleteViewport(two, "Front").map((v) => v.name), ["Iso"]);
   assert.deepEqual(viewportFromJson(JSON.parse(JSON.stringify(one[0]))), one[0]);
   assert.equal(viewportFromJson({ name: "x", camera: { zoom: 1 } }), null);
@@ -150,4 +150,40 @@ test("a saved viewport's KiCad view matrix (`CAMERA::updateViewMatrix`, in 3D un
   const vps = saveViewport([], "Top", top, 64);
   assert.equal(vps[0]!.matrix!.length, 16);
   assert.deepEqual(viewportFromJson(JSON.parse(JSON.stringify(vps[0]))), vps[0]);
+});
+
+test("KiCad 25ec2335's fab and courtyard rows: off by default, followed from the PCB editor and the plot settings, and a toggle takes the view off a Follow preset", async () => {
+  const s = await import("./viewer3dSettings");
+  const a = await import("./appearance3d");
+  assert.equal(s.defaultVisibleLayers().f_fab, false);
+  assert.equal(s.defaultVisibleLayers().b_courtyard, false);
+  const pcb = s.followPcbVisibility((l) => l === "F.Fab" || l === "B.CrtYd", () => true);
+  assert.deepEqual([pcb.f_fab, pcb.b_fab, pcb.f_courtyard, pcb.b_courtyard], [true, false, false, true]);
+  assert.ok(s.followRows(s.FOLLOW_PCB).has("f_courtyard") && s.followRows(s.FOLLOW_PLOT_SETTINGS).has("b_fab"));
+  assert.equal(a.plotFollowVisibility(["F.Fab", "F.Cu"]).f_fab, true);
+  assert.equal(a.plotFollowVisibility(["F.Cu"]).f_courtyard, false);
+  assert.ok(s.killsFollow("f_fab"));
+});
+
+test("a KiCad project's viewport (its matrix alone) puts the camera where CAMERA::SetViewMatrix puts it: the matrix of the result is the viewport's", async () => {
+  const s = await import("./viewer3dSettings");
+  const m3 = await import("./math3d");
+  const span = 50;
+  const saved = { pos: { x: 3, y: -2, z: -40 }, lookAt: { x: 10, y: 0.8, z: 20 }, auxDeg: { x: -30, y: 0, z: 15 }, zoom: 40 / 62.5, quat: m3.normalizeQuat({ x: 0.2, y: -0.1, z: 0.3, w: 0.9 }) };
+  const matrix = s.kicadViewMatrix(saved, span);
+  // the camera as it is now: the same look-at point and auxiliary turn, anywhere else
+  const now = { ...saved, pos: { x: 0, y: 0, z: -62.5 }, zoom: 1, quat: { x: 0, y: 0, z: 0, w: 1 } };
+  const got = s.viewFromKicadMatrix(matrix, span, now);
+  assert.ok(Math.abs(got.zoom - saved.zoom) < 1e-9);
+  for (const k of ["x", "y", "z"] as const) assert.ok(Math.abs(got.pos[k] - saved.pos[k]) < 1e-9, `pos.${k}`);
+  const back = s.kicadViewMatrix(got, span);
+  for (let i = 0; i < 16; i++) assert.ok(Math.abs(back[i]! - matrix[i]!) < 1e-9, `matrix[${i}]: ${back[i]} vs ${matrix[i]}`);
+  // read back from appearance.json with its matrix alone
+  const vp = s.viewportFromJson({ name: "From KiCad", matrix });
+  assert.deepEqual([vp?.name, vp?.camera, vp?.matrix?.length], ["From KiCad", undefined, 16]);
+  assert.equal(s.viewportFromJson({ name: "nothing" }), null);
+  // a zoom past the camera's range is held to it
+  const far = [...matrix];
+  far[14] = far[14]! - 1e6;
+  assert.equal(s.viewFromKicadMatrix(far, span, now).zoom, 2);
 });

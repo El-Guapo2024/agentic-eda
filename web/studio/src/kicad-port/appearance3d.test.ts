@@ -78,7 +78,11 @@ test("the tree lists KiCad's rows in KiCad's order, with its tooltips, the four 
   assert.deepEqual(ids.filter((id) => id.startsWith("user_")), ["user_drawings", "user_comments", "user_eco1", "user_eco2"], "the named ones are always listed");
   const withUser = rowsFor(new Set(["user_7"])).map((r) => r.id);
   assert.deepEqual(withUser.filter((id) => id.startsWith("user_")), ["user_drawings", "user_comments", "user_eco1", "user_eco2", "user_7"], "in KiCad's order: the named ones, then User.1 ..");
-  assert.equal(USER_ROWS.length, 4 + USER_LAYER_COUNT);
+  assert.equal(USER_ROWS.length, 4 + 4 + USER_LAYER_COUNT);
+  // KiCad 25ec2335: F.Fab, B.Fab, F.Courtyard, B.Courtyard after User.Eco2, always listed, off by default
+  const fab = ids.indexOf("f_fab");
+  assert.deepEqual(ids.slice(fab - 1, fab + 4), ["user_eco2", "f_fab", "b_fab", "f_courtyard", "b_courtyard"]);
+  assert.deepEqual([rowOf("f_courtyard")!.label, rowOf("f_courtyard")!.tooltip, rowOf("f_courtyard")!.visible], ["F.Courtyard", "Show front courtyard layer", false]);
   assert.equal(rowOf("board")!.tooltip, "Show board body");
   assert.equal(rowOf("th_models")!.hotkey, "T");
   assert.equal(rowOf("smd_models")!.hotkey, "S");
@@ -103,7 +107,10 @@ test("a drawing on a layer is a silkscreen, an adhesive, a user layer, or nothin
   assert.deepEqual(shapeLayerOf("Cmts.User"), { kind: "user", row: "user_comments" });
   assert.deepEqual(shapeLayerOf("Eco2.User"), { kind: "user", row: "user_eco2" });
   assert.deepEqual(shapeLayerOf("User.12"), { kind: "user", row: "user_12" });
-  for (const none of ["Edge.Cuts", "F.CrtYd", "B.Fab", "F.Cu", "F.Mask", "F.Paste", "User.0", "User.46", "Margin", ""]) assert.equal(shapeLayerOf(none), null, none);
+  // KiCad 25ec2335 draws the fab and courtyard layers too
+  assert.deepEqual(shapeLayerOf("F.CrtYd"), { kind: "user", row: "f_courtyard" });
+  assert.deepEqual(shapeLayerOf("B.Fab"), { kind: "user", row: "b_fab" });
+  for (const none of ["Edge.Cuts", "F.Cu", "F.Mask", "F.Paste", "User.0", "User.46", "Margin", ""]) assert.equal(shapeLayerOf(none), null, none);
   assert.equal(userRowOfLayer("User.45"), "user_45");
 });
 

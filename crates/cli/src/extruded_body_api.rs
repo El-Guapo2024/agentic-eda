@@ -276,7 +276,8 @@ fn fail(message: &str) -> Value {
 }
 
 /// `POST /api/extruded_body/export` -- the Extruded 3D Body box's "Export..." (`PANEL_FP_PROPERTIES_3D_MODEL::OnExportExtrudedModel`, pcbnew/dialogs/
-/// panel_fp_properties_3d_model.cpp at KiCad 25ec2335): `{ part, format: "step"|"glb"|"stl"|"brep", body }`, `body` the box as it stands (the page checked the
+/// panel_fp_properties_3d_model.cpp at KiCad 25ec2335): `{ part, format: "step"|"glb"|"stl"|"brep", body }` on the board, `{ footprint: "Lib:Name", reference, format,
+/// body }` in the Footprint Editor (a scratch board of that footprint alone at the origin, [`library_scratch`]), `body` the box as it stands (the page checked the
 /// heights as `readExtrusionHeights` does, "Export Extruded Body"). The outline is `GetExtrusionOutline( m_footprint, .., layer )` of the footprint on the board:
 /// none is KiCad's "No extrusion outline could be generated for this footprint.". KiCad then builds the body and its pins in a `STEP_PCB_MODEL` (OpenCASCADE) and
 /// writes it; the studio has kicad-cli do the same through `EXPORTER_STEP::buildFootprint3DShapes` (the same `AddExtrudedBody` and `AddExtrudedPins` with the same
@@ -286,13 +287,25 @@ fn fail(message: &str) -> Value {
 /// "Failed to write file." when kicad-cli writes nothing.
 pub fn export(dir: &std::path::Path, req_body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(req_body).unwrap_or(Value::Null);
-    let Some(reference) = req.get("part").and_then(Value::as_str) else { return fail("no part") };
     let format = EXPORT_FORMATS.iter().copied().find(|f| Some(*f) == req.get("format").and_then(Value::as_str)).unwrap_or("step");
     let Some(mut body) = req.get("body").cloned().and_then(|b| serde_json::from_value::<ExtrudedBody>(b).ok()) else { return fail("no body") };
     let (meta, design, model) = match crate::board::load(dir) {
         Ok(x) => x,
         Err(e) => return fail(&crate::board::reasons(&e)),
     };
+    // The Footprint Editor's box (`{ footprint: "Lib:Name", reference }`): its `m_footprint` is the library footprint at the editor's origin, `GetPosition()` (0, 0) the
+    // export's origin and `GetReference()` the file's name -- here a scratch board of that footprint alone ([`library_scratch`]).
+    let (design, model, reference, shown) = match req.get("footprint").and_then(Value::as_str) {
+        Some(name) => match library_scratch(dir, name) {
+            Ok((d, m)) => (d, m, SCRATCH_REFERENCE.to_string(), req.get("reference").and_then(Value::as_str).filter(|r| !r.is_empty()).unwrap_or("REF**").to_string()),
+            Err(e) => return fail(&e),
+        },
+        None => {
+            let Some(reference) = req.get("part").and_then(Value::as_str) else { return fail("no part") };
+            (design, model, reference.to_string(), reference.to_string())
+        }
+    };
+    let reference = reference.as_str();
     let Some(fp) = design.placement.as_ref().and_then(|p| p.footprints.iter().find(|f| f.id == reference)).cloned() else { return fail("the part is not on the board") };
     let Some(footprint) = model.parts.iter().find(|p| p.reference == reference).and_then(|p| model.footprint_of(p)) else { return fail("the part has no footprint") };
     if extrusion_outline(&design, &footprint, &fp, &body).outline_count() == 0 {
@@ -315,12 +328,33 @@ pub fn export(dir: &std::path::Path, req_body: &[u8]) -> Value {
     let reply = eda_kicad_engine::export_pcb_into(board.design(), &model, &scratch.join("work"), dir, &name, format, &export_args(reference, fp.at), &out);
     let file = std::fs::read_dir(&out).ok().and_then(|d| d.filter_map(Result::ok).map(|e| e.path()).find(|p| p.extension().and_then(|e| e.to_str()) == Some(format)));
     let result = match (reply, file.and_then(|f| std::fs::read(f).ok())) {
-        (Ok(_), Some(bytes)) if !bytes.is_empty() => json!({ "ok": true, "name": format!("{reference}_extruded.{format}"), "data": base64(&bytes) }),
+        (Ok(_), Some(bytes)) if !bytes.is_empty() => json!({ "ok": true, "name": format!("{shown}_extruded.{format}"), "data": base64(&bytes) }),
         (Err(e), _) => json!({ "ok": false, "message": format!("Failed to write file.\n{}", crate::board::reasons(&e)) }),
         _ => fail("Failed to write file."),
     };
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+/// The reference the scratch board's one footprint has (kicad-cli's `--component-filter` names it; the file is named by the reference the dialog shows).
+const SCRATCH_REFERENCE: &str = "REF1";
+
+/// A board of library footprint `name` alone, at the origin on the top side, as the Footprint Editor holds it (`FOOTPRINT_EDIT_FRAME`'s footprint at (0, 0), not flipped):
+/// what kicad-cli exports the body of, the board's outline never drawn (`--no-board-body`).
+fn library_scratch(dir: &std::path::Path, name: &str) -> Result<(Design, ConstraintModel), String> {
+    let (library, _) = crate::library_api::footprint_any(dir, name).map_err(|e| crate::board::reasons(&e))?;
+    let footprint = library.to_engine_footprint();
+    let part = Part { reference: SCRATCH_REFERENCE.into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.name.clone()), symbol: None, datasheet: None, pins: vec![], body_nm: None, edge: None };
+    let model = ConstraintModel { parts: vec![part], footprints: vec![footprint], ..Default::default() };
+    let mut design = crate::import_kicad::empty_board();
+    design.placement.as_mut().expect("an empty board has a placement").footprints.push(FootprintInstance {
+        id: SCRATCH_REFERENCE.into(),
+        at: Point { x: Nm::ZERO, y: Nm::ZERO },
+        rot: 0,
+        side: eda_model::ir::Side::Top,
+        label: Default::default(),
+    });
+    Ok((design, model))
 }
 
 #[cfg(test)]

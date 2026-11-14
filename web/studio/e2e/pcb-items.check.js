@@ -356,8 +356,8 @@
       while (Date.now() - t0 < 60000 && !(E.state().viewer3d && E.state().viewer3d.open)) await sleep(100);
       await sleep(1500);
       const scene = E.state().viewer3d.scene;
-      const silkBefore = (await textBoxes()).filter((b) => before.has(b.id) && /\.SilkS$/.test(b.layer)).length;
-      t((scene["silk-text-box"] ?? 0) === 2 + silkBefore, `the two silkscreen boxes are drawn, front and back, with the ${silkBefore} the board had (${JSON.stringify(scene)})`);
+      // a layer's text boxes are one mesh of its items (`createLayers`' container, UI-LEFT-3 D3-7): one per silkscreen side
+      t((scene["silk-text-box"] ?? 0) === 2, `the two silkscreen boxes are drawn, front and back, each side's in its layer's mesh (${JSON.stringify(scene)})`);
       // The 3D view opens on FOLLOW_PLOT_SETTINGS (round 6 V6-3): the User.Drawings row is shown only when the plot selection has Dwgs.User
       // (BOARD_ADAPTER::GetVisibleLayers, `layers.test( Dwgs_User )`). Turn the row on if it starts off, as one would in the 3D Appearance panel.
       const userRow = () => document.querySelector('[data-row="user_drawings"] input[type=checkbox]');
@@ -367,7 +367,16 @@
       const sceneOn = E.state().viewer3d.scene;
       t((sceneOn["user_drawings-text-box"] ?? 0) >= 1, `the user layer's box is drawn on its own row once the row is shown (${JSON.stringify(sceneOn)})`);
       if (!userStartsOn) { userRow()?.click(); await sleep(500); }
-      t(!Object.keys(sceneOn).includes("F.CrtYd-text-box") && Object.values(sceneOn).length > 0, "a layer KiCad's 3D view does not draw (courtyard) has none");
+      // KiCad 25ec2335's F.Courtyard row (off by default, UI-LEFT-3 D3-2): the courtyard's box is drawn only with it
+      t(!Object.keys(sceneOn).some((k) => k.endsWith("-text-box") && /crtyd|courtyard/i.test(k)) && Object.values(sceneOn).length > 0, "the courtyard's box is not drawn while the F.Courtyard row is off");
+      const crt = () => document.querySelector('[data-row="f_courtyard"] input[type=checkbox]');
+      if (crt() && !crt().checked) {
+        crt().click();
+        await sleep(1500);
+        t((E.state().viewer3d.scene["f_courtyard-text-box"] ?? 0) >= 1, `and is drawn with it on (${JSON.stringify(E.state().viewer3d.scene)})`);
+        crt().click();
+        await sleep(500);
+      }
       // back to the board editor
       [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
       await sleep(800);

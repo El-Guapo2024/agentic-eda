@@ -48,6 +48,11 @@ export function defaultVisibleLayers(): Record<string, boolean> {
     user_drawings: false,
     user_eco1: false,
     user_eco2: false,
+    // KiCad 25ec2335 `GetDefaultVisibleLayers`
+    f_fab: false,
+    b_fab: false,
+    f_courtyard: false,
+    b_courtyard: false,
     references: true,
     values: true,
     footprint_text: true,
@@ -75,7 +80,7 @@ export function legacyColorsPreset(): LayerPreset3D {
 
 /**
  * `GetVisibleLayers`' FOLLOW_PCB branch: the board body, and the rows of the layers the PCB editor shows (`m_board->IsLayerVisible`: F.Cu, B.Cu, the silkscreens, the
- * masks, F.Paste for the paste, F.Adhes for the adhesive, the four named user layers) and of the elements it shows (`IsElementVisible( LAYER_FP_REFERENCES )`, values,
+ * masks, F.Paste for the paste, F.Adhes for the adhesive, the four named user layers, KiCad 25ec2335's fab and courtyard layers) and of the elements it shows (`IsElementVisible( LAYER_FP_REFERENCES )`, values,
  * footprint text). User.1 .. User.45 are not in the branch: they keep the viewer's own.
  */
 export function followPcbVisibility(layerShown: (kicadLayer: string) => boolean, elementShown: (element: "references" | "values" | "footprint_text") => boolean): Record<string, boolean> {
@@ -93,6 +98,11 @@ export function followPcbVisibility(layerShown: (kicadLayer: string) => boolean,
     user_drawings: layerShown("Dwgs.User"),
     user_eco1: layerShown("Eco1.User"),
     user_eco2: layerShown("Eco2.User"),
+    // KiCad 25ec2335
+    f_fab: layerShown("F.Fab"),
+    b_fab: layerShown("B.Fab"),
+    f_courtyard: layerShown("F.CrtYd"),
+    b_courtyard: layerShown("B.CrtYd"),
   };
   for (const el of ["references", "values", "footprint_text"] as const) v[el] = elementShown(el);
   return v;
@@ -100,7 +110,7 @@ export function followPcbVisibility(layerShown: (kicadLayer: string) => boolean,
 
 /** The rows a "Follow" preset decides (`GetVisibleLayers`' two branches): everything else stays the viewer's own (`m_Render`). */
 export function followRows(preset: string): ReadonlySet<string> {
-  const pcb = ["board", "copper_top", "copper_bottom", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "solder_paste", "adhesive", "user_comments", "user_drawings", "user_eco1", "user_eco2", "references", "values", "footprint_text"];
+  const pcb = ["board", "copper_top", "copper_bottom", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "solder_paste", "adhesive", "user_comments", "user_drawings", "user_eco1", "user_eco2", "f_fab", "b_fab", "f_courtyard", "b_courtyard", "references", "values", "footprint_text"];
   if (preset === FOLLOW_PCB) return new Set(pcb);
   if (preset === FOLLOW_PLOT_SETTINGS) return new Set([...pcb, ...USER_ROWS.filter((r) => /^user_\d+$/.test(r.id)).map((r) => r.id)]);
   return new Set();
@@ -133,7 +143,7 @@ export function visibleSnapshot(layers: Readonly<Record<string, boolean>>, prese
  * off-board silkscreen's, the navigator's or the background's). */
 export function killsFollow(id: string): boolean {
   if (["footprint_text", "references", "values"].includes(id)) return true;
-  if (["board", "copper_top", "copper_bottom", "plated_barrels", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "solder_paste", "adhesive", "user_comments", "user_drawings", "user_eco1", "user_eco2"].includes(id)) return true;
+  if (["board", "copper_top", "copper_bottom", "plated_barrels", "silkscreen_top", "silkscreen_bottom", "soldermask_top", "soldermask_bottom", "solder_paste", "adhesive", "user_comments", "user_drawings", "user_eco1", "user_eco2", "f_fab", "b_fab", "f_courtyard", "b_courtyard"].includes(id)) return true;
   return /^user_\d+$/.test(id);
 }
 
@@ -231,10 +241,11 @@ export function presetFromJson(j: unknown): LayerPreset3D | null {
 
 // ------------------------------------------------------------------------------------------------------------------------------- viewports
 
-/** `VIEWPORT3D`: a name and the camera ([`CameraView`], what `GetViewMatrix` is made of). */
+/** `VIEWPORT3D`: a name and the camera ([`CameraView`], what `GetViewMatrix` is made of); a viewport read from a KiCad project (`board.3dviewports`, UI-LEFT-3 D3-5) has
+ *  only its `matrix`, the camera put at it when it is chosen ([`viewFromKicadMatrix`]). */
 export interface Viewport3D {
   name: string;
-  camera: CameraView;
+  camera?: CameraView;
   /** `VIEWPORT3D::matrix`, the camera's `GetViewMatrix()` in KiCad's 3D units, column-major ([`kicadViewMatrix`]): what the derived `.kicad_pro`'s `board.3dviewports` gets. */
   matrix?: number[];
 }
@@ -268,6 +279,51 @@ export function kicadViewMatrix(view: CameraView, spanMm: number): number[] {
   return [cx.x, cx.y, cx.z, 0, cy.x, cy.y, cy.z, 0, cz.x, cz.y, cz.z, 0, t.x, t.y, t.z, 1];
 }
 
+/** A rotation matrix's quaternion (its columns the turned axes, as [`kicadViewMatrix`] writes them), Shepperd's method. */
+function quatOfColumns(m: readonly number[]): { x: number; y: number; z: number; w: number } {
+  // m[col * 4 + row]
+  const r = (row: number, col: number) => m[col * 4 + row]!;
+  const tr = r(0, 0) + r(1, 1) + r(2, 2);
+  if (tr > 0) {
+    const s = Math.sqrt(tr + 1) * 2;
+    return normalizeQuat({ w: s / 4, x: (r(2, 1) - r(1, 2)) / s, y: (r(0, 2) - r(2, 0)) / s, z: (r(1, 0) - r(0, 1)) / s });
+  }
+  if (r(0, 0) > r(1, 1) && r(0, 0) > r(2, 2)) {
+    const s = Math.sqrt(1 + r(0, 0) - r(1, 1) - r(2, 2)) * 2;
+    return normalizeQuat({ w: (r(2, 1) - r(1, 2)) / s, x: s / 4, y: (r(0, 1) + r(1, 0)) / s, z: (r(0, 2) + r(2, 0)) / s });
+  }
+  if (r(1, 1) > r(2, 2)) {
+    const s = Math.sqrt(1 + r(1, 1) - r(0, 0) - r(2, 2)) * 2;
+    return normalizeQuat({ w: (r(0, 2) - r(2, 0)) / s, x: (r(0, 1) + r(1, 0)) / s, y: s / 4, z: (r(1, 2) + r(2, 1)) / s });
+  }
+  const s = Math.sqrt(1 + r(2, 2) - r(0, 0) - r(1, 1)) * 2;
+  return normalizeQuat({ w: (r(1, 0) - r(0, 1)) / s, x: (r(0, 2) + r(2, 0)) / s, y: (r(1, 2) + r(2, 1)) / s, z: s / 4 });
+}
+
+/**
+ * `CAMERA::SetViewMatrix( aViewport.matrix )` (common/gal/3d/camera.cpp; `APPEARANCE_CONTROLS_3D::doApplyViewport`) on the studio's camera `current`: the trackball's
+ * rotation is the matrix's less the auxiliary one the camera has (`SetRotationMatrix`: `aRotation * glm::inverse( m_rotationMatrixAux )`), the look-at point stays, the
+ * camera goes where the matrix puts the look-at point (`m_camera_pos`), and the zoom is that point's depth over the home distance (`lookat.z / m_camera_pos_init.z`), held
+ * in `[minZoom, maxZoom]` with the depth moved to match. `spanMm` is the board's span [`kicadViewMatrix`] scales by.
+ */
+export function viewFromKicadMatrix(matrix: readonly number[], spanMm: number, current: CameraView, minZoom = 0.02, maxZoom = 2): CameraView {
+  const k = (RANGE_SCALE_3D * HOME_ZOOM_HACK) / Math.max(spanMm, 1e-9);
+  const d2r = Math.PI / 180;
+  const aux = multiplyQuat(multiplyQuat(quatFromAxisAngle(vec3(1, 0, 0), current.auxDeg.x * d2r), quatFromAxisAngle(vec3(0, 1, 0), current.auxDeg.y * d2r)), quatFromAxisAngle(vec3(0, 0, 1), current.auxDeg.z * d2r));
+  const total = quatOfColumns(matrix);
+  const quat = normalizeQuat(multiplyQuat(total, { x: -aux.x, y: -aux.y, z: -aux.z, w: aux.w }));
+  // `glm::vec4 lookat = aViewMatrix * glm::vec4( m_lookat_pos, 1.0f )`, in KiCad's 3D units
+  const look = vec3(current.lookAt.x * k, -current.lookAt.z * k, current.lookAt.y * k);
+  const rl = rotateVecByQuat(look, total);
+  const p = { x: rl.x + matrix[12]!, y: rl.y + matrix[13]!, z: rl.z + matrix[14]! };
+  // `m_camera_pos_init` is ( 0, 0, -initial distance ): the studio's 1.25 spans (camera3d.ts DISTANCE_TO_BOARD_SPAN_RATIO)
+  const home = 1.25 * spanMm * k;
+  let zoom = -p.z / home;
+  if (zoom > maxZoom) zoom = maxZoom;
+  else if (zoom < minZoom) zoom = minZoom;
+  return { pos: { x: p.x / k, y: p.y / k, z: -zoom * home / k }, lookAt: { ...current.lookAt }, auxDeg: { ...current.auxDeg }, zoom, quat };
+}
+
 /** `onViewportChanged`'s "Save viewport...": a new name goes before the separator (the end of the list), an existing one gets the camera as it is now. */
 export function saveViewport(viewports: readonly Viewport3D[], name: string, camera: CameraView, spanMm?: number): Viewport3D[] {
   const vp: Viewport3D = spanMm !== undefined ? { name, camera, matrix: kicadViewMatrix(camera, spanMm) } : { name, camera };
@@ -287,12 +343,14 @@ const isVec = (v: unknown): v is { x: number; y: number; z: number } => typeof v
 export function viewportFromJson(j: unknown): Viewport3D | null {
   if (typeof j !== "object" || j === null) return null;
   const o = j as Record<string, unknown>;
-  const c = o.camera as Record<string, unknown> | undefined;
-  if (typeof o.name !== "string" || !c || !isVec(c.pos) || !isVec(c.lookAt) || !isVec(c.auxDeg) || typeof c.zoom !== "number" || typeof c.quat !== "object" || c.quat === null) return null;
-  const q = c.quat as Record<string, unknown>;
-  if (!["x", "y", "z", "w"].every((k) => typeof q[k] === "number")) return null;
+  if (typeof o.name !== "string") return null;
   const matrix = Array.isArray(o.matrix) && o.matrix.length === 16 && o.matrix.every((x) => typeof x === "number") ? { matrix: [...(o.matrix as number[])] } : {};
-  return { name: o.name, camera: { pos: { ...c.pos }, lookAt: { ...c.lookAt }, auxDeg: { ...c.auxDeg }, zoom: c.zoom, quat: { x: q.x as number, y: q.y as number, z: q.z as number, w: q.w as number } }, ...matrix };
+  const c = o.camera as Record<string, unknown> | undefined;
+  const q = (c?.quat ?? null) as Record<string, unknown> | null;
+  const camera = c && isVec(c.pos) && isVec(c.lookAt) && isVec(c.auxDeg) && typeof c.zoom === "number" && q && ["x", "y", "z", "w"].every((k) => typeof q[k] === "number") ? { pos: { ...c.pos }, lookAt: { ...c.lookAt }, auxDeg: { ...c.auxDeg }, zoom: c.zoom, quat: { x: q.x as number, y: q.y as number, z: q.z as number, w: q.w as number } } : null;
+  // a KiCad project's viewport (UI-LEFT-3 D3-5) has its matrix alone
+  if (!camera) return "matrix" in matrix ? { name: o.name, ...matrix } : null;
+  return { name: o.name, camera, ...matrix };
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------- preferences

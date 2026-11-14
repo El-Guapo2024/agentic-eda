@@ -1,4 +1,4 @@
-// The 3D viewer's Render Options and While Moving preferences and the Extruded 3D Body box's preview, Export... and Footprint Editor copy (UI-LEFT-2 DD2, DD3; PARITY-3d
+// The 3D viewer's Render Options and While Moving preferences and the Extruded 3D Body box's preview, Export... (the Footprint Editor's too, UI-LEFT-3 D3-6) and Footprint Editor copy (UI-LEFT-2 DD2, DD3; PARITY-3d
 // section 10): Preferences > 3D Viewer > General has KiCad's Render Options rows (`panel_3D_display_options_base.cpp`) and Realtime Renderer its While Moving rows
 // (`panel_3D_opengl_options_base.cpp`), with KiCad's defaults, kept on OK; the board's Footprint Properties 3D Models tab draws the box's body in its preview as the box
 // stands (`updateExtrusionPreview`), and Export... writes it (`OnExportExtrudedModel`, through kicad-cli: `POST /api/extruded_body/export`) as a file the browser saves, refusing
@@ -110,11 +110,30 @@
   await until(() => tid("fp-library-properties"), 8000);
   await click(tid("fp-library-properties-tab-models"), 900);
   check("the Footprint Editor's 3D Models tab has the box, off for a footprint with no body", !!tid("extruded-body") && tid("extruded-enable")?.checked === false);
-  check("its Export... is greyed (a library footprint is on no board kicad-cli could export)", tid("extruded-export")?.disabled === true);
+  check("its Export... is greyed while the body is off", tid("extruded-export")?.disabled === true);
   await click(tid("extruded-enable"), 300);
   await type(tid("extruded-height"), "1.2");
   await pick(tid("extruded-material"), "3");
   check("the preview draws the body there too", await until(() => Number(tid("model-preview-panel")?.querySelector("[data-drawn]")?.dataset.extruded ?? 0) >= 1, 10000));
+  // UI-LEFT-3 D3-6: Export... in the Footprint Editor (`OnExportExtrudedModel` on the editor's footprint at the origin): the server's scratch board of that footprint alone
+  check("Export... is offered in the Footprint Editor", tid("extruded-export")?.disabled === false);
+  await click(tid("extruded-export"), 400);
+  check("the file dialog offers the Reference field's REF**_extruded", tid("extruded-export-name")?.value === "REF**_extruded", tid("extruded-export-name")?.value);
+  {
+    const saved2 = [];
+    const names2 = [];
+    const create = URL.createObjectURL;
+    URL.createObjectURL = (blob) => { saved2.push(blob); return create.call(URL, blob); };
+    const clickA = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { names2.push(this.download); };
+    await pick(tid("extruded-export-type"), "2");
+    await click(tid("extruded-export-save"), 300);
+    await until(() => names2.length > 0 || !!globalThis.__edaLastMessageBox?.message?.includes("Failed"), 120000);
+    URL.createObjectURL = create;
+    HTMLAnchorElement.prototype.click = clickA;
+    const stl = saved2[0] ? await saved2[0].text() : "";
+    check("Save writes the library footprint's body as an STL (kicad-cli on a scratch board of it)", names2[0] === "REF**_extruded.stl" && saved2[0]?.size > 1000 && /^solid|facet normal/m.test(stl.slice(0, 2000)), { names: names2, size: saved2[0]?.size, box: globalThis.__edaLastMessageBox });
+  }
   await click([...document.querySelectorAll(".dialog-footer button.primary")].find((b) => b.textContent.trim() === "OK"), 1800);
   const fp = await json(`/api/footprint?name=${encodeURIComponent(NAME)}`);
   check("OK sets the library footprint's body in the same step", fp?.extruded_body?.height === 1_200_000 && fp.extruded_body.material === "copper", fp?.extruded_body);
