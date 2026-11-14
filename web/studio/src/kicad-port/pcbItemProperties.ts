@@ -14,7 +14,7 @@ import { BARCODE_KINDS, barcodeToCmd, clampEcc, eccChoices, hasErrorCorrection }
 import type { PcbCtx, PcbItem } from "./pcbProperties";
 import { tooSmall } from "./propertyGrid";
 import type { Choice, PropValue, PropertyDef, PropertyManager } from "./propertyManager";
-import { autoPenNm, clampPenNm, textBoxToCmd, TEXT_MAX_SIZE_NM, TEXT_MIN_SIZE_NM, withTextAngle } from "./pcbTextBox";
+import { autoPenNm, clampPenNm, clampTextSize, textBoxToCmd, withTextAngle } from "./pcbTextBox";
 import { SCALE_PPM, scaleForHeightNm, scaleForWidthNm } from "./refImage";
 
 type PM = PropertyManager<PcbItem, PcbCtx, Cmd>;
@@ -50,12 +50,12 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
   });
   const IMAGE = "Image Properties";
   const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">): void => add({ owner: "PCB_REFERENCE_IMAGE", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, IMAGE);
-  // `SetImageScale( aScale )` is ignored for a scale that is not positive; the image grows or shrinks about its centre (no transform origin offset).
+  // `SetImageScale( aScale )` is ignored for a scale that is not positive (`REFERENCE_IMAGE::SetImageScale`); `PCB_REFERENCE_IMAGE_DESC` registers no validator, so
+  // a 0 is taken by the grid and changes nothing (UI-LEFT-3 P3-8).
   row({
     name: "Scale",
     kind: "double",
     get: (i) => own(i).scale_ppm / SCALE_PPM,
-    validate: (v) => (num(v) <= 0 ? "Scale must be a positive number." : null),
     set: (i, v) => {
       const ppm = Math.round(num(v) * SCALE_PPM);
       return ppm <= 0 || ppm === own(i).scale_ppm ? [] : imageCmd(own(i), { scale_ppm: ppm });
@@ -72,14 +72,14 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
       readOnlyReason: "The board's reference image keeps no transform offset here: it is scaled about its centre.",
     })
   );
-  // `SetWidth` / `SetHeight`: `scaleBy( width / current width )`.
+  // `SetWidth` / `SetHeight`: `scaleBy( width / current width )`, ignored for a size that is not positive (`REFERENCE_IMAGE::SetWidth`); the rows are `PT_COORD`
+  // with no validator, so a 0 is taken and changes nothing (UI-LEFT-3 P3-8).
   const side = (name: "Width" | "Height"): void =>
     row({
       name,
       kind: "int",
       display: "size",
       get: (i) => (name === "Width" ? own(i).w : own(i).h),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
       set: (i, v) => {
         const image = own(i);
         const want = Math.round(num(v));
@@ -110,10 +110,11 @@ function registerPoint(pm: PM, add: Add): void {
     kind: "int",
     display: "size",
     get: (i) => own(i).size,
-    validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
+    // `PCB_POINT::SetSize` takes any size and `PCB_POINT_DESC` registers no validator: the `PT_SIZE` row (an unsigned number) refuses only a negative one (UI-LEFT-3 P3-8).
+    validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
     set: (i, v) => {
       const size = Math.round(num(v));
-      return size <= 0 || size === own(i).size ? [] : pointCmd(own(i), { size });
+      return size < 0 || size === own(i).size ? [] : pointCmd(own(i), { size });
     },
   });
 }
@@ -135,16 +136,26 @@ function registerBarcode(pm: PM, add: Add): void {
   // `PCB_BARCODE_DESC` keeps `BOARD_ITEM`'s Layer too (no `ReplaceProperty`): the board item's row reads and sets a barcode's (`barcodeCmd`).
   const GROUP = "Barcode Properties";
   const row = (def: Omit<PropertyDef<PcbItem, PcbCtx, Cmd>, "owner">): void => add({ owner: "PCB_BARCODE", ...def } as PropertyDef<PcbItem, PcbCtx, Cmd>, GROUP);
-  const size = (name: string, get: (b: BoardBarcode) => number, key: keyof BoardBarcode): void =>
+  // `PCB_BARCODE_DESC` registers no validator: the `PT_SIZE` rows refuse only a negative size (UI-LEFT-3 P3-8). `SetTextSize` takes at least 1 nm
+  // (`std::max( 1, aTextSize )`); `SetBarcodeWidth` / `SetBarcodeHeight` take 0 and set both sides of a square kind (`KeepSquare`: QR, Micro QR, Data Matrix).
+  const keepSquare = (b: BoardBarcode): boolean => b.kind === "qr" || b.kind === "microqr" || b.kind === "datamatrix";
+  const size = (name: string, get: (b: BoardBarcode) => number, key: "text_height" | "w" | "h"): void =>
     row({
       name,
       kind: "int",
       display: "size",
       get: (i) => get(own(i)),
-      validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1_000, "size", c.units) : null),
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => {
-        const want = Math.round(num(v));
-        return want <= 0 || want === get(own(i)) ? [] : barcodeCmd(own(i), { [key]: want } as Partial<BoardBarcode>);
+        const b = own(i);
+        const typed = Math.round(num(v));
+        if (typed < 0) return [];
+        if (key === "text_height") {
+          const want = Math.max(1, typed);
+          return want === b.text_height ? [] : barcodeCmd(b, { text_height: want });
+        }
+        const patch: Partial<BoardBarcode> = keepSquare(b) ? { w: typed, h: typed } : { [key]: typed };
+        return (patch.w ?? b.w) === b.w && (patch.h ?? b.h) === b.h ? [] : barcodeCmd(b, patch);
       },
     });
   row({ name: "Text", kind: "string", get: (i) => own(i).text, set: (i, v) => (own(i).text === String(v) ? [] : barcodeCmd(own(i), { text: String(v) })) });
@@ -495,10 +506,12 @@ export function registerExtraItemProperties(pm: PM, add: Add, layerChoices: (c: 
         kind: "int",
         display: "size",
         get: (i) => (name === "Width" ? own(i).width : own(i).size),
-        validate: (v, _i, c) => (num(v) < TEXT_MIN_SIZE_NM ? tooSmall(TEXT_MIN_SIZE_NM, "size", c.units) : num(v) > TEXT_MAX_SIZE_NM ? tooSmall(TEXT_MAX_SIZE_NM, "size", c.units) : null),
+        // `EDA_TEXT_DESC`'s `PT_SIZE` rows have no validator: a negative size is refused, any other is clamped to `TEXT_MIN_SIZE_MM` .. `TEXT_MAX_SIZE_MM`
+        // (`EDA_TEXT::SetTextWidth` / `SetTextHeight`; UI-LEFT-3 P3-8)
+        validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
         set: (i, v) => {
           const b = own(i);
-          const s = Math.round(num(v));
+          const s = clampTextSize(Math.round(num(v)));
           if ((name === "Width" ? b.width : b.size) === s) return [];
           const patch = name === "Width" ? { width: s } : { size: s };
           const size = Math.min(patch.width ?? b.width, patch.size ?? b.size);

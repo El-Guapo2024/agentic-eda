@@ -18,6 +18,9 @@ import type { TableCellEdit, TableLineStyleName, TablePatch } from "../api/table
 import { colorToHex, hexToColor, isUnspecified, UNSPECIFIED_COLOR } from "./schProperties";
 import type { PropertyManager, PropertyDef, PropValue, Choice } from "./propertyManager";
 import { cellById, tableById } from "./tables";
+import { clampTextSize } from "./pcbTextBox";
+import { tooSmall } from "./propertyGrid";
+import type { LengthUnit } from "../state/units";
 
 /** What the registration needs of the panel's own module (which imports this one: nothing here is imported back at load time). */
 export interface TablePropertyHelpers<I extends { readonly type: string }, C> {
@@ -179,7 +182,7 @@ export function registerTableClass<I extends Item, C>(pm: PropertyManager<I, C, 
 }
 
 /** `PCB_TABLE_DESC` and `PCB_TABLECELL_DESC`. `Item` is the panel's item type, which carries the table and cell fields of `TableItemParts`. */
-export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
+export function registerTableProperties<I extends Item, C extends { readonly units: LengthUnit }>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
   const add = (def: PropertyDef<I, C, Cmd>, group = ""): void => h.add(def, group);
   registerTableClass(pm, h, BOARD_TABLE);
   // A table is on one layer, any layer of the board: `BOARD_ITEM`'s Layer row (pcbProperties.ts) reads and sets it with the rest of the free items'.
@@ -207,7 +210,8 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       display: "size",
       get: (i) => i.table!.col_widths[i.cell!.col]!,
       available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
+      // `PCB_TABLECELL::SetColumnWidth` (no validator; a `PT_SIZE` row refuses only a negative size, UI-LEFT-3 P3-8)
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
@@ -220,7 +224,7 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
       display: "size",
       get: (i) => i.table!.row_heights[i.cell!.row]!,
       available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
@@ -312,8 +316,12 @@ export function registerTableProperties<I extends Item, C>(pm: PropertyManager<I
         display: "size",
         get: (i) => i.cell![key],
         available: isCell,
-        validate: (v) => (num(v) <= 0 ? "The text size must be positive." : null),
-        set: (i, v) => (i.cell![key] === Math.round(num(v)) ? [] : [editCell(i, { [edit]: Math.round(num(v)) })]),
+        // `EDA_TEXT_DESC`'s Width / Height: no validator, a negative size refused by the `PT_SIZE` row, any other clamped (`EDA_TEXT::SetTextWidth`, UI-LEFT-3 P3-8)
+        validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
+        set: (i, v) => {
+          const want = clampTextSize(Math.round(num(v)));
+          return i.cell![key] === want ? [] : [editCell(i, { [edit]: want })];
+        },
       },
       TEXT
     );

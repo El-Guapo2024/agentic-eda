@@ -293,8 +293,9 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_barcode", what, "a barcode needs a layer"));
         }
         self.layer_is_on(&b.layer, what)?;
-        if b.width_nm <= Nm::ZERO || b.height_nm <= Nm::ZERO {
-            return Err(fail("ops_bad_barcode", what, "the size of a barcode must be greater than zero"));
+        // `PCB_BARCODE::SetBarcodeWidth` / `SetBarcodeHeight` take a size of 0 (`PCB_BARCODE_DESC` registers no validator; UI-LEFT-3 P3-8)
+        if b.width_nm < Nm::ZERO || b.height_nm < Nm::ZERO {
+            return Err(fail("ops_bad_barcode", what, "the size of a barcode cannot be negative"));
         }
         if b.text_height_nm <= Nm::ZERO {
             return Err(fail("ops_bad_barcode", what, "the text size of a barcode must be greater than zero"));
@@ -518,8 +519,9 @@ impl<'a> Board<'a> {
             return Err(fail("ops_bad_point", what, "a point needs a layer"));
         }
         self.layer_is_on(layer, what)?;
-        if size_nm <= Nm::ZERO {
-            return Err(fail("ops_bad_point", what, "the size of a point must be greater than zero"));
+        // `PCB_POINT::SetSize` takes a size of 0 (`PCB_POINT_DESC` registers no validator; UI-LEFT-3 P3-8)
+        if size_nm < Nm::ZERO {
+            return Err(fail("ops_bad_point", what, "the size of a point cannot be negative"));
         }
         Ok(())
     }
