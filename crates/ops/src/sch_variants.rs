@@ -56,7 +56,7 @@ impl<'a> Board<'a> {
     }
 
     /// The variant of that name, as the design spells it: refused when there is none.
-    fn existing_variant(&self, name: &str) -> Result<String, Vec<CheckResult>> {
+    pub(crate) fn existing_variant(&self, name: &str) -> Result<String, Vec<CheckResult>> {
         self.variant_names().into_iter().find(|n| n == name).ok_or_else(|| fail("ops_unknown_variant", name, format!("no design variant named '{name}'")))
     }
 
@@ -199,31 +199,7 @@ impl<'a> Board<'a> {
                 }
             }
         }
-        let paths_of = eda_model::sheet_list::paths_of_screens(&self.design);
-        let focus_path = self.focus_sheet_path();
-        let here = self.focus.clone();
-        let annotated = |id: &str| !id.ends_with('?');
-        // what each edit is to: (screen key, reference, the sheet path of the instance, or none for the reference's own records)
-        let mut edits: Vec<(Option<String>, String, Option<Vec<String>>)> = Vec::new();
-        let screens: Vec<(Option<String>, &eda_model::ir::SchematicSection)> =
-            self.design.schematic.iter().map(|s| (None, s)).chain(self.design.sheet_contents.iter().flat_map(|c| c.iter()).map(|(k, v)| (Some(k.clone()), v))).collect();
-        for (key, sch) in &screens {
-            let in_view = *key == here;
-            let paths = paths_of.get(key.as_deref().unwrap_or("")).cloned().unwrap_or_default();
-            for (id, alias_path) in &targets {
-                let Some(sym) = sch.symbols.iter().find(|s| &s.id == id) else { continue };
-                let path = match alias_path {
-                    // a later path's row: that path of its own screen only
-                    Some(p) if paths.contains(p) => Some(p.clone()),
-                    Some(_) => continue,
-                    None if !(in_view || annotated(id)) => continue,
-                    None if paths.len() <= 1 => None,
-                    None if in_view && paths.contains(&focus_path) => Some(focus_path.clone()),
-                    None => eda_model::sheet_list::own_path(sch, sym, &paths).cloned(),
-                };
-                edits.push((key.clone(), id.clone(), path));
-            }
-        }
+        let edits = self.variant_symbol_records(ids);
         for (key, id, path) in edits {
             let own_texts: Vec<(String, String)> = {
                 let sch = self.section_of_key(key.as_deref()).expect("a screen just listed");
@@ -257,8 +233,42 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The records an edit of the symbols `ids` in a variant goes to, as [`Self::set_symbol_variant`] makes it: (screen key, reference, the sheet path of the
+    /// instance, or none for the reference's own records) for each placed unit of each reference -- an annotated one's on every sheet, an unannotated one's
+    /// on the sheet in view only; on a screen shown on several paths, the path in view for the screen in view, the path a later path's reference names, else
+    /// the symbol's own path.
+    pub(crate) fn variant_symbol_records(&self, ids: &[String]) -> Vec<(Option<String>, String, Option<Vec<String>>)> {
+        let aliases = crate::fields_table::path_alias_paths(&self.design);
+        let targets: Vec<(String, Option<Vec<String>>)> = ids.iter().map(|id| aliases.get(id).map_or((id.clone(), None), |(own, path)| (own.clone(), Some(path.clone())))).collect();
+        let paths_of = eda_model::sheet_list::paths_of_screens(&self.design);
+        let focus_path = self.focus_sheet_path();
+        let here = self.focus.clone();
+        let annotated = |id: &str| !id.ends_with('?');
+        let mut edits: Vec<(Option<String>, String, Option<Vec<String>>)> = Vec::new();
+        let screens: Vec<(Option<String>, &eda_model::ir::SchematicSection)> =
+            self.design.schematic.iter().map(|s| (None, s)).chain(self.design.sheet_contents.iter().flat_map(|c| c.iter()).map(|(k, v)| (Some(k.clone()), v))).collect();
+        for (key, sch) in &screens {
+            let in_view = *key == here;
+            let paths = paths_of.get(key.as_deref().unwrap_or("")).cloned().unwrap_or_default();
+            for (id, alias_path) in &targets {
+                let Some(sym) = sch.symbols.iter().find(|s| &s.id == id) else { continue };
+                let path = match alias_path {
+                    // a later path's row: that path of its own screen only
+                    Some(p) if paths.contains(p) => Some(p.clone()),
+                    Some(_) => continue,
+                    None if !(in_view || annotated(id)) => continue,
+                    None if paths.len() <= 1 => None,
+                    None if in_view && paths.contains(&focus_path) => Some(focus_path.clone()),
+                    None => eda_model::sheet_list::own_path(sch, sym, &paths).cloned(),
+                };
+                edits.push((key.clone(), id.clone(), path));
+            }
+        }
+        edits
+    }
+
     /// The section a screen key names: the root's for `None`, else the sheet screen's.
-    fn section_of_key(&self, key: Option<&str>) -> Option<&eda_model::ir::SchematicSection> {
+    pub(crate) fn section_of_key(&self, key: Option<&str>) -> Option<&eda_model::ir::SchematicSection> {
         match key {
             None => self.design.schematic.as_ref(),
             Some(k) => self.design.sheet_contents.as_ref()?.get(k),

@@ -543,8 +543,14 @@ pub enum SchCmd {
     /// Do not Populate / Exclude from Bill of Materials / Board / Simulation as a toggle (`SCH_EDIT_TOOL::SetAttribute` with the default variant): the
     /// symbols `ids` of the sheet in view and, for an annotated one, every unit of the reference the sheet path in view gives it, on every sheet path
     /// (`CollectOtherUnits( GetRef( &currentSheet ), .. )` over `Hierarchy()`), go to one state, set when any of them lacks it, else cleared (`new_state`,
-    /// computed over everything collected). `attribute`: `dnp`, `exclude_from_bom`, `exclude_from_board` or `exclude_from_sim` (r5 D5-M2, UI-LEFT S9).
-    ToggleSymbolAttribute { ids: Vec<String>, attribute: String },
+    /// computed over everything collected). `attribute`: `dnp`, `exclude_from_bom`, `exclude_from_board` or `exclude_from_sim` (r5 D5-M2, UI-LEFT S9). With
+    /// `variant` (KiCad 25ec2335: the current design variant), the records of that variant, read and set on every unit too (UI-LEFT-3 S3-18).
+    ToggleSymbolAttribute {
+        ids: Vec<String>,
+        attribute: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        variant: String,
+    },
 }
 
 /// What made a wire [`SchCmd::AddWireAs`] puts down.
@@ -676,7 +682,7 @@ impl SchCmd {
             SchCmd::ResetSymbolFields { ids, .. } => format!("schematic reset-fields {}", ids.join(" ")),
             SchCmd::GlobalEditTextGraphics { .. } => "schematic edit-text-and-graphics".to_string(),
             SchCmd::SetNewPowerKind { lib_id, local } => format!("schematic power-kind {lib_id} --{}", if *local { "local" } else { "global" }),
-            SchCmd::ToggleSymbolAttribute { ids, attribute } => format!("schematic attrs {} --toggle {attribute}", ids.join(",")),
+            SchCmd::ToggleSymbolAttribute { ids, attribute, variant } => format!("schematic attrs {} --toggle {attribute}{}", ids.join(","), if variant.is_empty() { String::new() } else { format!(" --variant {variant}") }),
         }
     }
 
@@ -881,7 +887,7 @@ impl<'a> Board<'a> {
             SchCmd::ResetSymbolFields { ids, visibility, effects, positions, allow_unchanged } => self.reset_symbol_fields(ids, *visibility, *effects, *positions, *allow_unchanged),
             SchCmd::GlobalEditTextGraphics { spec } => self.global_edit_text_graphics(spec),
             SchCmd::SetNewPowerKind { lib_id, local } => self.set_new_power_kind(lib_id, *local),
-            SchCmd::ToggleSymbolAttribute { ids, attribute } => self.toggle_symbol_attribute(ids, attribute),
+            SchCmd::ToggleSymbolAttribute { ids, attribute, variant } => self.toggle_symbol_attribute(ids, attribute, variant),
         }
     }
 

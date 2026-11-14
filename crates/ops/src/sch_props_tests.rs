@@ -698,7 +698,7 @@ fn the_attribute_toggles_take_sheets_and_rule_areas_with_one_state_for_all() {
     area.id = "rarea_1".into();
     d.schematic.as_mut().unwrap().extras.graphics.push(area);
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let toggle = || SchCmd::ToggleSymbolAttribute { ids: ids(&["sheet_a", "rarea_1"]), attribute: "exclude_from_bom".into() };
+    let toggle = || SchCmd::ToggleSymbolAttribute { ids: ids(&["sheet_a", "rarea_1"]), attribute: "exclude_from_bom".into(), variant: String::new() };
     let bom = |b: &Board| {
         let s = sch_of(b);
         let area = match &s.extras.graphics[0].shape {
@@ -725,7 +725,7 @@ fn the_attribute_toggles_take_power_symbols() {
     sch.power_symbols.push(PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: p(mm(101.6), mm(50.8)), rot: 0, net: "GND".into(), pin: String::new() });
     sch.extras.power_props.insert("#PWR01".into(), eda_model::sch_extras::PowerProps { footprint: "fp".into(), ..Default::default() });
     let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
-    let toggle = |attr: &str, list: &[&str]| SchCmd::ToggleSymbolAttribute { ids: ids(list), attribute: attr.into() };
+    let toggle = |attr: &str, list: &[&str]| SchCmd::ToggleSymbolAttribute { ids: ids(list), attribute: attr.into(), variant: String::new() };
     ok(&mut b, toggle("exclude_from_sim", &["#PWR01"]));
     assert!(sch_of(&b).extras.power_props["#PWR01"].exclude_from_sim);
     ok(&mut b, toggle("exclude_from_sim", &["#PWR01"]));

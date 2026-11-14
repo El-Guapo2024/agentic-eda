@@ -167,3 +167,40 @@ fn a_variant_symbol_is_set_when_pin_compatible_and_cleared() {
     assert!(b.apply(&set_sym(None)).is_err(), "nothing to clear");
     assert!(b.apply(&Cmd::SetVariantSymbol { variant: String::new(), id: "R1".into(), lib_id: Some("Mine:R_alt".into()) }).is_err(), "the default variant has no variant symbol");
 }
+
+/// UI-LEFT-3 S3-18 (KiCad 25ec2335 `SCH_EDIT_TOOL::SetAttribute` in a variant: `new_state` over every collected unit, `SetDNP( new_state, sheet, variant )`):
+/// Do not Populate in a variant reads the records of every unit of the reference on every sheet, so a unit DNP in the variant on the sheet in view and one on
+/// another sheet that is not make the toggle set it -- on both -- and the next toggle clear it on both; a sheet toggled in the variant gets its record, its own
+/// flag left alone.
+#[test]
+fn a_toggle_in_a_variant_reads_and_sets_every_unit_on_every_sheet() {
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    add(&mut b, "Lite", "").unwrap();
+    b.apply(&Cmd::AddSheet { name: "Sub".into(), file: "sub".into(), at: Point { x: mm(60.0), y: mm(10.0) }, size: (mm(20.0), mm(20.0)) }).unwrap();
+    let mut d = b.design().clone();
+    let sheet_id = d.schematic.as_ref().unwrap().sheets[0].id.clone();
+    let key = d.schematic.as_ref().unwrap().sheets[0].file.clone();
+    let unit2 = eda_model::ir::SymbolInstance { unit: 2, at: Point { x: mm(30.0), y: mm(30.0) }, ..d.schematic.as_ref().unwrap().symbols[0].clone() };
+    d.sheet_contents.get_or_insert_with(Default::default).entry(key.clone()).or_default().symbols.push(unit2);
+    let mut rec = variants::SymbolVariant::initialized(variants::SymbolFlags::default());
+    rec.dnp = Some(true);
+    d.schematic.as_mut().unwrap().extras.symbol_variants.entry("R1".into()).or_default().insert("Lite".into(), rec);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let toggle = |ids: &[&str]| Cmd::SchEdit(crate::sch_edit::SchCmd::ToggleSymbolAttribute { ids: ids.iter().map(|s| s.to_string()).collect(), attribute: "dnp".into(), variant: "Lite".into() });
+    let dnp_in_lite = |b: &Board<'_>| -> (bool, bool) {
+        let d = b.design();
+        let root = d.schematic.as_ref().unwrap();
+        let sub = &d.sheet_contents.as_ref().unwrap()[&key];
+        (variants::resolved_flags(root, &root.symbols[0], "Lite").dnp, variants::resolved_flags(sub, &sub.symbols[0], "Lite").dnp)
+    };
+    assert_eq!(dnp_in_lite(&b), (true, false));
+    b.apply(&toggle(&["R1"])).unwrap();
+    assert_eq!(dnp_in_lite(&b), (true, true), "the unit on the other sheet lacked it: set on both");
+    assert!(!b.design().schematic.as_ref().unwrap().symbols[0].dnp, "the symbol's own flag is untouched");
+    b.apply(&toggle(&["R1"])).unwrap();
+    assert_eq!(dnp_in_lite(&b), (false, false), "every unit had it: cleared on both");
+    b.apply(&toggle(&[sheet_id.as_str()])).unwrap();
+    let root = b.design().schematic.as_ref().unwrap();
+    assert!(variants::sheet_flags(root, &sheet_id, "Lite").dnp && !root.extras.sheet_props_of(&sheet_id).dnp, "the sheet's record of the variant, not its own flag");
+}
