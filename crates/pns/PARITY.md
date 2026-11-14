@@ -1733,6 +1733,65 @@ UI-LEFT-2 RR3 to RR8, each read against KiCad 8303b2ad (25ec2335 where newer): `
   `qa_regressions` 13/13 exact, `dp_boards` 5/5; eda-cli `route_api`, `tune`, `net_inspector` 71 passed; slow `gate_vs_kicad` 11/12 (the known box failure,
   the shove toward mcu30's edge), slow `tune_api` 20/20 (kicad-cli); web typecheck clean, unit tests 3607/3607; browser `tuner-arcs` 5/5, `length-tuning` 11/11, `router-u3` 7/7, `diff-pairs` 11/11.
 
+## Stage 28 -- router-1: the edge walk, a route of no net, the width index, free pads (branch `task-v15-router`, 2026-11-14)
+
+UI-LEFT-3 R3-1, R3-2, R3-5 and R3-7, each read against KiCad 8303b2ad: `pns_shove.cpp` (`onCollidingSolid`), `pns_walkaround.cpp` (`Route`, `singleStep`),
+`pns_topology.cpp` (`AssembleCluster`), `pns_tool_base.cpp` (`pickSingleItem`, `updateEndItem`), `pns_line_placer.cpp` (`Start`, `FixRoute`), `pns_item.cpp`
+(`collideSimple`), `pns_item.h` (`IsFreePad`), `pns_kicad_iface.cpp` (`syncPad`, `GetNetCode`), `pad.cpp` (`IsFreePad`, `IsNoConnectPad`),
+`drc/drc_test_provider_copper_clearance.cpp` (`testTrackClearances`' `freePadsUsageMap`), `connectivity/connectivity_items.cpp` (`CN_CLUSTER::Add`),
+`pcb_painter.cpp` (`draw( const PAD* )`), `tools/pcb_selection_tool.cpp` (`FilterCollectorForFreePads`), `tools/edit_tool.cpp` (`Rotate`, `Mirror`'s `mirrorPad`,
+`Flip`, `Remove`, `Duplicate`, `Drag`), `tools/edit_tool_move_fct.cpp` (`Swap`, `doMoveSelection`), `tools/align_distribute_tool.cpp` (`GetSelections`),
+`tools/position_relative_tool.cpp`, `widgets/pcb_properties_panel.cpp` (`valueChanged`), `pcbnew_settings.cpp` (`m_AllowFreePads`), `board_design_settings.cpp`
+(`SetTrackWidthIndex`), `edit_track_width.cpp` (`Tracks_and_Vias_Size_Event`), `router/router_tool.cpp` (`InlineDrag`).
+
+- **R3-1, the edge walk.** `SHOVE::onCollidingSolid` keeps whatever `WALKAROUND::Route` gives (`WP_SHORTEST`, the cluster of the edge solid); the port bounded
+  a walk round the board edge at 2 x `WalkaroundHugLengthThreshold` of the line's length, and refused longer ones. The bound is gone: where a pushed track
+  has no room before the edge, the walk's own clusters (`singleStep`'s `AssembleCluster( obstacle, layer, 0.0, net )`, no area limit: every side of the
+  outline touches the next) take it round the outline inside the edge clearance, the shortest clear way, as KiCad's. The slow `gate_vs_kicad` shove toward
+  `mcu30`'s edge was the user's Mac board (the box's `work/mcu30` is an empty scratch, which the test now skips); a new slow test proves the walks on a
+  scratch board: six routes of SIG toward the bottom edge, three pushing GND toward it and three walking GND round the outline, every commit clean for
+  kicad-cli (no `copper_edge_clearance`, clearance, short or crossing). Tests: `board_edge` `a_shove_toward_the_edge_stops_at_the_clearance` (tip 0.8 mm
+  now walks round), slow `a_shove_toward_the_board_edge_and_one_that_walks_round_it_leave_kicad_cli_no_copper_violation`.
+- **R3-2, a route of no net.** `LINE_PLACER::Start` gives a route started on nothing the orphaned net handle (`GetOrphanedNetHandle()`, net code 0), and
+  `pickSingleItem`'s `GetNetCode( aNet ) <= 0 || item->Net() == aNet` then takes an end item of any net: `LinePlacer::snap_end` passes no net filter for a
+  route of no net (the exact anchor, the track under the cursor and `pick_single_item` alike) and `Preview::end_item` keeps the item. `FixRoute`'s
+  `realEnd` is `m_currentNet == aEndItem->Net()` (`LinePlacer::real_end`): a pad of another net is an end, not a real end. In Highlight collisions "if either
+  the trace or endItem is net-less, then allow the connection by adopting the net of the other": a route of no net takes the end item's net (the whole
+  route's here, as the board's net propagation would make it; the commit is written on it) and the collision check that follows asks the line with it; an
+  end item of no net is taken as the route's (KiCad's `aEndItem->SetNet` is the router's copy only). KiCad's recorded `simple-shove-1` (no end item at any
+  move: the tool that recorded it picked none) replays through `Router::preview_with_end_item( at, None )`, `Move( aP, nullptr )` as `PNS_LOG_PLAYER` passes
+  the logged items; with the tool's pick it reproduces 22 of the 28 segments. Tests: `a_route_of_no_net_takes_an_end_item_of_any_net`,
+  `simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean`.
+- **R3-5, the width index.** Found done: since `cca40225` (r4 R4-8, studio half) the studio chooses the route's width by the list index
+  (`m_trackWidthIndex`, `currentTrackWidthIndex`; `UseNetClassTrack()` is index 0 or past the list), and `kicad-port/routerSizes.ts`' `chosenTrackWidthOf`,
+  `routeWidthAfterChange` and `stepTrackWidth` work on the index, so a pre-defined width equal to the Default class's at index > 0 is a user choice
+  (`routerVia.test.ts` "a route takes the start net's class width unless a width is chosen"). The "Left" of GAPS 7 was stale.
+- **R3-7, free pads.** *`PAD::IsFreePad`* (`GetShortNetname().StartsWith( "unconnected-(" ) && m_pinType == "free"`) is worked out from the net and the pin type
+  the writer gives the pad (`eda_drc::board::pad_is_free`, `free_pads`, `DrcPad::free`: the file's net, else the number's or its `unconnected-(..)`; a pad
+  edit's pin type, else the file's, else the schematic pin's). *The router*: `Solid::free_pad` (`syncPad`'s `SetIsFreePad()`); `collideSimple`'s
+  `differentNetsOnly && ( IsFreePad() || aHead->IsFreePad() )` gives it no clearance to another net, its hole neither (`IsFreePad()` of a `HOLE` is its parent
+  pad's); `pickSingleItem` takes it for a route of any net when the cursor is inside it ("Allow free pads only when already inside pad", `prioritized[0]`,
+  distance 0) -- not a real end (`m_currentNet != aEndItem->Net()`). *The copper clearance gate* (`routing_clearance`): the first net whose track or via touches
+  a free pad is its net (`freePadsUsageMap`), copper of that net touching it is no violation, another net's or copper near it without touching is tested as
+  against any pad. *Connectivity*: KiCad's one use is `CN_CLUSTER::Add`'s net vote, where a free pad has no say; the studio's counterpart is the net healing
+  of copper on a net that is gone (`cli::net_names::heal_stale_nets`, `PropagateNets`' port), which now leaves free pads out; the ratsnest and the dangling
+  checks need nothing (a pad never changes net, `CN_ITEM( pad, false )`). *The painter* writes "x" on a no-connect pad (`IsNoConnectPad`: the pin type
+  contains `no_connect`) and "*" on a free pad whatever the net names mode (`padNetText`; the pad json's `free`). *Allow free pads* (`m_AllowFreePads`,
+  Preferences > PCB Editor > Editing Options, off by default; `kicad-port/freePads.ts`): `FilterCollectorForFreePads( aCollector, aForcePromotion )` keeps a
+  selected pad -- Move (the carry draws the pad alone, `splitCarried`), Rotate, Mirror (`mirrorPad`: position, orientation, offset, delta and a custom pad's
+  shapes), Move Exactly, Position Relative, Swap (two pads' `SwapShapePositions`), Align / Distribute (a pad aligns as itself unless all of the selection are
+  pads of different footprints) and the Properties panel's Position X / Y (`valueChanged`) work on the pad; Duplicate promotes it (`aForcePromotion`); a pad of
+  a locked footprint is locked (`PAD::IsLocked`). The backend keeps a pad's own place as a pad edit in its footprint's frame (`PadEdit::at`, with `rot` ..):
+  `move_items`, `rotate_items`, `mirror_items` and `swap_items` take a pad id. **Differs:** a route started on a free pad is a route of no net (the studio
+  gives a lone pin's pad no net, where KiCad's is `unconnected-(..)`); Flip turns a pad over with its footprint (`PAD::Flip` would take an SMD pad to the other
+  side alone, which the studio's pad cannot be); Delete of a pad with Allow free pads does nothing (KiCad removes the pad from its footprint; the studio keeps a
+  footprint's pads in step with their file records by index); D on a free pad drags what is under the cursor (`InlineDrag` does nothing for a pad). Tests:
+  `node` `a_free_pad_has_no_clearance_to_another_net_and_is_picked_from_inside`, `from_ir` `a_free_pad_and_its_hole_have_no_clearance_to_another_net`, gates
+  `a_free_pad_takes_the_first_net_that_touches_it`, ops `a_free_pad_moves_turns_mirrors_and_swaps_on_its_own`, slow cli
+  `a_route_into_a_free_pad_and_a_free_pad_moved_on_its_own_are_clean_for_kicad_cli` (kicad-cli: no clearance or short; the moved pad written at its new
+  place), web `freePads.test.ts` (4), `pcbDisplayOptions.test.ts` (the pad's net text), browser `free-pads.check.js`.
+- Gates: see the branch's report (HANDOFF "Open branches").
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
@@ -1770,10 +1829,9 @@ UI-LEFT-2 RR3 to RR8, each read against KiCad 8303b2ad (25ec2335 where newer): `
   flattening), as `syncGraphicalItem` does with `MakeEffectiveShapes()`; a cutout's rim keeps the
   clearance like the outer edge (`tests/board_edge.rs`,
   `an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge`). Castellated pads'
-  edge exclusions: Stage 24. A walk around an edge in a
+  edge exclusions: Stage 24. ~~A walk around an edge in a
   shove may not grow past 2 x `WalkaroundHugLengthThreshold` of the line's own
-  length (KiCad has no bound; with no room left the shortest clear walk is the long
-  way round the whole outline).
+  length~~ (the bound is gone, as KiCad has none: Stage 28).
 - ~~`KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints~~
   **Ported 2026-10-20** (Stage 9 step 4: `optimizer.rs`'s constraints, used by
   "Optimize entire track being dragged").
