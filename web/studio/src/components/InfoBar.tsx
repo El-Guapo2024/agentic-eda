@@ -6,10 +6,12 @@ export interface InfoBarProps {
   kind: "error" | "warning" | "info";
   /** `AddCloseButton`: the bar's close button, which dismisses it. */
   onClose?: () => void;
+  /** `AddButton( wxHyperlinkCtrl )`: a link on the bar (the zone fill warning's "Don't show again"). */
+  link?: { label: string; onClick: () => void };
   testid: string;
 }
 
-export function InfoBar({ message, kind, onClose, testid }: InfoBarProps) {
+export function InfoBar({ message, kind, onClose, link, testid }: InfoBarProps) {
   const icon = kind === "error" ? "⛔" : kind === "warning" ? "⚠" : "ℹ";
   return (
     <div
@@ -22,6 +24,19 @@ export function InfoBar({ message, kind, onClose, testid }: InfoBarProps) {
       <span data-testid={`${testid}-text`} style={{ flex: 1 }}>
         {message}
       </span>
+      {link && (
+        <a
+          href="#"
+          data-testid={`${testid}-link`}
+          style={{ color: "inherit" }}
+          onClick={(e) => {
+            e.preventDefault();
+            link.onClick();
+          }}
+        >
+          {link.label}
+        </a>
+      )}
       {onClose && (
         <button type="button" data-testid={`${testid}-close`} aria-label="Close" title="Close" style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, padding: 0 }} onClick={onClose}>
           ×

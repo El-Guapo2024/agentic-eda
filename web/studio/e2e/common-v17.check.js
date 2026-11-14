@@ -279,6 +279,22 @@
     t(JSON.stringify(E.state().highlight) === JSON.stringify([net]), `the net highlighted (${JSON.stringify(E.state().highlight)})`);
     t(JSON.stringify(E.state().selection) === selBefore, "the selection left as it was");
     await E.run("pcbnew.EditorControl.clearHighlight");
+    // Ctrl is no modifier then: a Ctrl+drag from the selected track is the router's drag, as a plain one (`hasModifier()` false)
+    fire("pointerdown", cx, cy);
+    await sleep(40);
+    fire("pointerup", cx, cy);
+    await sleep(400);
+    n = replies.length;
+    fire("pointerdown", cx, cy, { ctrl: true });
+    await sleep(60);
+    const [ux, uy] = w2c((x0 + x1) / 2, y - 800_000);
+    for (let i = 1; i <= 6; i++) { fire("pointermove", cx + ((ux - cx) * i) / 6, cy + ((uy - cy) * i) / 6, { ctrl: true }); await sleep(120); }
+    await sleep(600);
+    const ctrlDuring = E.state().tool;
+    fire("pointerup", ux, uy, { ctrl: true });
+    await sleep(1200);
+    t(ctrlDuring === "drag" && replies.slice(n).some((r) => r.name === "drag_start") && E.state().highlight.length === 0, `a Ctrl+drag drags the track (${ctrlDuring}; ${replies.slice(n).map((r) => r.name).join(", ")})`);
+    await undoBack();
     // the defaults back
     await openPrefs("pcb_edit");
     await click(tid("preferences-reset"));
@@ -289,6 +305,19 @@
     for (let i = 0; i < 4 && tracksOf(await state()).some((tr) => tr.id === track?.id); i++) { await E.run("common.Interactive.undo"); await sleep(800); }
     t(!tracksOf(await state()).some((tr) => tr.id === track?.id), "the track undone");
     if (strictWas && strict && !strict.checked) strict.click();
+  });
+
+  await scenario("infobar: what KiCad's pcbnew says in its info bar is said there, with its icon and time", async (t) => {
+    await E.run("pcbnew.EditorControl.clearHighlight");
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await sleep(300);
+    await E.run("pcbnew.EditorControl.clearHighlight");
+    await sleep(300);
+    await E.run("pcbnew.InspectionTool.ShowFootprintAssociations");
+    const bar = await until(() => tid("pcb-infobar"), 3000);
+    t(!!bar && tid("pcb-infobar-text")?.textContent === "Select a footprint for a footprint associations report." && bar.getAttribute("data-kind") === "error", `ShowInfoBarError's bar (${tid("pcb-infobar-text")?.textContent}; selection ${JSON.stringify(E.state().selection)})`);
+    t(!tid("pcb-infobar-close"), "no close button (the call asks for none)");
+    t(await until(() => !tid("pcb-infobar"), 10000), "gone after its 8 s");
   });
 
   await scenario("display: Schematic Editor > Display Options' Highlight thickness", async (t) => {
@@ -340,9 +369,47 @@
     t(!prefs(), "reset, OK closes it without a question");
   });
 
+  await scenario("3d: a key given to View > 3D Grid's 10 mm grid draws it; Export Image... opens Export 3D View", async (t) => {
+    // Preferences > Hotkeys: Shift+G for 3D Grid 10mm, Shift+E for Export Image... (Set Hotkey takes the key pressed, on its release)
+    await openPrefs("hotkeys");
+    const assign = async (name, key, code) => {
+      const row = tid("hotkeys-panel").querySelector(`tr[data-hotkey-action="${name}"]`);
+      row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await sleep(300);
+      const prompt = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.getAttribute("aria-label") === "Set Hotkey");
+      const target = document.activeElement ?? prompt;
+      const init = { key, code, shiftKey: true, bubbles: true, cancelable: true };
+      target.dispatchEvent(new KeyboardEvent("keydown", init));
+      await sleep(40);
+      target.dispatchEvent(new KeyboardEvent("keyup", init));
+      await sleep(300);
+      return row.querySelector('td[data-col="hotkey"]')?.textContent;
+    };
+    t((await assign("3DViewer.Control.show10mmGrid", "G", "KeyG")) === "Shift+G", "Shift+G assigned to 3D Grid 10mm");
+    t((await assign("3DViewer.Control.exportImage", "E", "KeyE")) === "Shift+E", "Shift+E assigned to Export Image...");
+    await ok();
+    await clickTab("3D");
+    await until(() => E.state().tab === "3d", 10000);
+    await sleep(2500);
+    const canvas3d = [...document.querySelectorAll(".pcb-canvas-container canvas")].find((c) => c.offsetParent !== null);
+    canvas3d?.dispatchEvent(new KeyboardEvent("keydown", { key: "G", code: "KeyG", shiftKey: true, bubbles: true, cancelable: true }));
+    const g = await until(() => (E.state().viewer3d?.grid3d?.lines ?? 0) > 0 && E.state().viewer3d.grid3d, 5000);
+    t(!!g && g.type === "10mm", `the 10 mm 3D grid drawn (${JSON.stringify(E.state().viewer3d?.grid3d)})`);
+    canvas3d?.dispatchEvent(new KeyboardEvent("keydown", { key: "E", code: "KeyE", shiftKey: true, bubbles: true, cancelable: true }));
+    const dlg = await until(() => [...document.querySelectorAll('[role="dialog"]')].find((d) => d.getAttribute("aria-label") === "Export 3D View"), 3000);
+    t(!!dlg && /\d+ × \d+ pixels/.test(tid("export3d-pixels")?.textContent ?? ""), `Export 3D View with the canvas' size (${tid("export3d-pixels")?.textContent})`);
+    if (dlg) await click(buttonIn(dlg, "Cancel"));
+    // the person's keys and the 3D settings this page stored, taken away
+    localStorage.removeItem("eda-studio.hotkeys.v1");
+    localStorage.removeItem("eda-studio.viewer3d");
+    await clickTab("PCB");
+  });
+
   await scenario("end: everything put back, no console errors", async (t) => {
     if (prefs()) await cancel();
-    t((E.errors?.() ?? []).length === 0, `no console errors (${JSON.stringify(E.errors?.() ?? []).slice(0, 300)})`);
+    // the info bar's error this check provokes on purpose is the only one
+    const errs = (E.errors?.() ?? []).filter((e) => e.message !== "Select a footprint for a footprint associations report.");
+    t(errs.length === 0, `no console errors (${JSON.stringify(errs).slice(0, 300)})`);
   });
 
   check.ok = results.length > 0 && results.every((r) => r.ok);

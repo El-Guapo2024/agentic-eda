@@ -1214,7 +1214,8 @@ export function useActionRunner() {
       "pcbnew.Control.zoneDisplayEnable",
       pcbOnly(() => {
         const warning = unfilledZoneWarning(state.zoneFill?.zones ?? null, state.board?.routing?.zones ?? [], getCommonOptions().zoneFillWarningDismissed);
-        if (warning) dispatch({ type: "TOAST", message: warning, kind: "info", ms: ZONE_FILL_WARNING_MS, dontShowAgain: "zoneFillWarningDismissed" });
+        // `unfilledZoneCheck`: the info bar's warning, `ShowMessageFor( msg, 5000, wxICON_WARNING )`, with its "Don't show again" link (components/PcbInfoBar.tsx)
+        if (warning) dispatch({ type: "SHOW_PCB_INFOBAR", message: warning, kind: "warning", ms: ZONE_FILL_WARNING_MS, close: false, dontShowAgain: "zoneFillWarningDismissed" });
         dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "filled" });
       })
     );
