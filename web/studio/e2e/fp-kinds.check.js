@@ -110,6 +110,20 @@
     for (let i = 0; i < d.length; i += 4) if (d[i] > 60 && d[i + 2] > 60 && d[i + 1] < 45 && Math.abs(d[i] - d[i + 2]) < 40) n++;
     return n;
   };
+  /** The same, counted inside the box `[x0, y0]`..`[x1, y1]` (mm on the board) alone. */
+  const magentaPixelsIn = (toScreen, x0, y0, x1, y1) => {
+    const c = pcbCanvas();
+    const r = c.getBoundingClientRect();
+    const k = c.width / r.width;
+    const [ax, ay] = toScreen(x0, y0), [bx, by] = toScreen(x1, y1);
+    const px0 = Math.max(0, Math.floor((Math.min(ax, bx) - r.left) * k)), py0 = Math.max(0, Math.floor((Math.min(ay, by) - r.top) * k));
+    const px1 = Math.min(c.width, Math.ceil((Math.max(ax, bx) - r.left) * k)), py1 = Math.min(c.height, Math.ceil((Math.max(ay, by) - r.top) * k));
+    if (px1 <= px0 || py1 <= py0) return 0;
+    const d = c.getContext("2d").getImageData(px0, py0, px1 - px0, py1 - py0).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 60 && d[i + 2] > 60 && d[i + 1] < 45 && Math.abs(d[i] - d[i + 2]) < 40) n++;
+    return n;
+  };
 
   // --------------------------------------------------------------------------------------------------------------------------- run
   const strict = [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
@@ -154,7 +168,9 @@
       await E.run("common.InteractiveSelection.clear");
       await sleep(400);
       // `PCB_PAINTER::Draw`: "Never draw footprint reference images on board" (UI-LEFT-3 P3-31; the Footprint Editor shows it)
-      t(magentaPixels() <= 20, `the board does not paint the footprint's image (${magentaPixels()} magenta pixels)`);
+      // (where the image is: the footprint's pad has the mask's magenta too)
+      const onImage = magentaPixelsIn(toScreen, home[0] - 7.6, home[1] - 0.8, home[0] - 4.4, home[1] + 0.8);
+      t(onImage <= 20, `the board does not paint the footprint's image (${onImage} magenta pixels where it is, ${magentaPixels()} on the canvas)`);
       await click(toScreen, home[0] + 7, home[1] + 3);
       t(E.state().selection.some((s) => s.id === "FPK1"), `a click in the text box picks the footprint (${JSON.stringify(E.state().selection)})`);
     });
