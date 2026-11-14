@@ -24,7 +24,7 @@ pub struct LibraryOnBoard {
     /// The engine's footprint the board's reader makes of the library's: the pads in the order of [`Self::record`]'s pad facts (`FootprintExtra::pads`).
     pub definition: Footprint,
     /// The record, a library footprint's (`FootprintExtra::from_library`, `library_frame`): no id, uuid, sheet, classes or source name yet (the caller's), no groups (they
-    /// name the art of [`Self::definition`] by place, which the footprint the board puts the part on need not share), no embedded files (the data is the library's),
+    /// name the art of [`Self::definition`] by place, which the footprint the board puts the part on need not share: [`Self::groups`]), no embedded files (the data is the library's),
     /// and no paste margins among its tokens (they are [`Self::paste_margin`] and [`Self::paste_ratio`], which a footprint made here keeps in its edit).
     pub record: FootprintExtra,
     /// The footprint's own `(solder_paste_margin ..)` and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`).
@@ -37,6 +37,9 @@ pub struct LibraryOnBoard {
     pub attrs: Option<eda_model::fp_edit::FootprintAttrs>,
     /// The footprint's zones (`Zones()`): rule areas, keepouts and zones of non-copper layers, on no net, in the footprint's frame, with no parent yet.
     pub zones: Vec<Zone>,
+    /// The footprint's own groups (`GetGroups()`), each member by its place in [`Self::definition`] (`FootprintGroup::members`): the caller carries them onto the footprint the
+    /// part is put on where its places are these (UI-LEFT-3 P3-31).
+    pub groups: Vec<eda_model::ir::FootprintGroup>,
 }
 
 /// The board's footprint of the library footprint `lib` (see the module doc), on a board whose copper layers are `copper_layers` (front to back: a pad on `*.Cu` is on
@@ -79,7 +82,7 @@ pub fn library_on_board(lib: &LibraryFootprint, copper_layers: &[String]) -> Opt
     record.uuid = None;
     record.unlinked_name = None;
     record.source_name = String::new();
-    record.groups.clear();
+    let groups = std::mem::take(&mut record.groups);
     record.embedded = Default::default();
     record.from_library = true;
     record.library_frame = true;
@@ -98,7 +101,7 @@ pub fn library_on_board(lib: &LibraryFootprint, copper_layers: &[String]) -> Opt
         })
         .unwrap_or_default();
     let attrs = edit.as_ref().and_then(|e| e.attrs);
-    Some(LibraryOnBoard { definition, record, paste_margin: facts.paste_margin, paste_ratio: facts.paste_margin_ratio, pad_margins, attrs, zones })
+    Some(LibraryOnBoard { definition, record, paste_margin: facts.paste_margin, paste_ratio: facts.paste_margin_ratio, pad_margins, attrs, zones, groups })
 }
 
 #[cfg(test)]

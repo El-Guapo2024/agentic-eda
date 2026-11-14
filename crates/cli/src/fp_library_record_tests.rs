@@ -433,6 +433,13 @@ fn update_footprint_on_board_gives_the_copys_children_their_board_uuids_back() {
     // every child but the deleted line kept its uuid
     let gone = before.iter().filter(|u| !after.contains(u)).count();
     assert_eq!(gone, 1, "only the deleted line's uuid is gone: {before:?} -> {after:?}");
+    // kicad-cli reads them all as they are: no uuid it had to make anew, the group's members found
+    if let Some(theirs) = kicad_cli_rewrite(&dir, "uuids") {
+        let fp = footprint_of(&theirs, "U1");
+        for u in &after {
+            assert!(fp.contains(u.as_str()), "kicad-cli keeps {u}: {fp}");
+        }
+    }
     // and once more with nothing edited: the same uuids
     step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
     step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: BoardFootprintCopy::key_of("U1") }), false, "test").unwrap();
@@ -471,8 +478,13 @@ fn a_courtyard_item_kept_as_text_is_a_graphic_of_ctrl_es_copy_and_comes_back() {
     assert_eq!(uuid_of_line(&dir, "(layer \"F.CrtYd\")"), crtyd);
     let group = &fp[fp.find("(group").unwrap()..];
     assert!(group.contains(crtyd), "{group}");
-    if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
-        // kicad-cli reads the courtyard where the copy put it: U1's pads stay inside it, nothing is missing
+    if let Some(theirs) = kicad_cli_rewrite(&dir, "courtyard") {
+        // kicad-cli reads the moved courtyard rectangle with its uuid, in the group
+        let fp = footprint_of(&theirs, "U1");
+        assert!(fp.contains("(start -2 -3)") && fp.contains(crtyd), "{fp}");
+        let group = &fp[fp.find("(group").unwrap()..];
+        assert!(group.contains(crtyd), "{group}");
+        // and its DRC finds the courtyard: nothing missing or malformed
         let report = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
         let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
         assert_eq!((count("missing_courtyard"), count("malformed_courtyard")), (0, 0), "{}", report["violations"]);
@@ -505,4 +517,75 @@ fn a_courtyard_item_of_a_footprint_on_the_back_is_in_the_frame_of_the_copys_othe
     // and back unchanged: the item as the file had it
     step(&out, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: BoardFootprintCopy::key_of("U1") }), false, "test").unwrap();
     assert!(pcb(&out).contains("(fp_rect (start -3 -2) (end 4 1) (stroke (width 0.05) (type solid)) (fill no) (layer \"B.CrtYd\")"));
+}
+
+/// UI-LEFT-3 P3-31: a library footprint's own groups come onto the board with it (KiCad's board footprint is the library's clone, `GetGroups()` with the rest): placed,
+/// the board file's footprint has the group with its line and its pad; Update Footprint from Library keeps it.
+#[test]
+fn a_library_footprints_group_comes_onto_the_board_with_it() {
+    let dir = board("p331_groups");
+    let grouped = r#"(footprint "Grouped" (version 20241229) (generator "pcbnew") (layer "F.Cu")
+  (property "Reference" "REF**" (at 0 -3 0) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-0000000000a1") (effects (font (size 1 1) (thickness 0.15))))
+  (property "Value" "Grouped" (at 0 3 0) (layer "F.Fab") (uuid "00000000-0000-0000-0000-0000000000a2") (effects (font (size 1 1) (thickness 0.15))))
+  (attr smd)
+  (fp_line (start -2 -2) (end 2 -2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-0000000000a3"))
+  (fp_line (start -2 2) (end 2 2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-0000000000a4"))
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-0000000000a5"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-0000000000a6"))
+  (group "Body" (uuid "00000000-0000-0000-0000-0000000000a7") (members "00000000-0000-0000-0000-0000000000a3" "00000000-0000-0000-0000-0000000000a6"))
+)"#;
+    std::fs::write(dir.join("libs").join("Lib.pretty").join("Grouped.kicad_mod"), grouped).unwrap();
+    step(&dir, Cmd::PlaceFootprint { footprint: "Lib:Grouped".into(), at: Point { x: mm(70.0), y: mm(40.0) }, reference: "G1".into(), value: String::new(), definition: None }, false, "test").unwrap();
+    let check = |what: &str| {
+        let text = pcb(&dir);
+        let fp = footprint_of(&text, "G1").to_string();
+        let group = fp.find("(group \"Body\"").map(|i| fp[i..].to_string()).unwrap_or_else(|| panic!("{what}: the group is on the board\n{fp}"));
+        let line = uuid_of_line_in(&fp, "(fp_line (start -2 -2)");
+        let pad = uuid_of_line_in(&fp, "(pad \"2\"");
+        assert!(group.contains(&line) && group.contains(&pad), "{what}: the line and pad 2 are its members: {group}");
+        assert_eq!(group[group.find("(members").unwrap()..].split(')').next().unwrap().matches('"').count(), 4, "{what}: two members: {group}");
+    };
+    check("placed");
+    if let Some(theirs) = kicad_cli_rewrite(&dir, "groups") {
+        let fp = footprint_of(&theirs, "G1").to_string();
+        let group = &fp[fp.find("(group \"Body\"").expect("kicad-cli keeps the group")..];
+        assert!(group.contains(&uuid_of_line_in(&fp, "(fp_line")) && group.contains(&uuid_of_line_in(&fp, "(pad \"2\"")), "kicad-cli finds both members: {group}");
+    }
+    step(&dir, Cmd::ExchangeFootprints { references: vec!["G1".into()], footprint: None, options: ExchangeOptions::update(), library: Default::default(), library_items: Default::default() }, false, "test").unwrap();
+    check("updated from the library");
+}
+
+/// The uuid of the first line of the footprint text `fp` that contains `needle`.
+fn uuid_of_line_in(fp: &str, needle: &str) -> String {
+    let at = fp.find(needle).unwrap_or_else(|| panic!("{needle} in {fp}"));
+    let rest = &fp[at..];
+    let u = &rest[rest.find("(uuid \"").unwrap() + 7..];
+    u[..u.find('"').unwrap()].to_string()
+}
+
+/// The board file of `dir` as kicad-cli reads and writes it back (`pcb upgrade --force`), when the slow tests run (`EDA_SLOW_TESTS`) and kicad-cli is there: KiCad gives
+/// a uuid of its own to an item whose uuid another item has, and drops a group member it cannot find.
+fn kicad_cli_rewrite(dir: &Path, name: &str) -> Option<String> {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        return None;
+    }
+    let cli = eda_kicad_engine::find_cli()?;
+    let copy = dir.join(format!("{name}.kicad_pcb"));
+    std::fs::write(&copy, pcb(dir)).unwrap();
+    let out = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+    assert!(out.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    Some(std::fs::read_to_string(&copy).unwrap())
+}
+
+/// UI-LEFT-3 P3-31: the board's state says which layers of a footprint are its private layers (`GetPrivateLayers`), for the canvas to leave their items undrawn; a
+/// footprint with none says nothing.
+#[test]
+fn the_state_names_a_footprints_private_layers() {
+    let dir = board("p331_private");
+    step(&dir, Cmd::PlaceFootprint { footprint: "Lib:Kept".into(), at: Point { x: mm(70.0), y: mm(40.0) }, reference: "K1".into(), value: String::new(), definition: None }, false, "test").unwrap();
+    let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+    let state = crate::studio::state(&dir, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+    let part = |r: &str| state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == r).unwrap().clone();
+    assert_eq!(part("K1")["private_layers"], serde_json::json!(["User.1"]));
+    assert!(part("U1").get("private_layers").is_none());
 }

@@ -37,13 +37,15 @@ export function graphicsOf(part: Pick<Part, "graphics">): readonly ArtShape[] {
 export const layersOf = (g: Pick<ArtShape, "layer" | "layers">): readonly string[] => (g.layers?.length ? g.layers : [g.layer]);
 
 /** Whether the Appearance panel's rows let a footprint's graphic show on `layer`: the layer's own switch and the footprint's side (`PCB_SHAPE::ViewGetLOD`). */
-export function artLayerShown(layerVisible: Readonly<Record<string, boolean>>, part: Pick<Part, "side">, layer: string): boolean {
+export function artLayerShown(layerVisible: Readonly<Record<string, boolean>>, part: Pick<Part, "side" | "private_layers">, layer: string): boolean {
+  // (not on one of the footprint's private layers: `PCB_PAINTER::Draw`, UI-LEFT-3 P3-31)
+  if (part.private_layers?.includes(layer)) return false;
   return layerIsVisible(layerVisible, layer) && objectOn(layerVisible, part.side === "bottom" ? "footprints_back" : "footprints_front");
 }
 
 /** `PCB_TEXT::ViewGetLOD` for a footprint's text: its layer, its footprint's side, the Footprint Text row, and the References / Values rows for the two variables. */
-export function artTextShown(layerVisible: Readonly<Record<string, boolean>>, part: Pick<Part, "side">, text: Pick<FpTextInfo, "layer" | "role">): boolean {
-  if (!layerIsVisible(layerVisible, text.layer)) return false;
+export function artTextShown(layerVisible: Readonly<Record<string, boolean>>, part: Pick<Part, "side" | "private_layers">, text: Pick<FpTextInfo, "layer" | "role">): boolean {
+  if (!layerIsVisible(layerVisible, text.layer) || part.private_layers?.includes(text.layer)) return false;
   if (!objectOn(layerVisible, part.side === "bottom" ? "footprints_back" : "footprints_front") || !objectOn(layerVisible, "footprint_text")) return false;
   if (text.role === "reference") return objectOn(layerVisible, "footprint_references");
   if (text.role === "value") return objectOn(layerVisible, "footprint_values");

@@ -54,6 +54,12 @@ pub fn pcb_cell_addr(row: usize, col: usize) -> String {
 /// The text of a cell of a board's table with its variables resolved, before it is broken into lines: `${ROW}` and `${COL}` count from 1, `${ADDR}` is the
 /// spreadsheet name of the cell, `${LAYER}` the name of the table's layer, then the board's own variables (`PCB_TABLECELL::GetShownText`).
 pub fn pcb_cell_resolved(raw: &str, layer: &str, row: usize, col: usize, board: &PcbBoard) -> String {
+    pcb_cell_resolved_in(raw, layer, row, col, board, None)
+}
+
+/// [`pcb_cell_resolved`] of a cell of a table of `footprint` (UI-LEFT-3 P3-31): after the cell's own variables the footprint answers (`parentFootprint->ResolveTextVar`:
+/// `${REFERENCE}`, `${VALUE}`, its fields, its pads' nets ..), then the board.
+pub fn pcb_cell_resolved_in(raw: &str, layer: &str, row: usize, col: usize, board: &PcbBoard, footprint: Option<&crate::text_vars::PcbFootprint>) -> String {
     shown_text(
         raw,
         &|t: &str| match t {
@@ -61,7 +67,7 @@ pub fn pcb_cell_resolved(raw: &str, layer: &str, row: usize, col: usize, board: 
             "COL" => Some((col + 1).to_string()),
             "ADDR" => Some(pcb_cell_addr(row, col)),
             "LAYER" => Some(board.layer_name(layer)),
-            _ => board.resolve(t, 1),
+            _ => footprint.and_then(|fp| fp.resolve(board, t, 1)).or_else(|| board.resolve(t, 1)),
         },
         0,
     )
@@ -347,8 +353,13 @@ pub fn place_lines_at(style: &crate::table::TableText, pen_nm: f64, origin: (Nm,
 
 /// A board cell ready to draw. `board` resolves the variables.
 pub fn pcb_cell_draw(t: &Table, row: usize, col: usize, board: &PcbBoard) -> CellDraw {
+    pcb_cell_draw_in(t, row, col, board, None)
+}
+
+/// [`pcb_cell_draw`] of a cell of a table of `footprint` ([`pcb_cell_resolved_in`]).
+pub fn pcb_cell_draw_in(t: &Table, row: usize, col: usize, board: &PcbBoard, footprint: Option<&crate::text_vars::PcbFootprint>) -> CellDraw {
     let cell: &TableCell = t.cell(row, col).expect("a cell of the table");
-    let resolved = pcb_cell_resolved(&cell.text, &t.layer, row, col, board);
+    let resolved = pcb_cell_resolved_in(&cell.text, &t.layer, row, col, board, footprint);
     let shown = wrap_to_cell(t, row, col, &resolved);
     let lines = if cell.is_covered() { Vec::new() } else { place_lines(t, row, col, &shown) };
     CellDraw { shown, lines, angle: t.angle, mirror: cell.style.mirror, pen_nm: cell.style.pen_nm().as_f64() }
@@ -510,6 +521,21 @@ pub fn rounded(l: &PlacedLine) -> Point {
 mod tests {
     use super::*;
     use crate::table::{TableBorder, TableSeparators, TableStroke, TableText};
+
+    /// UI-LEFT-3 P3-31: a cell of a footprint's table asks the footprint after its own variables (`PCB_TABLECELL::GetShownText`: `parentFootprint->ResolveTextVar`), then
+    /// the board; a cell of a board's table asks the board alone.
+    #[test]
+    fn a_footprint_tables_cell_resolves_its_footprints_variables_before_the_boards() {
+        use crate::text_vars::{PcbField, PcbFootprint};
+        let fp = PcbFootprint {
+            layer: "F.Cu".into(),
+            fields: vec![PcbField { name: "Reference".into(), text: "U7".into(), layer: "F.SilkS".into() }, PcbField { name: "Value".into(), text: "LM358".into(), layer: "F.Fab".into() }],
+            ..Default::default()
+        };
+        let board = PcbBoard::default();
+        assert_eq!(pcb_cell_resolved_in("${REFERENCE} ${VALUE} ${ADDR}", "F.Fab", 0, 1, &board, Some(&fp)), "U7 LM358 B1");
+        assert_eq!(pcb_cell_resolved("${REFERENCE}", "F.Fab", 0, 0, &board), "${REFERENCE}", "a board's table has no footprint to ask");
+    }
 
     fn one_cell(text: &str, w: Nm, h: Nm, style: TableText) -> Table {
         let mut cell = TableCell::pcb_new(false);

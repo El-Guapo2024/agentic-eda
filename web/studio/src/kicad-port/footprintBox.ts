@@ -21,7 +21,7 @@ import { fpItemsBounds } from "./fpBoardItems";
 export type FootprintBox = readonly [number, number, number, number];
 
 /** What of a footprint the box reads (the snap scene's parts carry no more). */
-export type FootprintBoxPart = Pick<Part, "placed"> & Partial<Pick<Part, "at" | "pads" | "courtyard" | "body" | "fields" | "graphics" | "texts" | "items">>;
+export type FootprintBoxPart = Pick<Part, "placed"> & Partial<Pick<Part, "at" | "pads" | "courtyard" | "body" | "fields" | "graphics" | "texts" | "items" | "private_layers">>;
 
 /** `bbox.Inflate( pcbIUScale.mmToIU( 0.25 ) )`: "Give a min size to the bbox". */
 export const MIN_HALF_SIZE_NM = 250_000;
@@ -43,8 +43,10 @@ export function footprintBox(part: FootprintBoxPart, includeText: boolean, textB
   let box: FootprintBox = [x - MIN_HALF_SIZE_NM, y - MIN_HALF_SIZE_NM, x + MIN_HALF_SIZE_NM, y + MIN_HALF_SIZE_NM];
   if (part.courtyard) box = merge(box, [part.courtyard[0], part.courtyard[1], part.courtyard[2], part.courtyard[3]]);
   if (part.body) box = merge(box, [part.body[0], part.body[1], part.body[2], part.body[3]]);
-  const graphics =
-    !includeText && part.graphics?.some((g) => ANNOTATION_LAYERS.has(g.layer)) ? part.graphics.filter((g) => !ANNOTATION_LAYERS.has(g.layer)) : part.graphics;
+  // (an item on one of the footprint's private layers is not the board's: `m_privateLayers.test( item->GetLayer() ) && !isFPEdit`, UI-LEFT-3 P3-31)
+  const isPrivate = (layer: string) => !!part.private_layers?.includes(layer);
+  const own = part.private_layers?.length ? part.graphics?.filter((g) => !isPrivate(g.layer)) : part.graphics;
+  const graphics = !includeText && own?.some((g) => ANNOTATION_LAYERS.has(g.layer)) ? own.filter((g) => !ANNOTATION_LAYERS.has(g.layer)) : own;
   const art = artBounds({ graphics });
   if (art) box = merge(box, art);
   // the text boxes, barcodes, tables and dimensions (`m_drawings`; a reference image only in the footprint editor), the annotations left out as the graphics are (UI-LEFT
@@ -59,16 +61,17 @@ export function footprintBox(part: FootprintBoxPart, includeText: boolean, textB
           dimensions: [],
         }
       : part.items;
-  const own = items ? fpItemsBounds({ items }) : null;
-  if (own) box = merge(box, own);
+  const ownItems = items ? fpItemsBounds({ items, private_layers: part.private_layers }) : null;
+  if (ownItems) box = merge(box, ownItems);
   for (const pad of part.pads ?? []) box = merge(box, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2]);
   if (includeText && textBox) {
     for (const field of part.fields ?? []) {
-      if (!field.visible) continue;
+      if (!field.visible || isPrivate(field.layer)) continue;
       const t = textBox(field);
       if (t) box = merge(box, t);
     }
     for (const text of part.texts ?? []) {
+      if (isPrivate(text.layer)) continue;
       const t = textBox(artTextAsField(text));
       if (t) box = merge(box, t);
     }

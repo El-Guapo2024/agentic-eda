@@ -1475,6 +1475,7 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 crate::fp_art_json::add_courtyard_graphics(&mut p, &design, &model, part, fp, footprint);
                 // Its text boxes, images, points and barcodes (`items`), board space (UI-LEFT P17).
                 crate::fp_board_items_json::add_items(&mut p, &design, &model, part, fp, &tv);
+                crate::fp_art_json::add_private_layers(&mut p, &design, &model, part);
                 // the board's variables in its texts (the title block's ..), and the lines of its hatched graphics (UI-LEFT P15)
                 tv.annotate_art_texts(&part.reference, footprint, &mut p["texts"]);
                 crate::fp_art_json::add_hatch_lines(&mut p, &design, &model, fp, footprint);

@@ -362,6 +362,8 @@ export interface Part {
   hidden_texts?: Array<{ id: string; layer: string; role?: "reference" | "value" }>;
   /** The footprint's courtyard graphics (`REF~c<k>`, crates/ops `courtyard_graphics`), for the global edit's "Footprint graphic items" (UI-LEFT-2 PP23). */
   courtyard_graphics?: Array<{ id: string; layer: string }>;
+  /** `FOOTPRINT::GetPrivateLayers`: the user layers whose items of the footprint only the Footprint Editor shows (UI-LEFT-3 P3-31: kicad-port/fpBoardItems.ts `onPrivateLayer`). */
+  private_layers?: string[];
   /**
    * The footprint's text boxes, reference images, points and barcodes (`FootprintExtra::items`, UI-LEFT P17) and its dimensions and tables (UI-LEFT PP14), board space, each in the
    * JSON of the board's own item of its kind and with the id `<ref>~<item id>` (crates/cli/src/fp_board_items_json.rs); absent when it has none.
