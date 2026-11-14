@@ -32,7 +32,9 @@
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const overrideBox = () => document.querySelector('[data-control="overrideLocks"] input');
+  const overrideBox = () => [...document.querySelectorAll('[data-control="overrideLocks"] input')].find((b) => b.offsetParent !== null);
+  const strictBox = () => [...document.querySelectorAll("label.toggle")].find((l) => /strict/i.test(l.textContent))?.querySelector("input");
+  const setStrict = async (on) => { const b = strictBox(); if (b && b.checked !== on) { b.click(); await sleep(400); } };
   const setOverride = async (on) => { const b = overrideBox(); if (b && b.checked !== on) { b.click(); await sleep(300); } return !!b; };
   const errorsFrom = Date.now();
   if (E.state().tab !== "pcb") { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click(); await sleep(1200); }
@@ -55,16 +57,20 @@
     await sleep(500);
     await setOverride(false);
     await select(["R1.1", "R1.2"]);
-    await E.run("pcbnew.InteractiveEdit.swapPadNets");
-    const said = await until(() => [...document.querySelectorAll(".toast")].map((x) => x.textContent).find((m) => /Cannot swap nets of locked pads/.test(m)));
-    t(/Cannot swap nets of locked pads or connected copper unless Override Locks is enabled\./.test(said ?? ""), `refused: ${said}`);
+    const run = await E.run("pcbnew.InteractiveEdit.swapPadNets");
+    await sleep(600);
+    const said = run.toast?.message ?? E.errors(errorsFrom).map((e) => e.message ?? String(e)).find((m) => /Cannot swap nets/.test(m));
+    t(/Cannot swap nets of locked pads or connected copper unless Override Locks is enabled\./.test(said ?? ""), `refused: ${said} (${JSON.stringify(run)})`);
     t(JSON.stringify(await padNets("R1")) === JSON.stringify(before), "nothing changed");
     t(await setOverride(true), "Override locks checked");
     await select(["R1.1", "R1.2"]);
-    await E.run("pcbnew.InteractiveEdit.swapPadNets");
+    const second = await E.run("pcbnew.InteractiveEdit.swapPadNets");
+    await sleep(600);
     if (tid("swap-nets-prompt")) tid("swap-nets-ignore").click();
-    const after = await until(async () => { const n = await padNets("R1"); return n["1"] === before["2"] ? n : null; });
-    t(!!after && after["2"] === before["1"], `swapped with the box checked: ${JSON.stringify(after)}`);
+    t(!second.error, `the action ran: ${JSON.stringify(second)} (selection ${JSON.stringify(E.state().selection)})`);
+    // (a board with no stored schematic draws the swap at once, so the nets may take other names: the pads have changed nets, each the other's)
+    const after = await until(async () => { const n = await padNets("R1"); return n["1"] !== before["1"] && n["2"] !== before["2"] ? n : null; });
+    t(!!after && after["1"] !== after["2"], `swapped with the box checked: ${JSON.stringify(after)} (toast ${JSON.stringify(second.toast)}, box ${overrideBox()?.checked}, prompt ${!!tid("swap-nets-prompt")})`);
     await setOverride(false);
     await undo();
     await undo();
@@ -122,6 +128,9 @@
     nets.set("GND", [...(nets.get("GND") ?? []), ["TP99", "1"]]);
     const text = `(export (version "E") (components ${comps.join(" ")}) (nets ${[...nets].map(([n, ns], i) => `(net (code "${i + 1}") (name "${n}") ${ns.map(([r, p]) => `(node (ref "${r}") (pin "${p}"))`).join(" ")})`).join(" ")}))`;
     const r2Before = board.parts.find((q) => q.ref === "R2").value;
+    // (the studio's Strict switch would judge the spread footprints off the board: off for this, as the import-netlist check has it)
+    const strictWas = !!strictBox()?.checked;
+    await setStrict(false);
     await E.run("pcbnew.EditorControl.importNetlist", { name: "v17.net", text });
     await until(() => tid("import-netlist-dialog"));
     tid("import-netlist-link-1").click();
@@ -137,6 +146,7 @@
     t((await partOf("R2"))?.value === "470", "the import stands (R2 is 470)");
     await undo();
     t((await partOf("R2"))?.value === r2Before && !(await partOf("TP99"))?.placed, "one Undo takes the whole import back");
+    await setStrict(strictWas);
   });
 
   await scenario("the board is as it was and nothing logged an error", async (t) => {
