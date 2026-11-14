@@ -380,3 +380,45 @@ fn replace_all_in_references_moves_a_multi_unit_symbol_on_two_sheets() {
     let search = crate::search::SearchData { find: "R5".into(), replace: "R6".into(), replace_references: true, ..Default::default() };
     assert_eq!(b.apply(&Cmd::ReplaceText { search, items: None, all_sheets: true }).unwrap_err()[0].check, "ops_duplicate_symbol");
 }
+
+/// UI-LEFT-3 S3-26: a sheet drawn gets the person's colours for a new sheet (`DrawSheet`: `SetBorderColor( cfg->m_Drawing.default_sheet_border_color )`,
+/// `SetBackgroundColor( .. )`); with none set (KiCad's `COLOR4D::UNSPECIFIED`) it keeps none of its own.
+#[test]
+fn a_new_sheet_takes_the_default_sheet_colours() {
+    use crate::sch_prefs::{scoped_new_sheet_colors, NewSheetColors};
+    use eda_model::sch_extras::SchColor;
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    let red = SchColor { r: 200, g: 0, b: 0, a: 255 };
+    {
+        let _scope = scoped_new_sheet_colors(NewSheetColors { border: Some(red), background: None });
+        b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(mm(10.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
+    }
+    b.apply(&Cmd::AddSheet { name: "Other".into(), file: "other".into(), at: p(mm(60.0), mm(10.0)), size: (mm(30.0), mm(20.0)) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let (first, second) = (sch.extras.sheet_props_of(&sch.sheets[0].id), sch.extras.sheet_props_of(&sch.sheets[1].id));
+    assert_eq!((first.border_color, first.fill_color), (Some(red), None));
+    assert_eq!((second.border_color, second.fill_color), (None, None), "no colour of its own");
+}
+
+/// UI-LEFT-3 S3-1: a wire started from a free end of a wire (`autostartEvent`'s `sourceSegment`, `startSegments`' `Duplicate`) has that wire's stroke; one
+/// with the default stroke gives the default.
+#[test]
+fn a_wire_drawn_from_a_wire_end_takes_its_stroke() {
+    use crate::sch_edit::SchCmd;
+    use eda_model::sch_extras::{SchColor, SchLineStyle, SchStroke};
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, mm(0.1), mm(0.3));
+    b.apply(&Cmd::AddWire { pts: vec![p(mm(0.0), mm(0.0)), p(mm(10.16), mm(0.0))], bus: false }).unwrap();
+    b.design.schematic.as_mut().unwrap().assign_missing_ids();
+    let source = b.design().schematic.as_ref().unwrap().wires[0].id.clone();
+    let stroke = SchStroke { width_nm: mm(0.3), style: SchLineStyle::Dash, color: Some(SchColor { r: 10, g: 20, b: 30, a: 255 }) };
+    b.design.schematic.as_mut().unwrap().extras.strokes.insert(source.clone(), stroke.clone());
+    b.apply(&Cmd::sch(SchCmd::AddWireLike { pts: vec![p(mm(10.16), mm(0.0)), p(mm(10.16), mm(10.16))], bus: false, like: source.clone() })).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let new = sch.wires.iter().find(|w| w.pts.contains(&p(mm(10.16), mm(10.16)))).unwrap();
+    assert_ne!(new.id, source);
+    assert_eq!(sch.extras.strokes.get(&new.id), Some(&stroke), "the clicked wire's stroke");
+    let verb: Cmd = serde_json::from_value(serde_json::json!({ "op": "sch_edit", "verb": "add_wire_like", "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 2540000 }], "like": "w" })).unwrap();
+    assert!(matches!(verb, Cmd::SchEdit(SchCmd::AddWireLike { .. })));
+}

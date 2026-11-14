@@ -36,7 +36,10 @@ fn err(message: impl Into<String>) -> Value {
 ///
 /// The mandatory Description (`addMandatoryField( FIELD_T::DESCRIPTION, false, false )`) and the generated `${ITEM_NUMBER}` ("#") are columns, not shown, as
 /// `ApplyBomPreset( DefaultEditing )` leaves them (UI-LEFT-2 SS13); a symbol's field named Description is that column, not a user field's.
-fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design) -> TableSpec {
+///
+/// The templates are the project's and then the person's own the project does not name (`global`: Preferences > Schematic Editor > Field Name Templates, the
+/// request's `global_field_names`; `TEMPLATES::resolveTemplates`, "Project templates take precedence").
+fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design, global: &[eda_model::sch_setup::TemplateFieldName]) -> TableSpec {
     let mut spec = TableSpec::default_editing();
     for (name, label) in [(fields_table::DESCRIPTION, "Description"), (fields_table::ITEM_NUMBER, "#")] {
         if !spec.columns.iter().any(|c| c.name == name) {
@@ -50,7 +53,8 @@ fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::D
         spec.columns.push(Column { name: name.clone(), label: name, show: true, group_by: false });
     }
     let root = design.schematic.as_ref();
-    for t in root.map(|r| r.extras.field_name_templates.as_slice()).unwrap_or(&[]) {
+    let project = root.map(|r| r.extras.field_name_templates.as_slice()).unwrap_or(&[]);
+    for t in project.iter().chain(global.iter().filter(|g| !project.iter().any(|p| p.name == g.name))) {
         if !spec.columns.iter().any(|c| c.name.eq_ignore_ascii_case(&t.name)) {
             spec.columns.push(Column { name: t.name.clone(), label: t.name.clone(), show: false, group_by: false });
         }
@@ -64,7 +68,10 @@ fn default_spec(sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::D
 fn parse_spec(req: &Value, sch: &eda_model::ir::SchematicSection, design: &eda_model::ir::Design) -> Result<TableSpec, String> {
     match req.get("spec").filter(|v| !v.is_null()) {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| format!("bad table spec: {e}")),
-        None => Ok(default_spec(sch, design)),
+        None => {
+            let global: Vec<eda_model::sch_setup::TemplateFieldName> = req.get("global_field_names").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            Ok(default_spec(sch, design, &global))
+        }
     }
 }
 
@@ -479,12 +486,20 @@ mod tests {
             bus_aliases: vec![],
             symbol_library: None,
         };
-        let spec = default_spec(&sch, &design);
+        let spec = default_spec(&sch, &design, &[]);
         let col = |n: &str| spec.columns.iter().filter(|c| c.name == n).cloned().collect::<Vec<_>>();
         assert_eq!(col("Description").len(), 1, "one Description column");
         assert!(!col("Description")[0].show && !col(fields_table::ITEM_NUMBER)[0].show);
         assert_eq!(col(fields_table::ITEM_NUMBER)[0].label, "#");
         assert!(col("MPN")[0].show, "a user field is shown (the studio's own default)");
+        // UI-LEFT-3 C3-2: the person's own templates are columns too, not shown, after the project's; one the project names is the project's
+        let t = |n: &str| eda_model::sch_setup::TemplateFieldName { name: n.into(), visible: false, url: false };
+        let mut with_project = design.clone();
+        with_project.schematic.as_mut().unwrap().extras.field_name_templates = vec![t("Supplier")];
+        let spec = default_spec(&sch, &with_project, &[t("Supplier"), t("Tolerance")]);
+        let names: Vec<&str> = spec.columns.iter().map(|c| c.name.as_str()).filter(|n| ["Supplier", "Tolerance"].contains(n)).collect();
+        assert_eq!(names, vec!["Supplier", "Tolerance"]);
+        assert!(!spec.columns.iter().find(|c| c.name == "Tolerance").unwrap().show);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 // The file-in actions: Import Graphics (File > Import > Graphics... in the board editor, `DRAWING_TOOL::PlaceImportedGraphics`; the schematic's and the symbol editor's twin is
 // `SCH_DRAWING_TOOLS::ImportGraphics`) and the drops that reach them (`DdImportGraphics`: a DXF or SVG dropped on the window). Append Board and its drop are `appendBoardActions`
 // below. A browser drop gives the page a file's text and not its path, so the drop actions take the file as their parameter -- `{ name, text }` -- where KiCad's takes a file name.
+import { markRescueOnLoad } from "../state/rescueOnLoad";
+import { LEGACY_SCHEMATIC_FORMAT } from "../kicad-port/foreignImport";
 import { openImportGraphics, type PickedFile } from "../state/importDialogs";
 import { graphicsFormatOf } from "../kicad-port/importGraphics";
 import { appendBoardCmd, describeAppended, isKicadBoardName } from "../kicad-port/appendBoard";
@@ -255,6 +257,12 @@ async function importForeign(ctx: ImportActionContext, kind: ConvertKind, given:
     // A legacy schematic none of whose symbols names a library: `OpenProjectFiles` opens Remap Symbols (`DIALOG_SYMBOL_REMAP`) as the project loads
     // ("Convert old projects over to use symbol library table").
     if (kind === "schematic" && reply.remap) ctx.run?.("eeschema.EditorControl.remapSymbols");
+    // ... else, with no cache library beside it and "Never show Rescue Symbols tool" off: Rescue Symbols, not on demand (`if( ( !cfg || !cfg->m_RescueNeverShow ) &&
+    // !cacheExists ) RescueSymbolLibTableProject( false )`; UI-LEFT-3 S3-26)
+    else if (kind === "schematic" && reply.format === LEGACY_SCHEMATIC_FORMAT && reply.cache_found === false && !ctx.api.getState().prefs.schRescueNeverShow) {
+      markRescueOnLoad();
+      ctx.run?.("eeschema.EditorControl.rescueSymbols");
+    }
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e), "error");
   }

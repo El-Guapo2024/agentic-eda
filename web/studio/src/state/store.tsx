@@ -21,7 +21,7 @@ import { revisionOf } from "../kicad-port/checkRevision";
 import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, setSchCmdPrefs, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -61,6 +61,7 @@ import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { newIdsAfter } from "../kicad-port/schClipboard";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { schCmdPrefsOf } from "../kicad-port/schCmdPrefs";
 import { type RouterSettings } from "../kicad-port/routerSettings";
 import { loadRouterSettings, saveRouterSettings } from "./routerSettingsStorage";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
@@ -407,7 +408,8 @@ export type DrawState =
   /** Draw Table (`DRAWING_TOOL::DrawTable`): the first corner, once it is clicked; the grid follows the cursor (kicad-port/tables.ts `drawTableGrid`). */
   | { kind: "table"; origin: [Nm, Nm] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
-  | { kind: "wire"; pts: [Nm, Nm][] }
+  | { kind: "wire"; pts: [Nm, Nm][]; /** Started by the selection tool on an unconnected pin, label or wire end (`autostartEvent`'s `quitOnDraw`): the tool gives way to the
+     *  selection tool once the wire is finished or cancelled (UI-LEFT-3 S3-1). */ quitOnDraw?: boolean; /** The wire it was started from (`sourceSegment`): the new wire takes its stroke. */ like?: string }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
   /** `arrow`: Interactive Offset's ruler (`POSITION_RELATIVE_TOOL::InteractiveOffset`: the anchor colour, no ticks, an arrowhead at the end) rather than the Measure tool's. */
   | { kind: "measure"; pts: [Nm, Nm][]; arrow?: boolean };
@@ -992,6 +994,9 @@ function browserStorage(): Storage | null {
   }
 }
 
+/** The preferences the studio starts with (the browser's, else KiCad's defaults). */
+const initialPrefs = loadPreferences(browserStorage());
+
 const initialState: StudioState = {
   board: null,
   boardError: null,
@@ -1007,7 +1012,8 @@ const initialState: StudioState = {
   schEnteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
-  schLineMode: 1,
+  // `m_Drawing.line_mode` as the person last left it (UI-LEFT-3 S3-26)
+  schLineMode: initialPrefs.schLineMode,
   schPosture: false,
   schNav: initialNavHistory(),
   armed: null,
@@ -1089,7 +1095,7 @@ const initialState: StudioState = {
   schWirePick: null,
   schPickedEnds: null,
   localOriginNm: { x: 0, y: 0 },
-  prefs: loadPreferences(browserStorage()),
+  prefs: initialPrefs,
   preferencesDialogOpen: false,
   schematic: null,
   schematicError: null,
@@ -1384,7 +1390,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "CLEAN_SCH_NAV":
       return { ...state, schNav: cleanHistory(state.schNav, action.sheets) };
     case "SET_SCH_LINE_MODE":
-      return { ...state, schLineMode: action.mode };
+      // `m_frame->eeconfig()->m_Drawing.line_mode = ..` (`SCH_EDITOR_CONTROL::ChangeLineMode`, `NextLineMode`): kept with the preferences, between sessions
+      return { ...state, schLineMode: action.mode, prefs: state.prefs.schLineMode === action.mode ? state.prefs : { ...state.prefs, schLineMode: action.mode } };
     case "TOGGLE_SCH_POSTURE":
       return { ...state, schPosture: !state.schPosture };
     case "SET_RIGHT_DOCK_TAB":
@@ -2000,6 +2007,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   // Preferences persist in the browser (the studio's equivalent of KiCad's common.json) -- UI settings, not design data.
   useEffect(() => {
     savePreferences(browserStorage(), state.prefs);
+    // what the commands carry to the server (Symbol Field Automatic Placement, a new sheet's colours: kicad-port/schCmdPrefs.ts)
+    setSchCmdPrefs(schCmdPrefsOf(state.prefs));
   }, [state.prefs]);
   useEffect(() => saveAngleSnapMode(browserStorage(), state.pcbx.angleSnapMode), [state.pcbx.angleSnapMode]);
   const stateRef = useRef(state);

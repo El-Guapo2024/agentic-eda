@@ -32,6 +32,8 @@ import { cursorRunLabel, cursorValue, displayName, nextCursorRun, scaleOf, snapC
 import { moveCursor } from "../../kicad-port/sim/simFrame";
 import { getSimUi, touch, useSimUi } from "../../state/simulator";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
+import { useStudioState } from "../../state/store";
+import { performSimWheelAction, simWheelAction } from "../../kicad-port/sim/simWheel";
 
 const FONT = "11px sans-serif";
 // mathplot.cpp's mpLEGEND_MARGIN, mpLEGEND_LINEWIDTH; CURSOR::DRAG_MARGIN
@@ -305,6 +307,10 @@ function cursorAt(plot: PlotTab, p: { x: number; y: number }): { tr: Trace; id: 
 type Drag = { kind: "zoom"; x0: number; y0: number; x1: number; y1: number } | { kind: "cursor"; tr: Trace; id: number; refY: number; downY: number } | { kind: "legend"; dx: number; dy: number } | { kind: "pan"; x: number; y: number };
 
 export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
+  // the wheel's actions (Preferences > Schematic Editor > Simulator), read by the wheel listener, which is registered once
+  const simWheel = useStudioState().prefs.simWheel;
+  const wheelActions = useRef(simWheel);
+  wheelActions.current = simWheel;
   const ui = useSimUi();
   const dark = ui.frame.dark;
   const wrap = useRef<HTMLDivElement>(null);
@@ -437,16 +443,15 @@ export function SimPlot({ tabId, plot }: { tabId: number; plot: PlotTab }) {
     void e;
   };
 
-  // `mpWindow::PerformMouseWheelAction` with KiCad's default actions: zoom; with Ctrl pan left and right; with Shift pan up and down.
+  // `mpWindow::onMouseWheel` / `PerformMouseWheelAction` with the actions of Preferences > Schematic Editor > Simulator (`m_Simulator.preferences.mouse_wheel_actions`,
+  // kicad-port/sim/simWheel.ts; KiCad's mouse defaults: zoom; with Ctrl pan left and right; with Shift pan up and down). A horizontal wheel is the horizontal row's.
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const p = pos(e);
-    const change = -e.deltaY;
-    // PAN_LEFT_RIGHT: `m_posX + change / m_scaleX`; PAN_UP_DOWN: `m_posY + change / m_scaleY` (`pan` takes pixels, y downwards)
-    if (e.ctrlKey) pan(plot.view, change, 0);
-    else if (e.shiftKey) pan(plot.view, 0, -change);
-    else if (change > 0) zoomIn(plot.view, "both", p);
-    else if (change < 0) zoomOut(plot.view, "both", p);
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    const act = simWheelAction(wheelActions.current, { horizontal, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey });
+    if (!act) return;
+    performSimWheelAction(plot.view, act, horizontal ? -e.deltaX : -e.deltaY, p);
     touch();
   };
   onWheelRef.current = onWheel;

@@ -3,13 +3,20 @@
 // the dialog lists them -- Accept, Symbol Name, Action Taken, each accepted at first -- with the instances of the selected one and its cached and library
 // symbols side by side. "Rescue Symbols" writes the rescue library and its table row and relinks the symbols as one undoable command; "Skip Symbol Rescue"
 // keeps nothing. A schematic none of whose symbols names a library gets the legacy rescuer's candidates (`LEGACY_RESCUER`: a `<project>-rescue.lib` put
-// first in the project's legacy list, crates/cli/src/legacy_rescue.rs). Run on demand, so the "Never Show Again" button is not shown (`m_askShowAgain` is false).
+// first in the project's legacy list, crates/cli/src/legacy_rescue.rs). Run on demand (the Tools menu) the "Never Show Again" button is not shown (`m_askShowAgain` is
+// false); run as a legacy schematic comes in (state/rescueOnLoad.ts, `RescueSymbolLibTableProject( false )`) it is, and nothing to rescue says nothing (UI-LEFT-3 S3-26).
 import { useEffect, useState } from "react";
 import { fetchRescueCandidates, rescueSymbols, type RescueCandidates } from "../../api/rescueClient";
 import { chosenCandidates, instancesTitle, NOTHING_RESCUED, NOTHING_TO_RESCUE, RESCUE_INFO, rescueOutcome } from "../../kicad-port/rescueSymbols";
 import { useStudioApi, useStudioDispatch } from "../../state/store";
 import { SymbolPreview } from "../chooser/ChooserPreview";
 import { SchDialogFrame } from "./SchDialogFrame";
+import { takeRescueOnLoad } from "../../state/rescueOnLoad";
+import { askConfirm } from "../library/libraryDialogs";
+
+/** `DIALOG_RESCUE_EACH::OnNeverShowClick`'s question, word for word. */
+export const NEVER_SHOW_QUESTION =
+  'Stop showing this tool?\nNo changes will be made.\n\nThis setting can be changed from the "Preferences" dialog,\nand the tool can be activated manually from the "Tools" menu.';
 
 const cell = { padding: "2px 6px", borderBottom: "1px solid var(--chrome-border)" } as const;
 
@@ -21,15 +28,17 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(new Set());
   const [row, setRow] = useState(0);
   const [busy, setBusy] = useState(false);
+  /** Run as a schematic comes in, not on demand (`!aRunningOnDemand`): taken once, when the dialog opens. */
+  const [onLoad] = useState(takeRescueOnLoad);
 
   useEffect(() => {
     let alive = true;
     fetchRescueCandidates().then(
       (r) => {
         if (!alive) return;
-        // `RescueProject( .., aRunningOnDemand = true )` with no candidate: the message box alone
+        // `RescueProject( .., aRunningOnDemand = true )` with no candidate: the message box alone; not on demand, nothing at all
         if (r.candidates.length === 0) {
-          dispatch({ type: "TOAST", message: NOTHING_TO_RESCUE, kind: "info" });
+          if (!onLoad) dispatch({ type: "TOAST", message: NOTHING_TO_RESCUE, kind: "info" });
           onClose();
           return;
         }
@@ -86,6 +95,21 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
           <button onClick={skip} data-rescue-skip>
             Skip Symbol Rescue
           </button>
+          {onLoad && (
+            // `OnNeverShowClick`: asked first; Yes sets `m_RescueNeverShow` and rescues nothing ("No symbols were rescued.")
+            <button
+              data-rescue-never-show
+              onClick={() =>
+                void askConfirm({ title: "Rescue Symbols", message: NEVER_SHOW_QUESTION, okLabel: "Yes", cancelLabel: "No" }).then((yes) => {
+                  if (!yes) return;
+                  dispatch({ type: "PATCH_PREFERENCES", patch: { schRescueNeverShow: true } });
+                  skip();
+                })
+              }
+            >
+              Never Show Again
+            </button>
+          )}
         </>
       }
     >

@@ -7,11 +7,12 @@
 import { noteContentModified } from "../state/contentModified";
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindMarker, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillPreviewReply, FillReport, FindMarker, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RouterEventSizes, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Nm, SchSetupReply, TemplateFieldName } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { PcbQueryRequest, PcbQueryResponse } from "../kicad-port/pcbQuery";
 import type { SchMovePatch } from "./schEditTypes";
 import type { SchPastePreview } from "../kicad-port/schClipboard";
+import type { SchCmdPrefs } from "../kicad-port/schCmdPrefs";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
 import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
@@ -252,12 +253,20 @@ export async function fetchBoardGlb(retry = false): Promise<BoardGlbResult> {
 /** Where a command stands in a carried placement (crates/cli/src/carry.rs): it begins one, joins the one held open (Move Individually's drops before the last), or ends it. */
 export type CarryStep = "begin" | "hold" | "commit";
 
+/** The person's schematic preferences the commands read (kicad-port/schCmdPrefs.ts), as the store last set them; none before it has (the server's defaults are KiCad's). */
+let schCmdPrefs: SchCmdPrefs | null = null;
+
+/** The store's preferences changed: what every command carries from now on. */
+export function setSchCmdPrefs(prefs: SchCmdPrefs): void {
+  schCmdPrefs = prefs;
+}
+
 export async function postCmd(cmd: Cmd, strict: boolean, carry?: CarryStep): Promise<CmdReply> {
   const r = await fetch("/api/cmd", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // `carry`: the command starts ("begin": Duplicate, Paste) or ends ("commit": the drop) a carried placement, which the undo history keeps as one step.
-    body: JSON.stringify(carry ? { cmd, strict, carry } : { cmd, strict }),
+    body: JSON.stringify({ cmd, strict, ...(carry ? { carry } : {}), ...(schCmdPrefs ?? {}) }),
   });
   const reply = (await r.json()) as CmdReply;
   // the editor whose content the step modified (`OnModify`): what "Save changes?" asks about
@@ -338,7 +347,8 @@ export async function postMovePreview(body: { sheet: string; cmds: Cmd[] }): Pro
  */
 export async function postPlacePreview(body: { sheet: string; cmd: Cmd }): Promise<SchPastePreview | null> {
   try {
-    const r = await fetch("/api/sch/place_preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    // the item rides as the click will place it: with the person's Symbol Field Automatic Placement
+    const r = await fetch("/api/sch/place_preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, ...(schCmdPrefs ? { autoplace: schCmdPrefs.autoplace } : {}) }) });
     const j = (await r.json()) as { ok: true; preview: SchPastePreview } | { ok: false };
     return j.ok ? j.preview : null;
   } catch {
@@ -906,8 +916,9 @@ function variantKeys(view?: FieldsTableVariantView): FieldsTableVariantView {
 }
 
 /** POST /api/sch/fields_table: omit `spec` for the dialog's initial view; `preset` names one of KiCad's built-in views to apply to it first (`ApplyBomPreset`). */
-export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null, preset?: string, view?: FieldsTableVariantView): Promise<FieldsTableReply> {
-  return postJson("/api/sch/fields_table", { spec, changes, ...(preset ? { preset } : {}), ...variantKeys(view) });
+export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null, preset?: string, view?: FieldsTableVariantView, globalFieldNames?: readonly TemplateFieldName[]): Promise<FieldsTableReply> {
+  // `global_field_names`: the person's own field name templates (Preferences > Schematic Editor > Field Name Templates), a column each in the initial view
+  return postJson("/api/sch/fields_table", { spec, changes, ...(preset ? { preset } : {}), ...variantKeys(view), ...(globalFieldNames && globalFieldNames.length > 0 ? { global_field_names: globalFieldNames } : {}) });
 }
 
 /** POST /api/sch/bom_export: `path` (relative to the board directory) omitted = preview text only; `preview: true` with a path also skips writing. */

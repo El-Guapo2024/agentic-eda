@@ -797,6 +797,22 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
         }
         other => {
             let pivot = default_pivot(scene);
+            let enable = eda_engine::fields::autoplace_prefs().enable;
+            // ("Automatically place symbol fields" off: the fields turn with the symbol from where they are drawn now -- a symbol whose places are not stored yet
+            // has them stored first, as KiCad's `SCH_FIELD`s always are)
+            if !enable {
+                let key = match other {
+                    Item::Symbol(i) => Some(eda_model::ir::field_key(&scene.sch.symbols[i].id, scene.sch.symbols[i].unit)),
+                    Item::Power(i) => Some(scene.sch.power_symbols[i].id.clone()),
+                    _ => None,
+                };
+                if let Some(key) = key.filter(|k| !scene.sch.field_layout.contains_key(k)) {
+                    if let Some(ctx) = eda_engine::fields_edit::OwnerCtx::new(&scene.sch, scene.model, &key) {
+                        let now = ctx.current(&scene.sch);
+                        scene.sch.field_layout.insert(key, now);
+                    }
+                }
+            }
             rotate_item(scene, other, pivot, ccw, grid);
             // `case SCH_SYMBOL_T`: `if( m_AutoplaceFields.enable ) ... symbol->AutoplaceFields( screen, fieldsAutoplaced )` -- a symbol turned alone has the
             // fields that Autoplace Fields put where they were placed again for its new orientation
@@ -805,7 +821,8 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
                 Item::Power(i) => Some(scene.sch.power_symbols[i].id.clone()),
                 _ => None,
             };
-            if let Some(key) = owner {
+            // ("Automatically place symbol fields" off: the fields turn with the symbol and stay where that puts them)
+            if let Some(key) = owner.filter(|_| enable) {
                 scene.replace_fields_if_autoplaced(&key);
             }
             pivot
