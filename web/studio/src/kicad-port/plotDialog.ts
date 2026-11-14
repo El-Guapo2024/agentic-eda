@@ -55,7 +55,6 @@ export const KICAD_CLI_LIMITS = {
   svgPrecision: "kicad-cli plots SVG with 4 digits below 1 mm (it has no precision flag)",
   pdfMetadata: "kicad-cli always generates the PDF metadata (it has no flag to leave it out)",
   pdfPopups: "kicad-cli sets both together (--no-property-popups)",
-  dxfFont: "kicad-cli always plots DXF text with the KiCad font (it has no flag for DXF fonts)",
   browse: "the studio runs in a browser: type the folder, relative to the board's folder",
   openDir: "the studio runs in a browser and cannot open a folder of the server; the files are listed below after a plot",
 } as const;
@@ -419,8 +418,9 @@ export function plotEnables(form: PlotForm): PlotEnables {
     negative: f === "svg" || f === "pdf" || f === "ps" || f === "png",
     forceA4: f === "ps",
     dxfContours: f === "dxf",
-    // `m_DXF_plotTextStrokeFontOpt->Enable( !m_DXF_plotModeOpt->GetValue() )`; never here (KICAD_CLI_LIMITS.dxfFont).
-    dxfKiCadFont: false,
+    // `m_DXF_plotTextStrokeFontOpt->Enable( !m_DXF_plotModeOpt->GetValue() )` (unticked, the plot goes through kicad-cli's jobset runner, whose DXF job has
+    // `use_kicad_font`: UI-LEFT-3 P3-25)
+    dxfKiCadFont: !form.dxfContours,
     dnpRadios: form.plotDNP,
     padNumbers: form.sketchPads,
     pdfBackground: !form.pdfBlackAndWhite,
@@ -516,8 +516,9 @@ export function optionsFromForm(form: PlotForm): Record<string, string> {
     mirror: yn(form.mirror),
     dxfpolygonmode: yn(form.dxfContours),
     dxfimperialunits: yn(form.dxfUnits === "in"),
-    // `if( !m_DXF_plotTextStrokeFontOpt->IsEnabled() ) SetTextMode( DEFAULT )`: it is never enabled here.
-    dxfusepcbnewfont: "yes",
+    // `if( !m_DXF_plotTextStrokeFontOpt->IsEnabled() ) SetTextMode( DEFAULT ) else SetTextMode( GetValue() ? DEFAULT : NATIVE )`: the box is enabled while
+    // the contours box is unticked, whatever the format
+    dxfusepcbnewfont: yn(form.dxfContours || form.dxfKiCadFont),
     plot_black_and_white: yn(bw),
     pdf_front_fp_property_popups: pdf ? yn(form.pdfFrontPopups) : "yes",
     pdf_back_fp_property_popups: pdf ? yn(form.pdfBackPopups) : "yes",

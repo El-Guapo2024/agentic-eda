@@ -201,9 +201,9 @@ pub fn export_into(dir: &Path, kind: &str, args: &[String], out_dir: &Path) -> R
 }
 
 /// The Plot dialog's DXF through kicad-cli's jobset runner ([`eda_kicad_engine::export_pcb_dxf_job_into`]): `args` are `pcb export dxf`'s.
-pub fn export_dxf_job_into(dir: &Path, args: &[String], out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+pub fn export_dxf_job_into(dir: &Path, args: &[String], use_kicad_font: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    eda_kicad_engine::export_pcb_dxf_job_into(&design, &model, &work(dir), dir, &project_name(dir), args, out_dir)
+    eda_kicad_engine::export_pcb_dxf_job_into(&design, &model, &work(dir), dir, &project_name(dir), args, use_kicad_font, out_dir)
 }
 
 /// The drill report alone (`DIALOG_GENDRILL::onGenReportFile`), written by kicad-cli at `report`.
@@ -223,6 +223,13 @@ pub fn export_pos(dir: &Path, args: &[String], single_file: bool) -> Result<Valu
 pub fn export_pos_into(dir: &Path, args: &[String], single_file: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     eda_kicad_engine::export_pcb_placement_into(&design, &model, &work(dir), dir, &project_name(dir), args, single_file, out_dir)
+}
+
+/// [`export_pos_into`] by kicad-cli's jobset runner (`pcb_export_pos`, [`eda_kicad_engine::export_pcb_placement_job_into`]), which takes the dialog's
+/// "Exclude all footprints with the Exclude from BOM flag set" (`exclude_bom`) that `pcb export pos` has no flag for.
+pub fn export_pos_job_into(dir: &Path, args: &[String], single_file: bool, exclude_bom: bool, out_dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad_engine::export_pcb_placement_job_into(&design, &model, &work(dir), dir, &project_name(dir), args, single_file, exclude_bom, out_dir)
 }
 
 /// `kicad-cli sch export <kind> [args...]` (`netlist`, `bom`, `pdf`, `svg`,

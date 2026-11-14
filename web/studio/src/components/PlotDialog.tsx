@@ -151,13 +151,10 @@ export function PlotDialog() {
       const applied = await apply();
       if (!applied) return;
       // `if( !m_plotOpts.GetLayerSelection().any() ) DisplayError( this, _( "No layer selected, Nothing to plot" ) )`, the selection holding the
-      // copper layers the board lacks; with those only, `PCB_PLOTTER::Plot` skips them all and says "Done.".
+      // copper layers the board lacks; with those only, `PCB_PLOTTER::Plot` skips them all and says "Done.", a Gerber plot writing its job file
+      // (the server's `fab_api::plot`, UI-LEFT-3 P3-26).
       if (noLayerSelected(form.checked, copperLayers.length)) {
         setResult({ ok: false, message: "No layer selected, Nothing to plot", files: [] });
-        return;
-      }
-      if (form.checked.length === 0) {
-        setResult({ ok: true, message: [...applied.messages, "Done."].join("\n"), files: [] });
         return;
       }
       const reply = await postFabPlot({ ...plotRequest(form, applied.ps), ...(variant ? { variant } : {}) });
@@ -407,7 +404,7 @@ export function PlotDialog() {
                       <option value="mm">Millimeters</option>
                     </select>
                   </label>
-                  <Check label="Use KiCad font to plot text" title={`Not available: ${KICAD_CLI_LIMITS.dxfFont}`} checked={f.dxfKiCadFont} disabled />
+                  <Check label="Use KiCad font to plot text" title={"Check to use KiCad stroke font\nUncheck to plot single-line ASCII texts as editable text (using DXF font)"} checked={f.dxfKiCadFont} disabled={!en.dxfKiCadFont} onChange={(v) => set({ dxfKiCadFont: v })} testid="plot-dxf-kicad-font" />
                   <Check label="Single document" title="Export selected layers into a single DXF" checked={f.dxfSingle} onChange={(v) => set({ dxfSingle: v })} />
                 </Box>
               )}

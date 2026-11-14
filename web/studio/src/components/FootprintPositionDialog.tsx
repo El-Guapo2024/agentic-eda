@@ -13,10 +13,15 @@
 // footprint qualifies). Both sides always, as KiCad's dialog (it has no side
 // choice). "Output directory:" is the dialog's own (`m_outputDirectoryName`,
 // kept between openings as `DIALOG_SHIM` keeps it), relative to the board's
-// folder; empty is `export/kicad/pos/`. Shown disabled with the reason:
-// "Exclude all footprints with the Exclude from BOM flag set" (kicad-cli
-// 10.99's `pcb export pos` still has no flag for it; only the api-server's
-// position job has `exclude_from_bom`) and the folder browser. "Design variant:"
+// folder; empty is `export/kicad/pos/`. "Exclude all footprints with the
+// Exclude from BOM flag set" (`m_excludeBOM`) goes to kicad-cli's jobset
+// runner, whose `pcb_export_pos` job has `exclude_bom` where `pcb export pos`
+// has no flag (UI-LEFT-3 P3-27). KiCad 25ec2335's filters by format
+// (`JOB_EXPORT_PCB_POS::FormatSupportsFilter`, `onUpdateUIExcludeTH`,
+// `updateOptionCheckbox`): Gerber X3 leaves "Include only SMD footprints" and
+// "Exclude all footprints with through hole pads" off and disabled, and keeps
+// the Do Not Populate and Exclude from BOM ones. Shown disabled with the
+// reason: the folder browser. "Design variant:"
 // (KiCad 25ec2335 `m_variantChoiceCtrl`) starts at the board's current variant
 // (`GetBoard()->GetCurrentVariant()`) and goes to kicad-cli as `--variant`
 // (`exporter.SetVariant( getSelectedVariant() )`).
@@ -36,6 +41,7 @@ export function FootprintPositionDialog() {
   const [smdOnly, setSmdOnly] = useState(false);
   const [excludeFpTh, setExcludeFpTh] = useState(false);
   const [excludeDnp, setExcludeDnp] = useState(false);
+  const [excludeBom, setExcludeBom] = useState(false);
   const [negateX, setNegateX] = useState(false);
   const [boardEdge, setBoardEdge] = useState(false);
   // m_useDrillPlaceOrigin starts checked in KiCad's dialog.
@@ -66,7 +72,8 @@ export function FootprintPositionDialog() {
         units_mm: unitsMm,
         smd_only: !gerber && smdOnly,
         exclude_fp_th: !gerber && excludeFpTh,
-        exclude_dnp: !gerber && excludeDnp,
+        exclude_dnp: excludeDnp,
+        exclude_bom: excludeBom,
         use_aux_origin: useAuxOrigin,
         single_file: singleFile,
         negate_x: !gerber && negateX,
@@ -101,7 +108,20 @@ export function FootprintPositionDialog() {
               ] as const
             ).map(([f, label]) => (
               <label key={f} className="toggle">
-                <input type="radio" name="pos-format" checked={format === f} onChange={() => setFormat(f)} />
+                <input
+                  type="radio"
+                  name="pos-format"
+                  checked={format === f}
+                  onChange={() => {
+                    setFormat(f);
+                    // `updateOptionCheckbox`: a filter Gerber X3 does not take is unticked as it is disabled
+                    if (f === "gerber") {
+                      setSmdOnly(false);
+                      setExcludeFpTh(false);
+                      setNegateX(false);
+                    }
+                  }}
+                />
                 {label}
               </label>
             ))}
@@ -127,11 +147,11 @@ export function FootprintPositionDialog() {
               Exclude all footprints with through hole pads
             </label>
             <label className="toggle">
-              <input type="checkbox" disabled={gerber} checked={!gerber && excludeDnp} onChange={(e) => setExcludeDnp(e.target.checked)} data-testid="pos-exclude-dnp" />
+              <input type="checkbox" checked={excludeDnp} onChange={(e) => setExcludeDnp(e.target.checked)} data-testid="pos-exclude-dnp" />
               Exclude all footprints with the Do Not Populate flag set
             </label>
-            <label className="toggle" title="Not available: kicad-cli pcb export pos has no flag for it" style={{ opacity: 0.5 }}>
-              <input type="checkbox" disabled checked={false} readOnly />
+            <label className="toggle">
+              <input type="checkbox" checked={excludeBom} onChange={(e) => setExcludeBom(e.target.checked)} data-testid="pos-exclude-bom" />
               Exclude all footprints with the Exclude from BOM flag set
             </label>
             <label className="toggle" style={{ opacity: gerber ? 1 : 0.5 }}>
