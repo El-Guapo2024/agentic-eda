@@ -167,6 +167,9 @@ struct Driver {
     /// `CLAIM::source`'s item: the uuid the derived file gives the claiming label or power pin ([`Naming::anchor_uuid`]), the last tie-break of `CLAIM_LESS`;
     /// `None` when no uuids are given.
     source: Option<String>,
+    /// A label or sheet pin whose shown text reads as a bus (`SCH_CONNECTION::IsBusLabel( GetShownText() )`: `NET_SETTINGS::ParseBusVector` or
+    /// `ParseBusGroup`), told from the unescaped text (an escaped `{slash}` would read as a group).
+    reads_as_bus: bool,
 }
 
 impl Driver {
@@ -176,8 +179,14 @@ impl Driver {
         let name = escape_net_name(&name);
         let full = if prio >= GLOBAL_POWER_PIN || name.is_empty() { name.clone() } else { format!("{sheet_path}/{name}") };
         let depth = if prio >= GLOBAL_POWER_PIN || prio == PIN { 0 } else { depth };
-        Driver { prio, name, depth, power_parent: false, output: false, full, source: None }
+        Driver { prio, name, depth, power_parent: false, output: false, full, source: None, reads_as_bus: false }
     }
+}
+
+/// `SCH_CONNECTION::IsBusLabel`: the text is a bus vector or a bus group as `NET_SETTINGS::ParseBusVector` / `ParseBusGroup` read it (the exact ports in
+/// [`eda_model::bus_pattern`]: `_{`, `^{` and `~{` are formatting, any other `{` opens a group). A bare bus alias name is not one (a net in KiCad too).
+fn reads_as_bus(text: &str) -> bool {
+    eda_model::bus_pattern::parse_bus_vector(text).is_some() || eda_model::bus_pattern::parse_bus_group(text).is_some()
 }
 
 /// A subgraph: the points that are one node on one screen.
@@ -547,7 +556,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
                 LabelKind::Hierarchical { .. } => (HIER_LABEL, 1),
                 LabelKind::Global { .. } => (GLOBAL, 2),
             };
-            g.drivers.push(Driver { source: uuid_of(AnchorItem::Label { text: &l.net, at: l.at }), ..Driver::new(prio, name.clone(), depth[si], &spath[si]) });
+            g.drivers.push(Driver { source: uuid_of(AnchorItem::Label { text: &l.net, at: l.at }), reads_as_bus: reads_as_bus(&name), ..Driver::new(prio, name.clone(), depth[si], &spath[si]) });
             // `BuildIslandRecord`'s name edges: every label kind is a name on its sheet (`SCOPE::SHEET`), a global one across the schematic too
             // (`SCOPE::GLOBAL`), a hierarchical one at its sheet's port (`SCOPE::PORT`)
             g.local_names.push(name.clone());
@@ -581,7 +590,7 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
             for (p, &b) in sh.pins.iter().zip(flags) {
                 let g = &mut groups[if b { bus_at[&p.at] } else { at[&p.at] }];
                 let name = shown(&child_path, &p.name);
-                g.drivers.push(Driver { output: p.shape == eda_model::ir::LabelShape::Output, ..Driver::new(SHEET_PIN, name.clone(), depth[si], &spath[si]) });
+                g.drivers.push(Driver { output: p.shape == eda_model::ir::LabelShape::Output, reads_as_bus: reads_as_bus(&name), ..Driver::new(SHEET_PIN, name.clone(), depth[si], &spath[si]) });
                 g.sheet_pins.push(name);
             }
         }
@@ -825,6 +834,15 @@ pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedN
         let best = drivers.first();
         let screen = gids.iter().map(|&g| groups[g].screen).min_by_key(|&s| depth[s]).unwrap_or(0);
         let no_connect = gids.iter().any(|&g| groups[g].no_connect);
+        // A net of the wire layer whose best claim is a label or sheet pin that reads as a bus once its text is resolved -- `M{A B}`, `D[0..1]`, or an
+        // `@{..}` the evaluator could not evaluate and left as written, `N@{1/0}` read as the group `N@` of `1/0` (`ExpandTextVars` / `EXPRESSION_EVALUATOR::
+        // Evaluate` leave a failed expression in the text; `isSuperSubOverbar` makes only `_{`, `^{` and `~{` formatting) -- has a bus connection
+        // (`SCH_CONNECTION::ConfigureFromLabel` of the subgraph's driver), and `NETLIST_EXPORTER_XML::makeListOfNets` lists none of its pins: kicad-cli's
+        // netlist has no node for them, and the board's update leaves their pads on no net (`BOARD_NETLIST_UPDATER::updateComponentPadConnections`). The
+        // name stays taken. A weaker label beside a stronger net name (`CLAIM_LESS`) does not make it a bus (UI-LEFT-3 S3-20).
+        if best.is_some_and(|d| d.reads_as_bus) && gids.iter().all(|&g| !groups[g].bus && !groups[g].member) {
+            pins.clear();
+        }
         finals.push(Final { gids, pins, name: best.map(|d| d.full.clone()), driven: best.is_some(), screen, no_connect, best: best.map(|d| (*d).clone()) });
     }
 
@@ -1212,6 +1230,24 @@ mod tests {
     }
     fn pins_of(nets: &[Net], name: &str) -> Vec<String> {
         nets.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("no net {name} in {nets:?}")).pins.clone()
+    }
+
+    /// UI-LEFT-3 S3-20: a label whose `@{..}` failed (left as written: `N@{1/0}`, `X@{foo}y`) reads as a bus group, as `M{A B}` and `D[0..1]` do, so the
+    /// pins of its net are on no net (kicad-cli's netlist lists none of them); a formatting brace (`V_{CC}`) is no bus; a stronger name beside it (`GOOD`
+    /// before `M..` by `CLAIM_LESS`'s name order) keeps the net, a weaker one (`A..` first) does not; a `/` in the text (escaped `{slash}`) is no group.
+    #[test]
+    fn a_label_that_reads_as_a_bus_leaves_its_pins_on_no_net() {
+        for (text, other, on_a_net) in [("N@{1/0}", None, false), ("X@{foo}y", None, false), ("M{A B}", None, false), ("D[0..1]", None, false), ("V_{CC}", None, true), ("A/B", None, true), ("M@{5-}", Some("GOOD"), true), ("A@{5-}", Some("GOOD"), false)] {
+            let mut root = section();
+            root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
+            root.labels.push(label(text, p(1000, 0), LabelKind::Local));
+            if let Some(o) = other {
+                root.labels.push(label(o, p(500, 0), LabelKind::Local));
+            }
+            let mut screens = vec![ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: pins(&[("R1.2", p(0, 0))]) }];
+            let nets = trace_nets(&mut screens);
+            assert_eq!(nets.iter().any(|n| n.pins.iter().any(|x| x == "R1.2")), on_a_net, "{text} beside {other:?}: {nets:?}");
+        }
     }
 
     /// A wire joins its pins, and a net nothing drives is named after its best pin as KiCad names it, whatever name the wire carried before.

@@ -2466,6 +2466,30 @@ fn a_labels_expression_names_its_net_as_kicad_cli_does() {
     }
 }
 
+/// UI-LEFT-3 S3-20 (`SCH_CONNECTION::IsBusLabel` of the label's shown text, `NET_SETTINGS::ParseBusGroup`; `NETLIST_EXPORTER_XML::makeListOfNets`): a label
+/// whose `@{..}` fails stays as written, and `N@{1/0}` / `M@{5-}` then read as bus groups, as `Z{A B}` does -- kicad-cli's netlist has no node for R1.1, R1.2
+/// or R3.1, and neither has the studio's net list; `V_{OK}@{1+1}` (a subscript, then 2) is the net `/V_{OK}2`. kicad-cli reads the derived file so too.
+#[test]
+fn a_label_whose_expression_fails_leaves_its_pins_off_the_netlist() {
+    let (dir, root, nets) = round_case("u4_netnames", "err");
+    let ours: std::collections::BTreeMap<String, Vec<String>> = nets.into_iter().filter(|(_, pins)| !pins.is_empty()).collect();
+    assert_eq!(ours.get("/V_{OK}2").map(|p| p.join(" ")).as_deref(), Some("R3.2"), "{ours:?}");
+    for pin in ["R1.1", "R1.2", "R3.1"] {
+        assert!(!ours.values().flatten().any(|p| p == pin), "{pin} is on no net: {ours:?}");
+    }
+    if kicad_cli_ready() {
+        let theirs = kicad_cli_named_nets(&root);
+        assert_eq!(theirs, ours, "kicad-cli's netlist of the original is the studio's");
+        let (_, design, model) = load(&dir).unwrap();
+        let derived_dir = dir.parent().unwrap().join("derived");
+        std::fs::create_dir_all(&derived_dir).unwrap();
+        for (name, text) in eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }, "board.kicad_sch").unwrap() {
+            std::fs::write(derived_dir.join(name), text).unwrap();
+        }
+        assert_eq!(kicad_cli_named_nets(&derived_dir.join("board.kicad_sch")), ours, "and of the derived file");
+    }
+}
+
 // ---------------------------------------------------------------------------------------- a screen shown twice, annotated (UI-LEFT S9)
 
 /// The references KiCad's Annotate gives with "Entire schematic", "Reset existing annotations", sort by X, first free number (`AnnotateSymbols` ->
