@@ -620,7 +620,8 @@ export function SchematicView() {
    * unconnected pins" on; the point is `BestSnapAnchor( pos, GetItemGrid( item ) )`.
    */
   const autostartAt = (id: string | null, xNm: number, yNm: number): Autostart | null => {
-    if (!sch || !id || !state.prefs.schAutoStartWires || state.activeTool !== "select") return null;
+    // (the selection tool's own: not while a picker -- the simulator's probes, Group Properties' pick -- or a paste holds the pointer)
+    if (!sch || !id || !state.prefs.schAutoStartWires || state.activeTool !== "select" || picker.session() || paste) return null;
     const wire = sch.wires.find((w) => w.id === id);
     const kind: SchItemKind = isPinItemId(id) ? "pin" : wire ? (wire.bus ? "bus" : "wire") : sch.bus_entries.some((b) => b.id === id) ? "bus_entry" : sch.labels.some((l) => l.id === id) ? "label" : sch.sheets.some((sh) => (sh.pins ?? []).some((p) => p.id === id)) ? "sheet_pin" : "symbol";
     const pos = snap.point("select", [xNm, yNm], modsRef.current, schItemGrid(kind));
@@ -1133,7 +1134,7 @@ export function SchematicView() {
 
         const drag = dragRef.current;
         // `evt->IsMotion()` of the selection tool: over a point a click would start a wire from, the cursor says so (`autostartEvent` with no modifier held)
-        if (!drag && state.activeTool === "select" && state.prefs.schAutoStartWires) {
+        if (!drag && state.activeTool === "select" && state.prefs.schAutoStartWires && !picker.session() && !paste) {
           const noMods = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
           const under = noMods ? pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first") : null;
           const top = under ? (substituteSchSelection(sch, [under], state.schEnteredGroupId).ids[0] ?? under) : null;
