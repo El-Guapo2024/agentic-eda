@@ -195,13 +195,24 @@ type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
   /** `onMotion`'s DRAG_ZOOMING: the view scales about the press point (`m_zoomStartPoint`) by the pointer's travel down the screen since the last motion. */
   | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
-  | { kind: "move"; refs: string[]; pivotNm?: [number, number]; flipPivotNm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
+  | {
+      kind: "move";
+      refs: string[];
+      pivotNm?: [number, number];
+      flipPivotNm?: [number, number];
+      startWorld: [number, number];
+      snapOrigin: [number, number];
+      moved: boolean;
+      /** A press with the highlight modifier: a release with no drag highlights the net, a drag first selects `select` (`selectPoint( DragOrigin )`). */
+      highlightClick?: boolean;
+      select?: string[];
+    }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; /** `m_highlight_modifier`: a release with no drag highlights the net under the pointer (UI-LEFT-3 C3-10). */ highlight?: boolean }
   /**
    * `PCB_SELECTION_TOOL::Main`'s `IsDrag( BUT_LEFT )` on a routable selection with Preferences' "Track mouse-drag mode:" a drag: the router's 45 degree or free-angle drag
    * (`PCB_ACTIONS::drag45Degree` / `dragFreeAngle`) once the press becomes a drag; the release fixes it (`InlineDrag`'s `IsMouseUp( BUT_LEFT )`). UI-LEFT-3 C3-10.
    */
-  | { kind: "routerDrag"; freeAngle: boolean; started: boolean }
+  | { kind: "routerDrag"; freeAngle: boolean; started: boolean; highlightClick?: boolean; select?: string[] }
   /** `selectTableCells`: a drag from a cell of `table` selects the cells under it, from the selection it began with (`before`); `candidates` is what the press would have picked, for a release that is a click. */
   | { kind: "cells"; table: string; startWorld: [number, number]; before: string[]; modifiers: ClickModifiers; candidates: SelectionCandidate[]; moved: boolean }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
@@ -1346,12 +1357,7 @@ export function Canvas() {
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     // `setModifiersState` with `ctrlClickHighlights()`: Preferences' Ctrl "Highlight net (for pads/tracks)" makes Ctrl alone the highlight modifier (UI-LEFT-3 C3-10)
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey, state.prefs.pcbCtrlClickHighlight);
-    // `IsClick( BUT_LEFT )` with `m_highlight_modifier && brd_editor`: `RunAction( PCB_ACTIONS::highlightNet )` instead of `selectPoint` -- the click selects nothing.
-    // A drag from here draws the selection area (KiCad would drag an item under the press: Ctrl is no modifier then).
-    if (state.activeTool === "select" && modifiers.highlight && !e.altKey) {
-      dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], highlight: true };
-      return;
-    }
+
     // A left click on a DRC marker selects it: `PCB_SELECTION_TOOL::selectPoint` takes a `PCB_MARKER` like any item, and `DRC_TOOL::CrossProbe` then selects its row in the
     // dialog when that is shown. It is the selection, the items that were selected are not; Alt+click still gets the list of everything under the pointer.
     if (state.activeTool === "select" && !hasModifier(modifiers) && !e.altKey) {
@@ -1387,6 +1393,29 @@ export function Canvas() {
       if (flash.length > 0) flashSelectionFilter(flash);
       return picked;
     };
+
+    // `m_highlight_modifier` (Preferences' Ctrl "Highlight net", UI-LEFT-3 C3-10): Ctrl is no modifier then (`hasModifier()` false), so the press picks nothing and
+    // `PCB_SELECTION_TOOL::Main` decides at the drag as for a plain one -- the selection area, or the item dragged (`selectPoint( DragOrigin )` when nothing was
+    // selected, then `move` / the router's drag) -- while a release with no drag is `IsClick( BUT_LEFT )`: `RunAction( PCB_ACTIONS::highlightNet )`, nothing selected.
+    if (state.activeTool === "select" && modifiers.highlight && !e.altKey) {
+      const hit = runPick(false)[0];
+      const inSelection = !!hit && (withGroupSubstitution([hit.id], board?.drawings?.groups, state.enteredGroupId).some((id) => state.selection.has(id)) || (board != null && state.selection.has(padParent(board, hit.id) ?? hit.id)));
+      const outcome = hit && board ? leftDragOutcome(wheelPrefs.settings.dragLeft, { modifier: false, selectionEmpty: state.selection.size === 0, onItem: true, inSelection }) : "area";
+      if (outcome === "area" || !hit || !board) {
+        dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], highlight: true };
+        return;
+      }
+      const refs = inSelection ? [...state.selection] : [hit.id];
+      const select = inSelection ? undefined : refs;
+      if (state.prefs.pcbTrackDragAction !== "move" && routableSelection(board, refs)) {
+        dragRef.current = { kind: "routerDrag", freeAngle: state.prefs.pcbTrackDragAction === "drag_free_angle", started: false, highlightClick: true, select };
+        return;
+      }
+      const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), modificationSnapFor(state));
+      if (start.refs.length > 0 && DRAGGABLE_KINDS.has(hit.kind)) dragRef.current = { kind: "move", refs: start.refs, pivotNm: start.pivotNm, flipPivotNm: start.flipPivotNm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false, highlightClick: true, select };
+      else dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], highlight: true };
+      return;
+    }
 
     // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
     // (Alt): go straight to the full candidate list/clarification menu,
@@ -1658,10 +1687,12 @@ export function Canvas() {
       // the press became a drag: `RunAction( drag45Degree / dragFreeAngle )` on the selection, from the cursor (the moves after it are the drag tool's, below)
       if (!motion?.dragging || drag.started) return;
       drag.started = true;
+      if (drag.select) dispatch({ type: "SET_SELECTION", refs: drag.select });
       void run(drag.freeAngle ? "pcbnew.InteractiveRouter.DragFreeAngle" : "pcbnew.InteractiveRouter.Drag45Degree");
     } else if (drag.kind === "move") {
       // Until the press has become a drag it is a click that may still be released: nothing is picked up.
       if (!motion?.dragging) return;
+      if (!drag.moved && drag.select) dispatch({ type: "SET_SELECTION", refs: drag.select });
       drag.moved = true;
       const [sx, sy] = moveCursor(wx, wy, e, drag.refs, drag.snapOrigin, drag.startWorld);
       const dx = sx - drag.snapOrigin[0];
@@ -1732,6 +1763,8 @@ export function Canvas() {
         const ctrl = snapMods(e).ctrl;
         if (state.activeTool === "drag" && state.drawState?.kind === "drag") void finishInlineDrag(fx, fy, dispatch, api, ctrl, state.drawState);
         else pendingDragFixRef.current = { at: [fx, fy], ctrl };
+      } else if (drag.highlightClick) {
+        void run("pcbnew.EditorControl.highlightNet");
       } else if (pendingClickRef.current) {
         // the click on one item of a larger selection, deferred by the press (`keepGroupForDrag`)
         dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, pendingClickRef.current.id, pendingClickRef.current.modifiers) });
@@ -1745,6 +1778,10 @@ export function Canvas() {
         else api.commitMove(held.refs, held.dxNm, held.dyNm, held.kind, held.rotateQuarterTurns, held.flipped, undefined, held.ops);
       } else if (drag.moved) {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      } else if (drag.highlightClick) {
+        // `m_highlight_modifier`'s click: the net highlighted, the selection left as it is
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        void run("pcbnew.EditorControl.highlightNet");
       } else {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
         // No real movement: this was a plain click, not a drag -- apply
