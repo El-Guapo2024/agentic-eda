@@ -482,7 +482,8 @@ impl<'a> Board<'a> {
 
     /// The references a screen of `files` that is shown more than once has on its later placements (`SCH_SYMBOL_INSTANCE` per sheet path: `updatePastedSheet` ->
     /// `updatePastedSymbol` for each path, `ReannotateDuplicates`): its symbols numbered against every reference of the design, the placements before it
-    /// included, kept in `SchematicSection::instance_overrides` under the sheet path. The first sheet path keeps the screen's own. A path starts from the
+    /// included, kept in `SchematicSection::instance_overrides` under the sheet path. The first sheet path keeps the screen's own (unless the source gave it
+    /// references of its own, which are checked like a later path's). A path starts from the
     /// references the source gave it ([`Board::finish_tree_batch`]), else from the screen's own, and keeps them unless the mode renumbers them or another path or
     /// symbol of the design holds one; power symbols keep theirs.
     fn number_later_placements(&mut self, files: &[String], mode: PasteMode, units_of: &dyn Fn(&Self, &str) -> u32) {
@@ -491,10 +492,14 @@ impl<'a> Board<'a> {
         let entries = eda_model::sheet_list::walk(&self.design);
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for e in entries.iter().skip(1) {
-            if !files.contains(&e.file) || seen.insert(e.file.clone()) {
+            if !files.contains(&e.file) {
                 continue;
             }
             let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
+            // the first placement has the screen's own references, numbered as the copy came in -- unless the source gave it references of its own
+            if seen.insert(e.file.clone()) && !screen.instance_overrides.iter().any(|o| o.sheet_path == e.path) {
+                continue;
+            }
             let pasted: Vec<PastedRef> = screen
                 .symbols
                 .iter()
