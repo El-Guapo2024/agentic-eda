@@ -1527,10 +1527,9 @@ impl Node {
     /// the same kinds on any layer (`[2]`, `[3]`); with `net` (`aNet`) only items of that net -- but in Highlight collisions (`mark_obstacles`) an item
     /// of no net on `tl` as a last resort ("Allow unconnected items as last resort in RM_MarkObstacles mode", `prioritized[4]`, the last one found,
     /// UI-LEFT-2 RR7); with `layer` (`aLayer >= 0`) only one on that layer is returned. **Not ported:** a free pad under the cursor (`IsFreePad`: the
-    /// studio's router has no free pads, a pad of a "free" pin is an item of no net); a route of no net (`net` of `None`) keeps to items of no net,
-    /// where 8303b2ad's tool, whose orphaned net handle has net code 0 (`GetNetCode( aNet ) <= 0`), takes any item -- KiCad's own recorded sessions
-    /// (`qa/data/pcbnew/pns_regressions/simple-shove-1`: no end item at any move of a route of no net) were made before, and replay exact only so;
-    /// the layers' visibility and high contrast (the studio's). UI-LEFT R7, findings p5 F2-11.
+    /// studio's router has no free pads, a pad of a "free" pin is an item of no net); the layers' visibility and high contrast (the studio's). A route
+    /// of no net passes `net` of `None` and takes any item, as 8303b2ad's tool does for its orphaned net handle, whose net code is 0 (`GetNetCode( aNet )
+    /// <= 0`, UI-LEFT-3 R3-2; [`crate::line_placer::LinePlacer`]'s end snap). UI-LEFT R7, findings p5 F2-11.
     #[allow(clippy::too_many_arguments)] // pickSingleItem's own, and the router's mode
     pub fn pick_single_item(&self, pos: Point, net: Option<&Net>, layer: Option<i32>, tl: i32, slop: Nm, avoid: &[ItemId], mark_obstacles: bool) -> Option<ItemId> {
         let sq = |a: Point| (a.x - pos.x).area(a.x - pos.x) + (a.y - pos.y).area(a.y - pos.y);

@@ -208,9 +208,12 @@ fn simple_shove_1_pushes_the_same_13_tracks_and_leaves_the_board_clean() {
     router.settings = settings;
     router.start(pt(&events[0]["position"]), "F.Cu", width).expect("a route starts in empty space");
     assert!(router.current_net().is_none(), "on no net");
+    // each move with the end item KiCad logged (`PNS_LOG_PLAYER`: the event's `uuids`), which is none: the tool that recorded the session picked none for
+    // a route of no net, where 8303b2ad's `pickSingleItem` takes an item of any net (`GetNetCode( aNet ) <= 0`, UI-LEFT-3 R3-2)
     let mut last = None;
     for e in &events[1..] {
-        last = router.preview(pt(&e["position"]));
+        assert!(e["uuids"].as_array().is_some_and(Vec::is_empty), "no end item logged");
+        last = router.preview_with_end_item(pt(&e["position"]), None);
     }
     let pv = last.unwrap();
     assert!(!pv.colliding);
