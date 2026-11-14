@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(NetClassSchematic::default_class(Some(&own)).wire_width, Some(Nm::new(254_000)));
         assert!(NetClassSchematic { line_style: Some(5), ..Default::default() }.validate().is_err());
         assert!(NetClassSchematic { wire_width: Some(Nm::ZERO), ..Default::default() }.validate().is_ok(), "KiCad takes a 0 as typed");
-        assert!(NetClassSchematic { wire_width: Some(Nm::new(-1)), ..Default::default() }.validate().is_err());
+        assert!(NetClassSchematic { wire_width: Some(Nm::new(-1)), ..Default::default() }.validate().is_ok(), "and a negative one (UI-LEFT-3 B3-4)");
     }
 
     #[test]
