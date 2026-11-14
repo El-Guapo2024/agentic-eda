@@ -744,14 +744,21 @@ fn tag_sub_libraries<S: LibSource + ?Sized>(src: &S, lib: &str, items: &mut [Val
 }
 
 /// `GET /api/library/entries?kind=&lib=`: the items of one library with their descriptions, in the tree's order (names sorted naturally),
-/// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`.
+/// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`. KiCad's parser's verdict on the library is asked
+/// of kicad-cli now when it is not known (the library opened, as the trees' `GET /api/library/items` does).
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
+    entries_asking(kind, src, lib, filter, true)
+}
+
+/// [`entries_in`], asking kicad-cli for the library's verdict when it is not known and reading a footprint library's files whole for this crate's reader's
+/// refusals (`ask`), or leaving out only what KiCad's parser is known to refuse (the search's rule: its index never waits for either).
+fn entries_asking<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter, ask: bool) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
             Ok(idx) => {
                 // what KiCad's parser refuses is not in the library, and the library says so (UI-LEFT-3 L3-6)
                 let (refused, load_error) = match symbol_path(src, lib) {
-                    Ok(p) => crate::library_verdict::symbol_refusals(&p, true),
+                    Ok(p) => crate::library_verdict::symbol_refusals(&p, ask),
                     Err(_) => (Vec::new(), idx.load_error.clone()),
                 };
                 let mut entries: Vec<Value> = idx.summaries.iter().filter(|s| filter.symbol_passes(s.power) && !refused.contains(&s.name)).map(|s| symbol_item(s, None)).collect();
@@ -767,9 +774,10 @@ pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, 
         },
         Kind::Footprint => match footprint_lib(src, lib) {
             Ok(idx) => {
-                // `FP_CACHE::Load`: what KiCad's parser refuses, and what this crate's reader refuses, is not in the library (UI-LEFT-3 L3-6)
-                let mut refused = kicad_refused(kind, src, lib, true);
-                if let Ok(dir) = footprint_dir(src, lib) {
+                // `FP_CACHE::Load`: what KiCad's parser refuses, and what this crate's reader refuses, is not in the library (UI-LEFT-3 L3-6); the reader's
+                // refusals read every file of the library whole, so only the library opened has them (`footprint_library_refusals`), as for the search
+                let mut refused = kicad_refused(kind, src, lib, ask);
+                if let Some(dir) = footprint_dir(src, lib).ok().filter(|_| ask) {
                     refused.extend(eda_kicad::library_save::footprint_library_refusals(&dir).0);
                 }
                 json!({
@@ -790,7 +798,11 @@ pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, 
 /// `LIB_TREE_MODEL_ADAPTER` is filled with every library's items, descriptions and chooser fields when the tree is built (`SYMBOL_TREE_SYNCHRONIZING_ADAPTER::
 /// Sync`, `FP_TREE_SYNCHRONIZING_ADAPTER::Sync`; `AddLibrary` -> `LIB_TREE_NODE_ITEM`'s `m_Desc`, `m_Fields`), so its Description and field columns are filled
 /// and Select Columns offers every library's fields before any library is opened. The libraries are read by the background index (the choosers' own, which
-/// KiCad's lazy load stands for): `{"status": "indexing", "libraries": {lib: [items]}}` with the ones read so far, then `"ready"`.
+/// KiCad's lazy load stands for): `{"status": "indexing", "libraries": {lib: [items]}}` with the ones read so far, then `"ready"`. Each library leaves out what
+/// KiCad's parser is known to refuse, as the search over every library does, and waits for nothing: the index thread asks kicad-cli about each library after
+/// it has read them, and the server answers one request at a time, so asking here (a kicad-cli run for every library not checked yet, minutes on a fresh
+/// library cache, and every footprint file parsed whole) held every other request -- the Footprint Editor's open of a footprint among them -- until it was
+/// done. The tree's rows are `GET /api/library/items`'s, which leave out every refused item of the library opened; these are only their columns.
 pub(crate) fn entries_all_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
     let finished = ensure_background_index(kind, src);
     let done = finished.load(AtomicOrdering::Acquire);
@@ -803,7 +815,7 @@ pub(crate) fn entries_all_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Valu
         if !indexed && !done {
             continue;
         }
-        if let Some(e) = entries_in(kind, src, &info.name, &Filter::default()).get("entries") {
+        if let Some(e) = entries_asking(kind, src, &info.name, &Filter::default(), false).get("entries") {
             libraries.insert(info.name.clone(), e.clone());
         }
     }
