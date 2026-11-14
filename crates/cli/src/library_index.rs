@@ -347,6 +347,10 @@ fn libraries_json<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
             if kind == Kind::Symbol && src.lib_path(kind, &l.name).is_ok_and(|p| p.is_dir()) {
                 v["unpacked"] = json!(true);
             }
+            // an HTTP library's categories, which the Symbol Chooser lists as libraries of their own (`SupportsSubLibraries`, UI-LEFT-3 L3-3)
+            if let Some(subs) = (kind == Kind::Symbol).then(|| src.lib_path(kind, &l.name).ok().and_then(|p| crate::http_lib::sub_libraries(&p))).flatten() {
+                v["sublibraries"] = json!(subs.categories.iter().map(|(n, d)| json!({ "name": n, "description": d })).collect::<Vec<_>>());
+            }
             v
         }).collect::<Vec<_>>(),
     })

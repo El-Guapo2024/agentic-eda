@@ -17,6 +17,8 @@ export interface InstalledLibrary {
   scope?: "global" | "project";
   /** A symbol library that is a folder (`.kicad_symdir`): KiCad 25ec2335 offers it Save Library As Packed, a file library Save Library As Unpacked. */
   unpacked?: boolean;
+  /** An HTTP library's categories (`SCH_IO_HTTP_LIB::GetSubLibraryNames`, `GetSubLibraryDescription`), which the Symbol Chooser lists as libraries of their own (UI-LEFT-3 L3-3). */
+  sublibraries?: { name: string; description: string }[];
 }
 
 async function get<T extends { error?: string }>(url: string): Promise<T> {

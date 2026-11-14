@@ -20,8 +20,8 @@
 //! The library is then a `.kicad_sym` file the studio writes into its library cache (as `crate::library_convert` keeps the converted libraries) and every
 //! reader reads as any other: listed, searched, opened, placed. It is fetched again when the settings file changes or after `timeout_categories_seconds`
 //! (KiCad's category cache; a part is fetched with its category here, so the parts' shorter time is not kept apart). A library that cannot be read keeps
-//! KiCad's message as its row's status. **Differs**: KiCad lists each category as a library of its own in the trees ("Nickname - Category",
-//! `GetSubLibraryNames`); here the parts are one library under the row's nickname, as their `Nickname:Part` ids are in KiCad too. Database libraries
+//! KiCad's message as its row's status. Its categories are kept beside the file ([`sub_libraries`], UI-LEFT-3 L3-3): the Symbol Chooser lists each as a
+//! library of its own, "Nickname - Category" (`SYMBOL_TREE_MODEL_ADAPTER::AddLibraries`), the parts keeping their `Nickname:Part` ids. **Differs**: Database libraries
 //! (`SCH_IO_DATABASE`) need an ODBC driver, a dependency the studio does not take: they stay listed and not read.
 
 use eda_kicad::library_table as lt;
@@ -378,6 +378,18 @@ pub(crate) fn readable_with(nickname: &str, settings: &Path, cache: &Path, base:
         std::fs::create_dir_all(cache).map_err(|e| format!("Cannot create the library cache {}: {e}", cache.display()))?;
         let name = format!("http-{}-{}.kicad_sym", lt::fix_nickname(nickname).replace([' ', '/'], "_"), &blake3::hash(settings.display().to_string().as_bytes()).to_hex()[..16]);
         let target = cache.join(name);
+        // the categories, KiCad's sub-libraries (`GetSubLibraryNames`, `GetSubLibraryDescription`; each part's `LIB_ID::SetSubLibraryName( aCategory.name )`)
+        let mut categories: Vec<Value> = Vec::new();
+        let mut parts = serde_json::Map::new();
+        for (c, ps) in &lib {
+            if !categories.iter().any(|k| k["name"] == c.name.as_str()) {
+                categories.push(serde_json::json!({ "name": c.name, "description": c.description }));
+            }
+            for p in ps {
+                parts.insert(p.name.clone(), Value::String(c.name.clone()));
+            }
+        }
+        std::fs::write(categories_file(&target), serde_json::json!({ "categories": categories, "parts": parts }).to_string()).map_err(|e| format!("{}: {e}", target.display()))?;
         let tmp = target.with_extension("kicad_sym.tmp");
         std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, &target).map_err(|e| format!("{}: {e}", target.display()))?;
@@ -385,6 +397,32 @@ pub(crate) fn readable_with(nickname: &str, settings: &Path, cache: &Path, base:
     })();
     memo().lock().unwrap_or_else(PoisonError::into_inner).insert(key, (state, now, answer.clone()));
     answer
+}
+
+/// The file beside an HTTP library's `.kicad_sym` that keeps its categories (UI-LEFT-3 L3-3).
+fn categories_file(library: &Path) -> PathBuf {
+    let mut name = library.as_os_str().to_owned();
+    name.push(".categories.json");
+    PathBuf::from(name)
+}
+
+/// An HTTP library's categories, KiCad's sub-libraries (UI-LEFT-3 L3-3): `SCH_IO_HTTP_LIB::SupportsSubLibraries`, `GetSubLibraryNames` (each name once, in the
+/// server's order) with `GetSubLibraryDescription`, and each part's category (its `LIB_ID`'s sub-library name). The trees of the Symbol Chooser list each
+/// category as a library of its own, "Nickname - Category" (`SYMBOL_TREE_MODEL_ADAPTER::AddLibraries`); the parts keep their `Nickname:Part` ids.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct SubLibraries {
+    /// `(name, description)`.
+    pub(crate) categories: Vec<(String, String)>,
+    /// A part's category, by its name.
+    pub(crate) parts: HashMap<String, String>,
+}
+
+/// The sub-libraries of the library read from the file `library`, when it is an HTTP library's (None for any other library).
+pub(crate) fn sub_libraries(library: &Path) -> Option<SubLibraries> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(categories_file(library)).ok()?).ok()?;
+    let categories = v["categories"].as_array()?.iter().map(|c| (c["name"].as_str().unwrap_or_default().to_string(), c["description"].as_str().unwrap_or_default().to_string())).collect();
+    let parts = v["parts"].as_object()?.iter().map(|(k, c)| (k.clone(), c.as_str().unwrap_or_default().to_string())).collect();
+    Some(SubLibraries { categories, parts })
 }
 
 /// What the row of an HTTP library says in the table dialog: the last failure, while it is remembered.
@@ -502,6 +540,12 @@ mod tests {
         assert_eq!(r.footprint_filters, ["Resistor_SMD:R_0603", "R_*"]);
         let odd = lib.symbols.iter().find(|s| s.lib_id.ends_with("Odd_Part")).unwrap();
         assert!(odd.pins.is_empty() && odd.graphics.is_empty(), "a symbol no library has: metadata only");
+        // the categories are the library's sub-libraries, each part in its own (UI-LEFT-3 L3-3)
+        let subs = sub_libraries(&path).unwrap();
+        assert_eq!(subs.categories, [("Resistors".to_string(), "Fixed resistors".to_string())]);
+        assert_eq!(subs.parts.get("RC0603 10k").map(String::as_str), Some("Resistors"));
+        assert_eq!(subs.parts.get("Odd_Part").map(String::as_str), Some("Resistors"));
+        assert!(sub_libraries(&dir.join("nothing.kicad_sym")).is_none(), "any other library has none");
         // a refused token: KiCad's message, remembered as the row's status
         let settings2 = dir.join("W6.kicad_httplib");
         std::fs::write(&settings2, format!(r#"{{"source":{{"type":"REST_API","api_version":"v1","root_url":"{url}","token":"wrong"}}}}"#)).unwrap();

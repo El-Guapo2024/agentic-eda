@@ -724,13 +724,25 @@ fn footprint_item(name: &str, f: &FootprintSummary, score: Option<u32>) -> Value
     v
 }
 
+/// Each item of an HTTP library with its category (`sublib`, its `LIB_ID`'s sub-library name: `crate::http_lib::sub_libraries`, UI-LEFT-3 L3-3).
+fn tag_sub_libraries<S: LibSource + ?Sized>(src: &S, lib: &str, items: &mut [Value]) {
+    let Some(subs) = symbol_path(src, lib).ok().and_then(|p| crate::http_lib::sub_libraries(&p)) else { return };
+    for it in items {
+        if let Some(c) = it["name"].as_str().and_then(|n| subs.parts.get(n)) {
+            it["sublib"] = json!(c);
+        }
+    }
+}
+
 /// `GET /api/library/entries?kind=&lib=`: the items of one library with their descriptions, in the tree's order (names sorted naturally),
 /// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`.
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
             Ok(idx) => {
-                let mut v = json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() });
+                let mut entries: Vec<Value> = idx.summaries.iter().filter(|s| filter.symbol_passes(s.power)).map(|s| symbol_item(s, None)).collect();
+                tag_sub_libraries(src, lib, &mut entries);
+                let mut v = json!({ "lib": lib, "entries": entries });
                 // read with errors: the symbols that read are listed, and KiCad's message goes with them (`LIB_STATUS::error`)
                 if let Some(e) = &idx.load_error {
                     v["load_error"] = json!(e);
@@ -877,6 +889,10 @@ pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str,
                     }
                 })
                 .collect();
+            let mut items = items;
+            if kind == Kind::Symbol {
+                tag_sub_libraries(src, name, &mut items);
+            }
             let mut lib = json!({ "name": name, "score": groups[&li][0].score, "items": items });
             if let Some(d) = src.describe(kind, name) {
                 lib["description"] = json!(d);

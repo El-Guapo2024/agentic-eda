@@ -75,7 +75,7 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
         const common = { "data-key": row.key, "aria-selected": selected, className: `chooser-row ${row.kind}${selected ? " selected" : ""}`, style: grid } as const;
         if (row.kind === "group") {
           const g = row.group;
-          const count = loading.has(g.lib) ? "…" : g.count !== undefined ? String(g.count) : g.items.length > 0 ? String(g.items.length) : "";
+          const count = loading.has(g.source ?? g.lib) ? "…" : g.count !== undefined ? String(g.count) : g.items.length > 0 ? String(g.items.length) : "";
           return (
             <div
               key={row.key}

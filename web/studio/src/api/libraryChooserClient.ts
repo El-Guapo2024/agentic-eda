@@ -48,10 +48,12 @@ interface WireItem {
   score?: number;
   /** A symbol's chooser fields (`LIB_SYMBOL::GetChooserFields`): the values of the library tree's extra columns. */
   fields?: Record<string, string>;
+  /** An HTTP library's part: its category (its `LIB_ID`'s sub-library name). */
+  sublib?: string;
 }
 
 function toItem(lib: string, w: WireItem): ChooserItem {
-  return { id: `${lib}:${w.name}`, lib, name: w.name, description: w.description ?? "", units: w.units, pins: w.pins ?? w.pads, power: w.power, score: w.score, ...(w.fields ? { fields: w.fields } : {}) };
+  return { id: `${lib}:${w.name}`, lib, name: w.name, description: w.description ?? "", units: w.units, pins: w.pins ?? w.pads, power: w.power, score: w.score, ...(w.fields ? { fields: w.fields } : {}), ...(w.sublib !== undefined ? { sublib: w.sublib } : {}) };
 }
 
 const entriesCache = new Map<string, Promise<ChooserItem[]>>();
