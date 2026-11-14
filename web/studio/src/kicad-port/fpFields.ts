@@ -9,7 +9,7 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, SymbolFieldEdit, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
 import { isBackLayer, textStyleOf } from "./layerDefaults";
 
@@ -199,33 +199,54 @@ export function mergeDuplicateFields<T extends { name: string; text: string; lay
   return out;
 }
 
-/** The two mandatory fields Update Schematic from PCB's "Other fields" carries to the symbol (Reference and Value are `BACK_ANNOTATE`'s own options). */
-export const BACK_ANNOTATED_FIELDS = ["Datasheet", "Description"] as const;
+/** The symbol's fields that are never deleted by "Other fields" (`SCH_FIELD::IsMandatory`); Reference and Value are `BACK_ANNOTATE`'s own options and never carried. */
+const MANDATORY_SYMBOL_FIELDS = ["Reference", "Value", "Footprint", "Datasheet", "Description"] as const;
 
 /**
- * The edits of the schematic symbol a Datasheet or Description edited in Footprint Properties makes (UI-LEFT-2 PP18), as `set_symbol_fields` takes them.
+ * The fields Footprint Properties' OK changed, carried to the symbol as Update Schematic from PCB's "Other fields" carries a field (UI-LEFT-2 PP18, UI-LEFT-3 P3-14),
+ * as `carry_symbol_fields` takes them, or null when there is nothing to carry.
  *
- * KiCad's dialog sets the footprint's field (`TransferDataFromWindow`), and Update Schematic from PCB carries it to the symbol: the board's netlist sends every
- * field of the footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[field->GetCanonicalName()] = field->GetText()`, board-only footprints
- * left out), and `BACK_ANNOTATE::applyChangelist` with "Other fields" (on by default, `m_cbUpdateOtherFields`) skips the Reference and the Value, then sets a
- * symbol field that `!HasTextVars()` and whose shown text differs: "Change %s field '%s' value to '%s'.". The studio carries the Reference and the Value at OK, as
- * that update would, and so carries these two the same way -- only the ones the dialog changed (`before`), so that OK on a footprint whose file gave it a Datasheet of
- * its own does not rewrite the symbol unasked. Nothing for a footprint no symbol is for (`symbol_fields` absent: "Footprint '%s' has no assigned symbol.") or one
- * marked Not in schematic (`boardOnly`, the new attributes).
+ * KiCad's dialog sets the footprint's fields (`TransferDataFromWindow`) and leaves the symbol alone; Update Schematic from PCB, run on purpose, then carries them
+ * (`BACK_ANNOTATE::applyChangelist` with "Other fields": a symbol field that `!HasTextVars()` and shows another text is set, one the symbol lacks is added hidden, one
+ * the footprint lacks is deleted). The studio carries at OK, as that update would, but only what the dialog changed: a field whose text was edited or that was added
+ * (`fields`) and a field that was deleted (`remove`), each against what the symbol has (`part.symbol_fields`: its Datasheet, Description and user fields). A field the
+ * dialog did not touch stays as the symbol has it, so an OK on a footprint whose own fields differ from its symbol's does not rewrite the symbol unasked. Reference
+ * and Value go their own way. Nothing for a footprint no symbol is for (`symbol_fields` absent: "Footprint '%s' has no assigned symbol.") or one marked Not in
+ * schematic (`boardOnly`, the new attributes).
  */
-export function backAnnotateEdits(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, before: ReadonlyMap<string, string>, after: readonly { name: string; text: string }[]): SymbolFieldEdit[] {
-  const symbol = part.symbol_fields;
-  if (!symbol || boardOnly) return [];
-  const out: SymbolFieldEdit[] = [];
-  for (const name of BACK_ANNOTATED_FIELDS) {
-    const row = after.find((r) => r.name.trim() === name);
-    if (!row || row.text === before.get(name)) continue;
+export function carryFieldsCmd(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, before: ReadonlyMap<string, string>, after: readonly { name: string; text: string }[]): Cmd | null {
+  const symbol: Record<string, string> | undefined = part.symbol_fields;
+  if (!symbol || boardOnly) return null;
+  const fields: Record<string, string> = {};
+  const names = new Set<string>();
+  for (const r of after) {
+    const name = r.name.trim();
+    names.add(name);
+    if (name === "Reference" || name === "Value") continue;
+    // a field the dialog edited or added
+    if (before.get(name) === r.text) continue;
     const now = symbol[name];
-    // `symField->HasTextVars()`: a field that names a variable is left alone
-    if (now.includes("${") || now === row.text) continue;
-    out.push({ id: part.ref, field: name, value: row.text });
+    // 1. its text differs and names no variable; 2. the symbol lacks it
+    if (now === undefined || (!now.includes("${") && now !== r.text)) fields[name] = r.text;
   }
-  return out;
+  // 3. a field the dialog deleted, which the symbol has and which is not mandatory
+  const remove = [...before.keys()].filter((name) => !names.has(name) && !(MANDATORY_SYMBOL_FIELDS as readonly string[]).includes(name) && name in symbol);
+  if (Object.keys(fields).length === 0 && remove.length === 0) return null;
+  return { op: "carry_symbol_fields", id: part.ref, fields, ...(remove.length > 0 ? { remove } : {}) };
+}
+
+/**
+ * Footprint Properties' "Jumper groups:" (`DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow`): "all pads with duplicate numbers" when duplicate pad numbers are
+ * jumpers, then each group as "(1, 2)", joined by ";  "; null for none (the dialog says "none" in italics).
+ */
+export function jumperGroupsText(part: Pick<Part, "jumpers">): string | null {
+  const j = part.jumpers;
+  let text = j?.duplicates ? "all pads with duplicate numbers" : "";
+  for (const group of j?.groups ?? []) {
+    if (text !== "") text += ";  ";
+    text += `(${group.join(", ")})`;
+  }
+  return text === "" ? null : text;
 }
 
 /** `GetUserFieldName( ordinal )`: the name a field starts with when it is added (`Field4`, `Field5` ...). */

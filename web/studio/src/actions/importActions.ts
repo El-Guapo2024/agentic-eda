@@ -302,7 +302,8 @@ async function exportSpecctra(ctx: ImportActionContext): Promise<void> {
 /**
  * File > Import > Netlist... (`PCB_EDIT_FRAME::InstallNetlistFrame`): the dialog (components/ImportNetlistDialog.tsx). The footprints Update PCB added are spread as
  * `OnNetlistChanged` spreads them (`SpreadFootprints( &newFootprints, { 0, 0 }, true )`) and picked up by the Move tool when the dialog closes, inside the step the
- * update held open: the drop ends it (judged by the Strict switch with the import), Escape takes the import back.
+ * update held open: the drop ends it (judged by the Strict switch with the import); Escape ends the move with the footprints where they were spread, as KiCad's
+ * cancelled move leaves them (the update and its spread were pushed before the move began), and the held step with them (UI-LEFT-3 P3-29).
  */
 function openImportNetlist(ctx: ImportActionContext, given: PickedFile | null): void {
   const host: ImportNetlistHost = {
@@ -329,7 +330,8 @@ function openImportNetlist(ctx: ImportActionContext, given: PickedFile | null): 
         return;
       }
       await ctx.api.refresh();
-      ctx.api.carryPlaced(items.map((i) => i.ref), { x: first.at[0], y: first.at[1] }, spreadBySheet(items));
+      // Escape cancels the move, not the update: the footprints stay spread (UI-LEFT-3 P3-29)
+      ctx.api.carryPlaced(items.map((i) => i.ref), { x: first.at[0], y: first.at[1] }, spreadBySheet(items), true);
     },
   };
   openSweepDialog({ kind: "element", element: createElement(ImportNetlistDialog, { host, given }) });

@@ -241,22 +241,32 @@ test("UI-LEFT-2 PP18: a user row named like a mandatory field gives its text and
   ]);
 });
 
-test("UI-LEFT-2 PP18: a Datasheet or Description edited in Footprint Properties reaches the symbol as Update Schematic from PCB's Other fields would", async () => {
-  const { backAnnotateEdits } = await import("./fpFields");
-  const part = { ref: "R1", symbol_fields: { Datasheet: "~", Description: "Resistor" } };
-  const before = new Map([["Datasheet", "~"], ["Description", "Resistor"]]);
-  const rows = (ds: string, de: string) => [{ name: "Reference", text: "R1" }, { name: "Value", text: "10k" }, { name: "Datasheet", text: ds }, { name: "Description", text: de }, { name: "MPN", text: "X" }];
-  assert.deepEqual(backAnnotateEdits(part, false, before, rows("r.pdf", "Resistor")), [{ id: "R1", field: "Datasheet", value: "r.pdf" }]);
-  assert.deepEqual(backAnnotateEdits(part, false, before, rows("r.pdf", "Thin film")), [
-    { id: "R1", field: "Datasheet", value: "r.pdf" },
-    { id: "R1", field: "Description", value: "Thin film" },
-  ]);
-  assert.deepEqual(backAnnotateEdits(part, false, before, rows("~", "Resistor")), [], "nothing changed, nothing carried");
+test("UI-LEFT-3 P3-14: the fields Footprint Properties changed reach the symbol as Update Schematic from PCB's Other fields carries a field", async () => {
+  const { carryFieldsCmd } = await import("./fpFields");
+  const part = { ref: "R1", symbol_fields: { Datasheet: "~", Description: "Resistor", MPN: "X", Old: "o" } };
+  const rows = (ds: string, de: string, extra: { name: string; text: string }[] = []) => [{ name: "Reference", text: "R1" }, { name: "Value", text: "10k" }, { name: "Datasheet", text: ds }, { name: "Description", text: de }, ...extra];
+  const before = new Map([["Reference", "R1"], ["Value", "10k"], ["Datasheet", "~"], ["Description", "Resistor"], ["MPN", "X"], ["Old", "o"]]);
+  const same = [{ name: "MPN", text: "X" }, { name: "Old", text: "o" }];
+  assert.deepEqual(carryFieldsCmd(part, false, before, rows("r.pdf", "Resistor", same)), { op: "carry_symbol_fields", id: "R1", fields: { Datasheet: "r.pdf" } }, "the edited field alone");
+  assert.equal(carryFieldsCmd(part, false, before, rows("~", "Resistor", same)), null, "nothing edited, nothing carried");
+  assert.deepEqual(carryFieldsCmd(part, false, before, rows("~", "Resistor", [{ name: "MPN", text: "X" }])), { op: "carry_symbol_fields", id: "R1", fields: {}, remove: ["Old"] }, "a deleted field: deleted");
+  assert.deepEqual(carryFieldsCmd(part, false, before, rows("~", "Resistor", [...same, { name: "Vendor", text: "ACME" }])), { op: "carry_symbol_fields", id: "R1", fields: { Vendor: "ACME" } }, "a new field: added");
   // a footprint whose own Datasheet differs from the symbol's, not edited: the symbol is not rewritten unasked
-  assert.deepEqual(backAnnotateEdits(part, false, new Map([["Datasheet", "file.pdf"], ["Description", "Resistor"]]), rows("file.pdf", "Resistor")), []);
+  const own = new Map([...before, ["Datasheet", "file.pdf"]]);
+  assert.equal(carryFieldsCmd(part, false, own, rows("file.pdf", "Resistor", same)), null);
   // edited back to what the symbol has: nothing to change there
-  assert.deepEqual(backAnnotateEdits(part, false, new Map([["Datasheet", "file.pdf"], ["Description", "Resistor"]]), rows("~", "Resistor")), []);
-  assert.deepEqual(backAnnotateEdits({ ref: "R1" }, false, before, rows("r.pdf", "x")), [], "no symbol is for the footprint");
-  assert.deepEqual(backAnnotateEdits(part, true, before, rows("r.pdf", "x")), [], "Not in schematic: left out of the board's netlist");
-  assert.deepEqual(backAnnotateEdits({ ref: "R1", symbol_fields: { Datasheet: "${DS}", Description: "Resistor" } }, false, before, rows("r.pdf", "Resistor")), [], "HasTextVars");
+  assert.equal(carryFieldsCmd(part, false, own, rows("~", "Resistor", same)), null);
+  // a field naming a variable is not changed by a footprint text; Reference and Value are not this one's
+  assert.equal(carryFieldsCmd({ ref: "R1", symbol_fields: { Datasheet: "${DS}", Description: "Resistor" } }, false, before, rows("r.pdf", "Resistor")), null, "HasTextVars");
+  assert.equal(carryFieldsCmd(part, false, before, [{ name: "Reference", text: "R9" }, ...rows("~", "Resistor", same).slice(1)]), null);
+  assert.equal(carryFieldsCmd({ ref: "R1" }, false, before, rows("r.pdf", "x")), null, "no symbol is for the footprint");
+  assert.equal(carryFieldsCmd(part, true, before, rows("r.pdf", "x")), null, "Not in schematic: left out of the board's netlist");
+});
+
+test("UI-LEFT-3 P3-14: Footprint Properties' Jumper groups text is KiCad's", async () => {
+  const { jumperGroupsText } = await import("./fpFields");
+  assert.equal(jumperGroupsText({}), null);
+  assert.equal(jumperGroupsText({ jumpers: { duplicates: true, groups: [] } }), "all pads with duplicate numbers");
+  assert.equal(jumperGroupsText({ jumpers: { duplicates: true, groups: [["1", "2"], ["3", "4"]] } }), "all pads with duplicate numbers;  (1, 2);  (3, 4)");
+  assert.equal(jumperGroupsText({ jumpers: { duplicates: false, groups: [["A", "B", "C"]] } }), "(A, B, C)");
 });

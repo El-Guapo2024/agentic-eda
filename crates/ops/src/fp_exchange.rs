@@ -8,9 +8,10 @@
 //! * the pose keeps the side, the label side, the lock and the group; with "Match pad positions" the position and the orientation move so that the pads whose number is
 //!   unique land where the old ones were ([`eda_model::fp_exchange::pad_alignment`], `ComputeFootprintShift`);
 //! * the pads are the new footprint's. In Change and Update Footprint each takes the net, pin name and pin type of the old pad it matches as KiCad matches them
-//!   (`matchItemsBySimilarity<PAD>`, [`eda_model::fp_exchange::match_pads`]: by number, then by place and shape; UI-LEFT P21) -- `design.nets` names `REF.PIN`, so a pad
-//!   the new footprint numbers otherwise moves the old pin's place in the net list to its own, and a new pad no old one matches is on no net, until Update PCB from
-//!   Schematic; that update's own exchange gives the nets by number (`ExchangeOptions::pads_by_number`, the netlist's `updateComponentPadConnections`). A footprint
+//!   (`matchItemsBySimilarity<PAD>`, [`eda_model::fp_exchange::match_pads`]: by number, then by place and shape; UI-LEFT P21), pad by pad (UI-LEFT-3 P3-22): a pad the
+//!   new footprint numbers otherwise takes the old pad's net under its own number, an unnumbered pad or one of two pads of a number on two nets keeps the net of the
+//!   pad it matched as its own (`PadMaskInfo::net`, `Board::set_pad_nets`), and a new pad no old one matches is on no net, until Update PCB from Schematic; that
+//!   update's own exchange gives the nets by number (`ExchangeOptions::pads_by_number`, the netlist's `updateComponentPadConnections`). A footprint
 //!   that exists only on the board keeps its `pad_nets` likewise;
 //! * the pad edits (`footprint_edits[].pads`) are dropped: they were edits of the old pads;
 //! * the footprint's texts: the Reference and Value layouts, the library texts and the user fields follow "update/reset text layers and visibilities", "sizes and styles",
@@ -530,9 +531,22 @@ impl Board<'_> {
         let pad_matches = if options.pads_by_number { Vec::new() } else { match_pads(old, &old_pose, &new, &new_pose) };
         let renumbered: Vec<(String, String)> = pad_matches.iter().map(|&(i, j)| (old.pads[i].number.clone(), new.pads[j].number.clone())).collect();
         let moves_pins = !options.pads_by_number && (renumbered.iter().any(|(a, b)| a != b) || new.pads.iter().any(|p| !renumbered.iter().any(|(_, b)| b == &p.number)));
-        if moves_pins {
-            self.carry_pad_nets(reference, &renumbered);
-        }
+        // each new pad the net of the old pad it matched, pad by pad (`newPad->SetNetCode( oldPad->GetNetCode() )`, UI-LEFT-3 P3-22): a pad matched by its place
+        // and shape -- an unnumbered pad, one of two pads of a number on two nets -- keeps its own net, not its number's
+        let carried_nets: Option<Vec<String>> = (!options.pads_by_number).then(|| {
+            let nets = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
+            let old_nets: Vec<String> = (0..old.pads.len())
+                .map(|i| {
+                    let nth = old.pads[..i].iter().filter(|p| p.number == old.pads[i].number).count() as u32 + 1;
+                    let key = crate::pad_nets::PadKey { reference: reference.to_string(), number: old.pads[i].number.clone(), nth };
+                    self.own_pad_net(&key, Some(old)).unwrap_or_else(|| nets.iter().find(|n| n.pins.contains(&key.pin())).map(|n| n.name.clone()).unwrap_or_default())
+                })
+                .collect();
+            (0..new.pads.len()).map(|j| pad_matches.iter().find(|(_, b)| *b == j).map(|(i, _)| old_nets[*i].clone()).unwrap_or_default()).collect()
+        });
+        let split_after = carried_nets.as_ref().is_some_and(|c| new.pads.iter().enumerate().any(|(j, p)| new.pads.iter().enumerate().any(|(k, q)| q.number == p.number && c[k] != c[j])));
+        let own_before = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).is_some_and(|e| e.pads.iter().any(|p| p.net.is_some()));
+        let per_pad = carried_nets.filter(|_| moves_pins || split_after || own_before);
         // the pin name and type of a renumbered pad: the old pad's, as the board had them (its file's, else the schematic pin's), on the new pad's edit
         let link = self.model.symbol_links.get(reference).cloned();
         let old_infos = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| e.pads.clone()).filter(|p| p.len() == old.pads.len());
@@ -593,10 +607,18 @@ impl Board<'_> {
         }
         dr.zone_overrides.retain(|z| z.footprint.is_some() || !z.pads.is_empty());
         dr.footprint_extras.retain(|e| e.id != reference);
-        if let Some(record) = exchanged.record {
+        if let Some(mut record) = exchanged.record {
+            // the old pads' own nets were the old pads' (`carry_pad_nets` gives the new ones theirs)
+            for p in record.pads.iter_mut() {
+                p.net = None;
+            }
             dr.footprint_extras.push(record);
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }
+        if let Some(per_pad) = &per_pad {
+            self.carry_pad_nets(reference, &new, per_pad);
+        }
+        let dr = self.drawings_mut();
         // a footprint that exists only on the board is its own record
         if let Some(bp) = dr.board_parts.iter_mut().find(|b| b.reference == reference) {
             // "reset value text only when it is a proxy for the footprint ID"
@@ -641,34 +663,31 @@ impl Board<'_> {
         }
     }
 
-    /// The nets of `reference`'s pins once its old pads' nets are on the new pads they matched (`renumbered`: old number -> new number), in the net list in force
-    /// (`design.nets`, else the intent's, which becomes the design's): the board then differs from the schematic, as KiCad's does after Change Footprint, until
-    /// Update PCB from Schematic. A footprint only the board has keeps its nets in its own record (`BoardPart::pad_nets`, done by the caller).
-    fn carry_pad_nets(&mut self, reference: &str, renumbered: &[(String, String)]) {
+    /// The nets of `reference`'s pads once each new pad has the net of the old pad it matched (`nets[j]` for the new footprint's pad `j`, `""` for none), in the net
+    /// list in force (`design.nets`, else the intent's, which becomes the design's): a number whose pads share a net is on it, one whose pads are on two keeps a net
+    /// per pad (`PadMaskInfo::net`, `Board::set_pad_nets`). The board then differs from the schematic, as KiCad's does after Change Footprint, until Update PCB from
+    /// Schematic. A footprint only the board has keeps its nets in its own record (`BoardPart::pad_nets`, done by the caller).
+    fn carry_pad_nets(&mut self, reference: &str, new: &Footprint, nets_of_pads: &[String]) {
         if self.design.drawings.as_ref().is_some_and(|d| d.board_parts.iter().any(|b| b.reference == reference)) {
             return;
         }
         let mut nets = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
         let prefix = format!("{reference}.");
-        let net_of = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone());
-        let mut carried: Vec<(String, String)> = Vec::new();
-        for (a, b) in renumbered {
-            if carried.iter().any(|(pin, _)| *pin == format!("{prefix}{b}")) {
-                continue;
-            }
-            if let Some(net) = net_of(&format!("{prefix}{a}")) {
-                carried.push((format!("{prefix}{b}"), net));
-            }
-        }
         for n in nets.iter_mut() {
             n.pins.retain(|p| !p.starts_with(&prefix));
         }
-        for (pin, net) in carried {
-            if let Some(n) = nets.iter_mut().find(|n| n.name == net) {
-                n.pins.push(pin);
-                n.pins.sort();
-            }
-        }
+        let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+        let moves: Vec<(crate::pad_nets::PadKey, String)> = new
+            .pads
+            .iter()
+            .zip(nets_of_pads)
+            .map(|(p, net)| {
+                let n = seen.entry(p.number.as_str()).or_insert(0);
+                *n += 1;
+                (crate::pad_nets::PadKey { reference: reference.to_string(), number: p.number.clone(), nth: *n }, net.clone())
+            })
+            .collect();
+        self.set_pad_nets_on(&mut nets, &moves, Some(new));
         self.design.nets = Some(nets);
     }
 

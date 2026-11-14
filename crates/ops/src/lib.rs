@@ -1926,6 +1926,19 @@ pub enum Cmd {
         remove_fields: Vec<String>,
     },
 
+    /// Footprint Properties' OK on the symbol (UI-LEFT-3 P3-14): the fields the dialog changed, carried as Update Schematic from PCB's "Other fields" carries a field
+    /// (`BACK_ANNOTATE::applyChangelist`'s `m_processOtherFields`): `fields` the fields the dialog set or added (name -> text; Reference and Value aside), each
+    /// setting the symbol's field of that name where it shows another text and names no variable, or added hidden at the symbol where it has none; `remove` the
+    /// fields the dialog deleted, each removed from the symbol unless mandatory. Fields the dialog did not touch are left as the symbol has them (KiCad's dialog
+    /// changes no symbol; only an explicit Update Schematic from PCB does). See [`back_annotate`](crate::back_annotate).
+    CarrySymbolFields {
+        id: String,
+        #[serde(default)]
+        fields: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        remove: Vec<String>,
+    },
+
     /// Find and Replace's "Replace" / "Replace All"
     /// (`SCH_FIND_REPLACE_TOOL::ReplaceAndFindNext` / `ReplaceAll`):
     /// replaces `search.find` with `search.replace` in every matching
@@ -2641,6 +2654,7 @@ impl Cmd {
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
             | Cmd::SetSymbolFields { .. }
+            | Cmd::CarrySymbolFields { .. }
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
@@ -3026,6 +3040,7 @@ impl Cmd {
             Cmd::RescueSymbols { .. } => vec!["rescue_symbols"],
             Cmd::IncrementAnnotations { start, .. } => vec![start.as_str()],
             Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
+            Cmd::CarrySymbolFields { id, .. } => vec![id.as_str()],
             Cmd::ReplaceText { .. } => vec!["replace_text"],
             Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
 
@@ -3892,6 +3907,7 @@ impl<'a> Board<'a> {
             Cmd::RescueSymbols { changes, symbols } => self.rescue_symbols(changes, symbols),
             Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
+            Cmd::CarrySymbolFields { id, fields, remove } => self.carry_symbol_fields(id, fields, remove),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
             Cmd::ResetErcPinMap => self.reset_erc_pin_map(),

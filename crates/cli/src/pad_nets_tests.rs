@@ -94,3 +94,38 @@ fn kicad_cli_reports_the_swapped_pads_as_differing_from_the_schematic() {
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(parity(&dir), before, "undone: the board and the schematic agree again");
 }
+
+/// UI-LEFT-3 P3-35, slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): U1 has two pads numbered 2 (`1 2 2`, both on VCC). Swap Pad Nets on U1.1 and the second pad 2 moves
+/// that pad alone (`PAD::SetNetCode`): the state and the board file put it on GND and leave the first pad 2 on VCC, and kicad-cli's `--schematic-parity` reports
+/// exactly the two swapped pads, each by its own net -- the file says a net per pad and kicad-cli reads it so.
+#[test]
+fn a_swap_of_one_of_two_pads_of_a_number_moves_that_pad_alone() {
+    let dir = board_with_schematic("swap_split_pad_net");
+    // a third pad, numbered 2 like the second
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    let mut extra = model.footprints[0].pads[1].clone();
+    extra.at.1 = eda_model::units::mm(1.5);
+    model.footprints[0].pads.push(extra);
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    swap(&dir, &["U1.1", "U1.2#2"]).unwrap();
+    let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+    let state = crate::studio::state(&dir, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+    let u1 = state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == "U1").unwrap();
+    let nets: Vec<(&str, &str)> = u1["pads"].as_array().unwrap().iter().map(|p| (p["num"].as_str().unwrap(), p["net"].as_str().unwrap_or(""))).collect();
+    assert_eq!(nets, [("1", "VCC"), ("2", "VCC"), ("2", "GND")], "the second pad 2 alone took GND");
+    let (_, design, model) = load(&dir).unwrap();
+    let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    let u1_block = &pcb[pcb.find("(footprint \"Test:2PAD\"").unwrap()..];
+    let pads2: Vec<&str> = u1_block.lines().filter(|l| l.contains("(pad \"2\"")).take(2).collect();
+    assert!(pads2[0].contains("\"VCC\"") && pads2[1].contains("\"GND\""), "{pads2:?}");
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped the kicad-cli half: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let report = crate::kicad_engine::drc_with(&dir, false, true).expect("kicad-cli ran");
+    assert_eq!(report["schematic_parity_run"], true, "{}", report["schematic_parity_error"]);
+    let mut texts: Vec<String> = report["schematic_parity"].as_array().unwrap().iter().filter(|v| v["type"] == "net_conflict").map(|v| v["description"].as_str().unwrap_or("").to_string()).collect();
+    texts.sort();
+    assert_eq!(texts, ["Pad net (GND) doesn't match net given by schematic (VCC)", "Pad net (VCC) doesn't match net given by schematic (GND)"], "one finding for each swapped pad: {report}");
+}

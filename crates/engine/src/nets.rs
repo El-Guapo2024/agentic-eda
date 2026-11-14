@@ -2142,6 +2142,41 @@ pub fn unconnected_pin_nets(design: &eda_model::ir::Design, model: &eda_model::C
                 out.insert(key, name);
             }
         }
+        // `updateComponentPadConnections`' no-connect pads (`pad->IsNoConnectPad()`: the pin type has `no_connect`), each on a net of its own: the first pad of a
+        // name takes it, the next ones `<name>_1`, `<name>_2` .. (`padNetnames`, skipping a name the schematic has), filed as "REF.PIN#k" for the k-th pad of the
+        // number (UI-LEFT-3 P3-30; the pads of one number on two nets, P3-35)
+        let Some(link) = link else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        let mut taken: BTreeSet<String> = BTreeSet::new();
+        let mut nth: BTreeMap<&str, u32> = BTreeMap::new();
+        for pad in &footprint.pads {
+            let k = {
+                let n = nth.entry(pad.number.as_str()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            if pad.kind == eda_model::PadKind::NonPlatedHole || !link.pins.get(&pad.number).is_some_and(|(_, t)| t.contains("no_connect")) {
+                continue;
+            }
+            let key = format!("{}.{}", fp.id, pad.number);
+            let Some(base) = model.nets.iter().find(|n| n.pins.contains(&key)).map(|n| n.name.clone()).or_else(|| out.get(&key).cloned()) else { continue };
+            let mut name = base.clone();
+            let mut jj = 1;
+            while !taken.insert(name.clone()) || (name != base && model.nets.iter().any(|n| n.name == name)) {
+                name = format!("{base}_{jj}");
+                jj += 1;
+            }
+            if k > 1 && name != base {
+                out.insert(format!("{key}#{k}"), name);
+            }
+        }
     }
     out
+}
+
+/// The net the board gives the `nth` pad numbered `number` of footprint `reference`, from the model's net list `pin_net` ("REF.PIN" -> net) and
+/// [`unconnected_pin_nets`]' names: a later pad of a no-connect pin its own (`<name>_1`), else the pin's net, else its `unconnected-(..)` net.
+pub fn written_pad_net<'a>(pin_net: impl Fn(&str) -> Option<&'a str>, unconnected: &'a BTreeMap<String, String>, reference: &str, number: &str, nth: u32) -> Option<&'a str> {
+    let key = format!("{reference}.{number}");
+    unconnected.get(&format!("{key}#{nth}")).map(String::as_str).or_else(|| pin_net(&key)).or_else(|| unconnected.get(&key).map(String::as_str))
 }
