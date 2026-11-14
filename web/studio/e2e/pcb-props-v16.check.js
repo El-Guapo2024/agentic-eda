@@ -7,7 +7,7 @@
 //   P3-12  Draw Dimension shows the hidden layer it starts on, and the hidden layer a layer change while drawing goes to (`SetLayerVisible( layer, true )`);
 //   P3-36  a footprint's user fields are rows of "Fields", sorted by name without regard to case, and an edit of one sets the field's text.
 // Every scenario undoes what it did. It answers through `window.__pcbPropsV16Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
-// run-all-checks: board=ldo minutes=8
+// run-all-checks: board=mcu30-placed minutes=10
 (async () => {
   const results = [];
   const check = (window.__pcbPropsV16Check = { results, done: false, ok: false, wait: null });
@@ -127,7 +127,7 @@
     t((await state()).drawings.points.find((q) => q.id === p.id)?.size === 0 && !!document.querySelector(".prop-error"), "a negative size is refused");
     await undo();
     await undo();
-    t(!(await state()).drawings.points.some((q) => q.id === p.id), "both undone");
+    t(!((await state()).drawings?.points ?? []).some((q) => q.id === p.id), "both undone");
   });
 
   // ------------------------------------------------------------------------------------------------------------------------ P3-9
@@ -179,7 +179,8 @@
     const origin = [i1.x + (i1.offset?.x ?? 0), i1.y + (i1.offset?.y ?? 0)];
     await dragFromTo(origin, [origin[0] - mm(1), origin[1] + mm(1)]);
     const i2 = await image();
-    t(i2.offset && i2.offset.x === mm(1) && i2.offset.y === mm(1) && i2.x === i1.x, `the origin handle moves the origin only (${JSON.stringify(i2.offset)})`);
+    // (the drop snaps to the grid and anchors, as the point editor's does: about a millimetre each way)
+    t(i2.offset && Math.abs(i2.offset.x - mm(1)) <= mm(0.3) && Math.abs(i2.offset.y - mm(1)) <= mm(0.3) && i2.x === i1.x && i2.scale_ppm === i1.scale_ppm, `the origin handle moves the origin only (${JSON.stringify(i2.offset)})`);
     const br = [i2.x + Math.trunc(i2.w / 2), i2.y + Math.trunc(i2.h / 2)];
     const o2 = [i2.x + i2.offset.x, i2.y + i2.offset.y];
     await select([img0.id]);
@@ -188,7 +189,7 @@
     const o3 = [i3.x + (i3.offset?.x ?? 0), i3.y + (i3.offset?.y ?? 0)];
     t(i3.scale_ppm > 1_500_000 && Math.abs(o3[0] - o2[0]) <= 2 && Math.abs(o3[1] - o2[1]) <= 2, `a corner scales about the origin (scale ${i3.scale_ppm}, origin ${o3} vs ${o2})`);
     for (let k = 0; k < 4; k++) await undo();
-    t(!(await state()).drawings.images.some((i) => i.id === img0.id), "all undone");
+    t(!((await state()).drawings?.images ?? []).some((i) => i.id === img0.id), "all undone");
   });
 
   // ------------------------------------------------------------------------------------------------------------------------ P3-12, P3-11
@@ -238,7 +239,7 @@
     }
     await undo();
     await undo();
-    t(!(await state()).drawings.dimensions.some((d) => d.id === made.id), "all undone");
+    t(!((await state()).drawings?.dimensions ?? []).some((d) => d.id === made.id), "all undone");
   });
 
   // ------------------------------------------------------------------------------------------------------------------------ P3-36
