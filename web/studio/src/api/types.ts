@@ -2147,7 +2147,7 @@ export type Cmd =
    */
   | { op: "add_drc_exclusions"; exclusions: DrcExclusionSpec[] }
   /** "Remove exclusion for this violation" (and "Remove all exclusions ..."): put the violations back in the report. */
-  | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[] }> }
+  | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[]; positions_nm?: [number, number][] }> }
   | { op: "clear_drc_exclusions" }
   /** Schematic Setup > Violation Severity (`panel_setup_severities.cpp`): ERC settings key -> severity, the whole table (see `ErcSeveritiesReply`). */
   | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }

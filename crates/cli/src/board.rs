@@ -5277,7 +5277,7 @@ pub(crate) mod tests {
         assert_eq!(kicad_cli_lists(&dir, &["--severity-all"], "track_width"), vec![(true, "error".to_string())]);
 
         // Remove one: back in the report, and kicad-cli finds it again.
-        step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![eda_model::ir::DrcExclusionKey { check: "annular_width".into(), items: exclusion_of(&via, "").items }] }, false, "ui").unwrap();
+        step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![eda_model::ir::DrcExclusionKey { check: "annular_width".into(), items: exclusion_of(&via, "").items, positions_nm: vec![] }] }, false, "ui").unwrap();
         let removed = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
         assert_eq!(find(&removed, "annular_width")["excluded"], false);
         assert_eq!(counts(&removed, "annular_width"), 1);

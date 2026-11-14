@@ -213,6 +213,12 @@ test("a violation is waived by its check and the uuids of its items, with the po
   assert.equal(canExclude(one), true);
   assert.equal(canExclude({ items: [] }), false, "a finding that names no item");
   assert.equal(canExclude({ items: [], marker_nm: [[1_000, 2_000]] }), true, "a finding that names no item but whose marker the report places (copper_sliver)");
+  // two slivers: each is its own exclusion, by its place
+  const sliver = (x: number): DrcViolation => ({ ...v("copper_sliver", []), marker_nm: [[x, x]] });
+  assert.deepEqual(drcKey(sliver(5)), { check: "copper_sliver", items: [], positions_nm: [[5, 5]] });
+  const report = { engine: "t", violations: [sliver(5), sliver(7)], counts: {} } as unknown as DrcReport;
+  const after = patchDrcExcluded(report, [drcKey(sliver(7))], true);
+  assert.deepEqual(after.violations.map((x) => x.excluded ?? false), [false, true], "excluding one sliver leaves the other");
   assert.equal(canExclude({ items: [{ description: "x", pos: [0, 0], id: null }] }), false, "a lint finding, or a report from an older server: no uuid");
 });
 

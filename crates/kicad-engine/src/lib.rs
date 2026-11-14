@@ -889,13 +889,32 @@ impl Violation {
     /// match -- by the check and the items -- for the rest. Returns whether the studio's list holds it.
     fn apply_exclusions(&mut self, exclusions: &[DrcExclusion]) -> bool {
         let uuids = self.item_uuids();
-        match exclusions.iter().find(|e| e.matches(&self.kind, &uuids)) {
+        let at: Vec<[Nm; 2]> = self.markers_nm.iter().map(|p| [p.x, p.y]).collect();
+        match exclusions.iter().find(|e| e.matches_at(&self.kind, &uuids, &at)) {
             Some(e) => {
                 self.excluded = true;
                 self.comment = e.comment.clone();
                 true
             }
             None => false,
+        }
+    }
+}
+
+/// Each `copper_sliver` finding its own point: `DRC_TEST_PROVIDER_SLIVER_CHECKER` reports a layer's slivers in the order its walk meets them, and the report
+/// keeps that order, so when a layer has as many findings as the studio's walk over the layer's fills finds points (`eda_kicad::drc_markers::sliver_points`,
+/// in its order), the n-th finding is at the n-th point -- and excluding one sliver excludes that one. Otherwise each keeps every point of its layer.
+fn own_sliver_points(list: &mut [Violation], board: &eda_kicad::drc_exclusions::BoardShapes) {
+    let layer_of = |v: &Violation| v.description.rsplit_once('(').and_then(|(_, l)| l.strip_suffix(')')).unwrap_or("").to_string();
+    let layers: std::collections::BTreeSet<String> = list.iter().filter(|v| v.kind == "copper_sliver").map(layer_of).collect();
+    for layer in layers {
+        let Some(fills) = board.fills_by_layer.get(&layer) else { continue };
+        let points = eda_kicad::drc_markers::sliver_points(fills);
+        let mine: Vec<usize> = (0..list.len()).filter(|&i| list[i].kind == "copper_sliver" && layer_of(&list[i]) == layer).collect();
+        if mine.len() == points.len() {
+            for (i, p) in mine.into_iter().zip(points) {
+                list[i].markers_nm = vec![Point { x: Nm::new(p[0]), y: Nm::new(p[1]) }];
+            }
         }
     }
 }
@@ -1128,6 +1147,7 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
         for v in &mut list {
             v.add_anchors(design, &board);
         }
+        own_sliver_points(&mut list, &board);
         list
     };
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
