@@ -7,7 +7,7 @@
 //   FilterCollectorForMarkers           a DRC marker is no item here (no `itemKind`)
 //   FilterCollectorForHierarchy         an item of a group stands for the outermost group holding it inside the entered one (`TopLevelGroup`); a footprint's
 //                                       field or text stands for its footprint's group when the footprint is in one, and is dropped when its footprint is selected
-//   FilterCollectorForFreePads          a pad stands for its footprint (the studio has no "Allow free pads")
+//   FilterCollectorForFreePads          a pad stands for its footprint, unless "Allow free pads" is on (kicad-port/freePads.ts)
 //   PCB_TRACE_T removed                 a straight track is left out; an arc (`PCB_ARC_T`) is swapped
 //   FilterCollectorForLockedItems       a locked item, an item in a locked group, a group with a locked member is left out (the caller says so: 25ec2335's
 //                                       `ReportFilteredLockedItems`)
@@ -24,6 +24,7 @@ import { fpItemBounds, fpItemKind, fpSelectionTarget, type Fp } from "./fpItems"
 import { topLevelGroup } from "./groupTree";
 import { itemBounds, itemKind, padParent } from "./pcbItems";
 import { lockedForTools } from "./pcbTransform";
+import { padStaysPad } from "./freePads";
 
 const centreOf = (b: readonly [number, number, number, number] | null): PointXY | null => (b ? { x: Math.round((b[0] + b[2]) / 2), y: Math.round((b[1] + b[3]) / 2) } : null);
 
@@ -56,8 +57,9 @@ export function swapSelection(board: BoardState, selection: readonly string[], e
       id = top;
       kind = "group";
     }
-    // `FilterCollectorForFreePads`: a pad is edited through its footprint (and so through the footprint's group)
-    if (kind === "pad") {
+    // `FilterCollectorForFreePads`: a pad is edited through its footprint (and so through the footprint's group), unless "Allow free pads" is on: then two pads
+    // swap their copper's places (`PAD::SwapShapePositions`, UI-LEFT-3 R3-7)
+    if (kind === "pad" && !padStaysPad()) {
       const fp = padParent(board, raw);
       if (!fp) continue;
       const fpTop = topLevelGroup(groups, fp, enteredGroup);

@@ -1126,7 +1126,8 @@ impl Node {
     ///   nets");
     /// - a keepout rule area (`IsKeepout( this, aHead, &enforce )`) is an exact boundary ("keepouts are exact boundary; no clearance") for what it
     ///   keeps out, and nothing for the rest ([`crate::rule_resolver::Keepout::keeps_out`]);
-    /// - a free pad's copper (`IsFreePad()` of either side, [`crate::item::Solid::free_pad`]) has no clearance to another net;
+    /// - a free pad (`IsFreePad()` of either side, [`crate::item::Solid::free_pad`]) has no clearance to another net, its hole neither (the hole's
+    ///   `IsFreePad()` is its parent pad's);
     /// - copper at the rules' clearance ([`Self::clearance_between`]), unless the item is a pad of a net-tie footprint and the collision is on a
     ///   pad of that footprint of the probe's own net (`checkNetTie`: `IsNetTieExclusion( aHead, pos, this )`, the position on the item as
     ///   `shapeH->Collide( shapeI, .., &pos )` gives it, the nearest point of the item);
@@ -1178,7 +1179,7 @@ impl Node {
             _ => r.is_via_flashed_on(opts.head_via, layers, item.layers()),
         });
         // `else if( differentNetsOnly && ( IsFreePad() || aHead->IsFreePad() ) ) clearance = -1;`: "a pad associated with a "free" pin (NIC) doesn't
-        // have a net until it has been used" -- its copper has no clearance to another net (its hole, an item of its own, still has)
+        // have a net until it has been used" -- no clearance to another net, for its copper and its hole alike
         let is_free = |it: &Item| matches!(it, Item::Solid(s) if s.free_pad);
         let free = is_free(item) || matches!(head, Side::Item(h) if is_free(h));
         if !same && !free && flashed && head_flashed {
@@ -1221,8 +1222,9 @@ impl Node {
             _ => None,
         };
         let reach = |depth: Nm| clear_at.is_none_or(|c| r.hole_reach(c, depth));
-        let item_hole_counts = !same && head_flashed && reach(item_depth);
-        let head_counts = head_hole.is_some_and(|(_, _, d)| same || reach(d));
+        // a free pad's hole is free too (`IsFreePad()`: `m_isFreePad || ( ParentPadVia() && ParentPadVia()->m_isFreePad )`, the hole's parent pad)
+        let item_hole_counts = !same && !free && head_flashed && reach(item_depth);
+        let head_counts = !free && head_hole.is_some_and(|(_, _, d)| same || reach(d));
         if !item_hole_counts && !head_counts {
             return None;
         }

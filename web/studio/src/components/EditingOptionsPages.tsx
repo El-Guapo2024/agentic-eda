@@ -5,7 +5,7 @@
 //     Constrain actions to H, V, 45 degrees (`m_AngleSnapMode`: checked is DEG45, unchecked DIRECT -- so OK, once the page was shown, makes a board in 90 degree mode
 //     45, as KiCad's `TransferDataFromWindow` does), Step for rotate commands, Arc editing mode, Flip board items, the Magnetic Points, Show ratsnest with curved lines (the View
 //     menu's toggle), Ratsnest line thickness, <ESC> clears net highlighting, Show courtyard collisions when moving/dragging. Greyed: Track mouse-drag mode,
-//     Allow free pads, Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits. Automatically refill zones is live (UI-LEFT-2 PP10: kicad-cli fills,
+//     Ctrl+click's Highlight net, Always show selected ratsnest, Show page limits. Automatically refill zones is live (UI-LEFT-2 PP10: kicad-cli fills,
 //     kicad-port/autoRefill.ts).
 //   * Schematic Editor > Editing Options (`PANEL_EESCHEMA_EDITING_OPTIONS`, eeschema/dialogs/panel_eeschema_editing_options.cpp and _base): Line drawing mode
 //     (kept between sessions, `m_Drawing.line_mode`), Arc editing mode, Mouse drag performs Drag (G) operation (`m_Input.drag_is_move`), Automatically start wires on
@@ -164,7 +164,7 @@ export function PcbEditingOptionsPage({ draft, set, extra, setExtra, rotationTex
             <input type="radio" name="flip-direction" data-testid="pref-flip-top-bottom" checked={draft.flipDirection === "top_bottom"} onChange={() => set({ flipDirection: "top_bottom" })} /> Top/bottom
           </label>
         </div>
-        {offCheck("Allow free pads", false, "Not ported: a pad of a board footprint moves with its footprint only (KiCad's default). KiCad: If checked, pads can be moved with respect to the rest of the footprint.")}
+        {check("Allow free pads", draft.allowFreePads, (v) => set({ allowFreePads: v }), "pref-allow-free-pads", "If checked, pads can be moved with respect to the rest of the footprint.")}
         {heading("Left Click Mouse Commands")}
         <LeftClickCommands
           ctrlRow={

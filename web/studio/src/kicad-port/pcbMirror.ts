@@ -28,6 +28,7 @@ import type { P } from "./trackArc";
 import { reshapeCmds } from "./shapeFill";
 import { editFieldCmd, fieldById } from "./fpFields";
 import { extraItemById } from "./pcbExtraItems";
+import { padStaysPad } from "./freePads";
 
 export type FlipDirection = "leftRight" | "topBottom";
 
@@ -89,6 +90,9 @@ export function mirrorableIds(board: BoardState, ids: readonly string[]): string
       for (const member of group?.member_ids ?? []) visit(member);
     } else if (kind === "track" || kind === "via" || kind === "zone" || kind === "shape" || kind === "text" || kind === "field" || kind === "point" || kind === "textbox") {
       out.push(id);
+    } else if (kind === "pad" && padStaysPad()) {
+      // `PCB_PAD_T` (`mirrorPad`): with "Allow free pads" only -- else `FilterCollectorForFreePads` made it its footprint, which is not mirrorable
+      out.push(id);
     }
   };
   for (const id of ids) visit(id);
@@ -143,7 +147,7 @@ export function planMirror(board: BoardState, ids: readonly string[], centre: re
       if (flipped !== just) cmds.push(editFieldCmd(f.part, f.field, { halign: flipped === "left" ? -1 : flipped === "right" ? 1 : 0 }));
       const [x, y] = mirrorPoint([f.field.x, f.field.y], centre, dir);
       if (x !== f.field.x || y !== f.field.y) cmds.push({ op: "move_items", ids: [id], dx: Math.round(x - f.field.x), dy: Math.round(y - f.field.y) });
-    } else if (kind === "textbox" || (kind === "group" && board.drawings?.groups.find((g) => g.id === id)?.generator === "tuning_pattern")) {
+    } else if (kind === "textbox" || kind === "pad" || (kind === "group" && board.drawings?.groups.find((g) => g.id === id)?.generator === "tuning_pattern")) {
       mirrorItems.push(id);
     } else if (kind === "point") {
       const at = extraItemById(board, id)!.position;

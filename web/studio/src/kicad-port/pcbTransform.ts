@@ -6,7 +6,8 @@
 //
 //   RequestSelection + FilterCollectorForLockedItems   `editableSelection`: a locked item, a member of a locked group, a group with a
 //                                                      locked member stays where it is
-//   FilterCollectorForFreePads                         a selected pad stands for its footprint (pads are edited through it)
+//   FilterCollectorForFreePads                         a selected pad stands for its footprint (pads are edited through it), unless "Allow free
+//                                                      pads" is on (kicad-port/freePads.ts): then it is moved, turned and mirrored as itself
 //   updateModificationPoint                            `modificationPoint`: one item turns about its own position, several about the
 //                                                      centre of the selection's box, snapped to the grid
 //   Rotate's `usePcbShapeCenter`                       a lone rectangle or polygon turns about its centre
@@ -22,6 +23,7 @@ import { ancestors, groupAndDescendants, groupLeaves, isGroup, parentGroup } fro
 import { cellById } from "./tables";
 import type { CarryOp } from "./pcbCarry";
 import { getOverrideLocks } from "./overrideLocks";
+import { padStaysPad } from "./freePads";
 
 export type FlipDirection = "left_right" | "top_bottom";
 export type Pt = readonly [number, number];
@@ -50,6 +52,9 @@ export function isLocked(board: BoardState, id: string): boolean {
   // A footprint's field is as locked as the footprint (`PCB_TEXT::IsLocked`: "|| GetParentFootprint()->IsLocked()").
   const field = parseFieldId(id);
   if (field && locked.has(field.ref)) return true;
+  // and a pad, a pad of a locked footprint (`PAD::IsLocked`: `GetParent()->IsLocked()`), which "Allow free pads" lets a tool take as itself (UI-LEFT-3 R3-7)
+  const fp = padParent(board, id);
+  if (fp && fp !== id && locked.has(fp)) return true;
   // and so is a footprint's own text (`REF~t<k>`, UI-LEFT P15)
   const t = id.lastIndexOf("~t");
   if (t > 0 && locked.has(id.slice(0, t))) return true;
@@ -76,7 +81,7 @@ export function lockedForTools(board: BoardState, id: string): boolean {
  * (`FilterCollectorForLockedItems`, none with Override locks: `lockedForTools`) -- so `lockedOut` is how the tool knows it left something where it was.
  * Order is kept, repeats dropped.
  */
-export function editableSelection(board: BoardState, ids: readonly string[], opts: { respectLocks?: boolean; forClipboard?: boolean } = {}): { ids: string[]; lockedOut: boolean } {
+export function editableSelection(board: BoardState, ids: readonly string[], opts: { respectLocks?: boolean; forClipboard?: boolean; forcePromotion?: boolean } = {}): { ids: string[]; lockedOut: boolean } {
   const respectLocks = opts.respectLocks ?? true;
   const out: string[] = [];
   const seen = new Set<string>();
@@ -86,7 +91,9 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
     const kind = itemKind(board, raw);
     // (`forClipboard`: Copy and Cut take a pad and a table cell as themselves -- `copyToClipboard`'s filter has neither `FilterCollectorForFreePads` nor
     // `FilterCollectorForTableCells`: `SaveSelection` copies a cell's table cut down to the selected cells, and Cut's `DeleteItems` clears the cell)
-    const id = kind === "pad" ? (opts.forClipboard ? raw : padParent(board, raw)) : kind === "tablecell" ? (opts.forClipboard ? raw : (cellById(board, raw)?.table.id ?? null)) : raw;
+    // (with "Allow free pads" a pad stays a pad -- `FilterCollectorForFreePads( aCollector, aForcePromotion )`, kicad-port/freePads.ts -- unless the tool forces the
+    // promotion: Duplicate, and Flip here, which turns a pad over with its footprint only)
+    const id = kind === "pad" ? (opts.forClipboard || padStaysPad(opts.forcePromotion) ? raw : padParent(board, raw)) : kind === "tablecell" ? (opts.forClipboard ? raw : (cellById(board, raw)?.table.id ?? null)) : raw;
     if (id == null || seen.has(id) || itemKind(board, id) == null) continue;
     seen.add(id);
     if (respectLocks && lockedForTools(board, id)) {
@@ -200,7 +207,9 @@ export function planRotate(board: BoardState, selection: readonly string[], quar
  * `PCBNEW_SETTINGS::m_FlipDirection` says (`direction`, left/right by default).
  */
 export function planFlip(board: BoardState, selection: readonly string[], direction: FlipDirection = "left_right"): TransformPlan {
-  const { ids, lockedOut } = editableSelection(board, selection);
+  // (`PAD::Flip` takes a pad to the other side alone; the studio holds a pad on its footprint's side, so a pad is turned over with its footprint whatever
+  // "Allow free pads" says)
+  const { ids, lockedOut } = editableSelection(board, selection, { forcePromotion: true });
   if (ids.length === 0) return { ...EMPTY, lockedOut };
   const pivot = flipPivot(board, ids);
   if (!pivot) return { ...EMPTY, lockedOut };

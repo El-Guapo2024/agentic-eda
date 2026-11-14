@@ -24,7 +24,7 @@
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
 # examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
 # outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
-# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=legacy` serves a copy with KiCad's QA legacy projects in `e2e-legacy/` (legacy-import.check.js). `ui=import-foreign` serves a
+# simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), nc-pins-placed (examples/nc_pins.yaml placed: free-pads.check.js), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=legacy` serves a copy with KiCad's QA legacy projects in `e2e-legacy/` (legacy-import.check.js). `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
 # configuration folder of its own, empty (`EDA_KICAD_CONFIG_DIR`): a check that writes the global library tables or KiCad's path variables never touches the
 # machine's. `fixtures=library-formats` puts two of KiCad's QA libraries in other formats in the board's folder, `legacy.lib` (a legacy symbol library) and
@@ -108,6 +108,8 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
         mcu30-few) # three footprints placed, the rest not (board-setup-pages.check.js: `eda board place U1 --at 17.5,17.5` and a few more)
             "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && "$eda" board place U1 --at 17.5,17.5 -C "$d" \
                 && "$eda" board place R1 --at 8,8 -C "$d" && "$eda" board place R2 --at 8,12 -C "$d" ;;
+        nc-pins-placed) # free-pads.check.js: examples/nc_pins.yaml placed (J1.4 .. J1.6 and U1.4 are pins alone on their nets)
+            "$eda" place "$repo/examples/nc_pins.yaml" -o "$t/placed" && "$eda" board new "$repo/examples/nc_pins.yaml" -o "$d" --origin 0,0 && cp "$t/placed/design.json" "$d/" ;;
         mcu30-placed)
             "$eda" place "$yaml_mcu" -o "$t/placed" && "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 && cp "$t/placed/design.json" "$d/" ;;
         mcu30-routed)

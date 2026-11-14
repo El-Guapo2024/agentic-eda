@@ -478,9 +478,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     }
   }
 
-  // Courtyard.
+  // Courtyard (not of the copy that carries a pad alone: kicad-port/pcbCarry.ts `splitCarried`).
   const courtyardKey = part.side === "bottom" ? "b_courtyard" : "f_courtyard";
-  if (selected || isHot || opts.layerVisible[courtyardKey] !== false) {
+  if (!part.carriedPadsOnly && (selected || isHot || opts.layerVisible[courtyardKey] !== false)) {
     withLayer(ctx, opts, courtyardKey, 1, () => {
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);

@@ -347,6 +347,8 @@ export interface Part {
   dnp?: boolean;
   not_in_pos?: boolean;
   pads?: Pad[];
+  /** The studio's own: a copy of the footprint holding only the pads carried on their own ("Allow free pads", kicad-port/pcbCarry.ts `splitCarried`), drawn without its courtyard. */
+  carriedPadsOnly?: boolean;
   /** A multi-gate footprint's units (`FOOTPRINT::GetUnitInfo`): each unit's name and the numbers of its pads; absent when it has fewer than two (Swap Gate Nets). */
   units?: Array<{ name: string; pins: string[] }> | null;
   /** The footprint's silkscreen, fab and assembly drawings, board space (absent when it has none). */
@@ -1926,6 +1928,8 @@ export interface PadEditCmd {
   size?: [Nm, Nm];
   drill?: Nm;
   drill_slot?: [Nm, Nm];
+  /** `PAD::SetFPRelativePosition`: the pad's own place in its footprint's frame, after a move with "Allow free pads" (UI-LEFT-3 R3-7). */
+  at?: PointXY;
   offset?: PointXY;
   rot?: number;
   roundrect_ratio?: number;

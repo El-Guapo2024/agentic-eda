@@ -85,6 +85,9 @@ export interface Preferences {
   rotationStepDeg: number;
   /** `PCBNEW_SETTINGS::m_FlipDirection` ("Flip board items"): which way F turns a board item over. Default left/right (the `editing.flip_left_right` default). */
   flipDirection: FlipDirection;
+  /** `PCBNEW_SETTINGS::m_AllowFreePads` ("Allow free pads", Preferences > PCB Editor > Editing Options): "pads can be moved with respect to the rest of the footprint" --
+   *  the edit tools keep a selected pad as itself (`FilterCollectorForFreePads`, kicad-port/freePads.ts). Default off. */
+  allowFreePads: boolean;
   /** `EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps` ("Allow unconstrained pin swaps", Preferences > Schematic Editor > Editing Options): Swap Pins is offered and runs only with it on. Default off. */
   allowUnconstrainedPinSwaps: boolean;
   /** `SYMBOL_EDITOR_SETTINGS::m_Repeat.pin_step` ("Pitch of repeated pins:", Preferences > Symbol Editor > Editing Options > Repeated Items), mils: how far Repeat Pin puts the
@@ -248,6 +251,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   magneticGraphics: false,
   rotationStepDeg: 90,
   flipDirection: "left_right",
+  allowFreePads: false,
   allowUnconstrainedPinSwaps: false,
   symRepeatPinStepMils: 100,
   symRepeatLabelDelta: 1,
@@ -422,6 +426,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     magneticGraphics: bool(o.magneticGraphics, d.magneticGraphics),
     rotationStepDeg: sanitizeRotationStep(o.rotationStepDeg, d.rotationStepDeg),
     flipDirection: o.flipDirection === "top_bottom" ? "top_bottom" : d.flipDirection,
+    allowFreePads: bool(o.allowFreePads, d.allowFreePads),
     allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
     symRepeatPinStepMils: sanitizePinStepMils(o.symRepeatPinStepMils, d.symRepeatPinStepMils),
     symRepeatLabelDelta: clampInt(o.symRepeatLabelDelta, -10, 10, d.symRepeatLabelDelta),

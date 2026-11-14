@@ -699,6 +699,29 @@ mod tests {
         assert!(node.colliding_with(&off, &net_of("N1"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts { root_world: true, ..Default::default() }).iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.edge)));
     }
 
+    /// UI-LEFT-3 R3-7: a free through-hole pad (`IsFreePad`: J1.1 alone on its net, `unconnected-(J1-Pad1)`, pin type "free") is a free solid, and its
+    /// hole is free too (`HOLE`'s `IsFreePad()` is its parent pad's): a track of another net ending in its middle collides with neither. The same pad with
+    /// a passive pin keeps both clearances.
+    #[test]
+    fn a_free_pad_and_its_hole_have_no_clearance_to_another_net() {
+        let into = Shape::Stadium { a: Point { x: mm(10.0), y: mm(5.0) }, b: Point { x: mm(10.0), y: Nm::ZERO }, r: mm(0.1) };
+        for (pin_type, free) in [("free", true), ("passive", false)] {
+            let (mut design, mut model) = edge_pad_board(Default::default(), false);
+            model.nets.clear();
+            let info = &mut design.drawings.as_mut().unwrap().footprint_extras[0].pads[0];
+            info.net = Some("unconnected-(J1-Pad1)".into());
+            info.pin_type = pin_type.into();
+            let (node, _) = build_node(&design, &model);
+            let pad = node.iter().find_map(|(_, it)| match it {
+                Item::Solid(s) if s.source == "J1.1" => Some(s.free_pad),
+                _ => None,
+            });
+            assert_eq!(pad, Some(free), "{pin_type}");
+            let hits = node.colliding_with(&into, &net_of("SIG"), crate::layer::LayerRange::single(0), &model.board, &[], crate::node::QueryOpts::default());
+            assert_eq!(hits.iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if !s.edge)), !free, "{pin_type}: {:?}", hits.iter().map(|o| node.get(o.id).map(|i| i.kind())).collect::<Vec<_>>());
+        }
+    }
+
     /// UI-LEFT-2 RR6: `isStartingPointRoutable`'s pair half asks the world itself too (`m_world->CheckColliding( &dummyStartLineA / B, ITEM::ANY_T )`),
     /// so a pair may start on two castellated pads on the board edge; without the property the start is refused as before.
     #[test]

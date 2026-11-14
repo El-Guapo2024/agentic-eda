@@ -149,12 +149,12 @@ export function grabNearestUnconnectedFootprints(parts: readonly UnconnectedPart
 // --------------------------------------------------------- move anchors
 
 /** Every kind of item the move tools carry: a footprint, track, via, zone, graphic, text, dimension or group. */
-export type MovableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | ExtraKind;
+export type MovableKind = "part" | "pad" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | ExtraKind;
 
 type XY = readonly [number, number];
 
 export interface AnchorBoard {
-  parts: readonly { ref: string; placed: boolean; at?: XY }[];
+  parts: readonly { ref: string; placed: boolean; at?: XY; pads?: readonly { num: string; x: number; y: number; px?: number; py?: number }[] }[];
   routing?: {
     vias: readonly { id: string; x: number; y: number }[];
     tracks?: readonly { id: string; pts: readonly XY[] }[];
@@ -177,7 +177,7 @@ export interface AnchorBoard {
  * first corner, a shape's first defining point (`PCB_SHAPE::GetPosition()` is its start/centre), a text's position, a dimension's first
  * feature point, a group's box centre (here the centre of the box around its members' own anchors). `Move Individually` glues each item's
  * anchor to the cursor, and `Position Relative` measures from it. Null = not something the move tool carries (an unplaced footprint, an
- * unknown id; a pad moves with its footprint).
+ * unknown id). A pad is carried on its own with "Allow free pads" only (the callers have made it its footprint otherwise): its position.
  */
 export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind; at: [number, number] } | null {
   const part = board.parts.find((p) => p.ref === id);
@@ -209,6 +209,17 @@ export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind
   // `PCB_BARCODE::GetPosition()` is the barcode's centre.
   const barcode = board.drawings?.barcodes?.find((q) => q.id === id);
   if (barcode) return { kind: "barcode", at: [barcode.x, barcode.y] };
+  // a pad on its own ("Allow free pads", UI-LEFT-3 R3-7): `PAD::GetPosition()`, its position (where its hole is: `px`, `py`, else the copper's centre)
+  const dot = id.indexOf(".");
+  const padPart = dot > 0 ? board.parts.find((p) => p.placed && p.ref === id.slice(0, dot)) : undefined;
+  if (padPart?.pads?.length) {
+    const seen = new Map<string, number>();
+    for (const pad of padPart.pads) {
+      const n = (seen.get(pad.num) ?? 0) + 1;
+      seen.set(pad.num, n);
+      if ((n === 1 ? `${padPart.ref}.${pad.num}` : `${padPart.ref}.${pad.num}#${n}`) === id) return { kind: "pad", at: [pad.px ?? pad.x, pad.py ?? pad.y] };
+    }
+  }
   const group = board.drawings?.groups?.find((g) => g.id === id);
   if (group) {
     const anchors = group.member_ids.map((m) => (m === id ? null : movableItem(board, m))).filter((m): m is NonNullable<typeof m> => m != null);
