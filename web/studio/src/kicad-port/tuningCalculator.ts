@@ -14,8 +14,8 @@
 //                                       calculator, the result statuses it checks and their messages, the conversion to nanometres and attoseconds per mm
 //
 // Differences from KiCad, each forced by what the studio holds:
-//   - The profile here has no "Frequency" or "Model solder mask" (the backend does not carry `m_Frequency` / `m_ModelSolderMask`); they are inputs that default
-//     to what a new KiCad profile page shows: 1 GHz and ticked.
+//   (The profile's "Frequency" and "Model solder mask", `m_Frequency` / `m_ModelSolderMask`, are the page's: UI-LEFT-3 B3-4. Left out, they are what a new
+//   KiCad profile page shows: 1 GHz and ticked.)
 //   - The stackup has no dielectric model, so a layer is always `DIELECTRIC_MODEL::CONSTANT` (KiCad's Djordjevic-Sarkar refit of a layer is not reached;
 //     the calculators' own overlay is ported in transline.ts). A value the stackup leaves out is the one KiCad's parser would leave: a dielectric's epsilon R
 //     4.5 and loss tangent 0.02 (`BOARD_STACKUP_ITEM` of `BS_ITEM_TYPE_DIELECTRIC`), 1 and 0 for a sublayer after the first (`DIELECTRIC_PRMS`), a mask's

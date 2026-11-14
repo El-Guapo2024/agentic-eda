@@ -4,6 +4,8 @@ import type { TuningProfile } from "../api/types";
 import {
   DEFAULT_FORMATTING,
   DEFAULT_TUNING_PATTERNS,
+  FREQUENCY_UNITS,
+  frequencyShown,
   addTrackRow,
   addViaOverride,
   asToPs,
@@ -122,4 +124,20 @@ test("a class that names a profile the page does not have is what kicad-cli repo
   assert.ok(sameProfiles({ profiles: [profile("a")], class_profiles: { X: "" } }, { profiles: [profile("a")] }));
   assert.ok(!sameProfiles({ profiles: [profile("a")] }, { profiles: [profile("b")] }));
   assert.deepEqual([psToAs(5.6), asToPs(6_100_000), psToAs(0.0000004)], [5_600_000, 6.1, 0]);
+});
+
+test("UI-LEFT-3 B3-4: a new profile is the panel's (1 GHz, both boxes ticked); an older one reads as the migrations fill it; the frequency shows in its largest unit", () => {
+  const p = emptyProfile();
+  assert.deepEqual([p.frequency_hz, p.model_solder_mask, p.enable_time_domain_tuning, p.net_chain_bridge_delay_as_per_mm], [1e9, true, true, 0]);
+  const old = { name: "x", profile_type: "single" as const, target_impedance: 50, enable_time_domain_tuning: false, layer_entries: [], via_propagation_delay_as: 0, via_overrides: [] };
+  const d = profilesDraftOf({ profiles: [old] });
+  assert.deepEqual([d.profiles[0]!.frequency_hz, d.profiles[0]!.model_solder_mask, d.profiles[0]!.net_chain_bridge_delay_as_per_mm], [1e9, false, 0]);
+  assert.ok(sameProfiles({ profiles: [old] }, { profiles: [{ ...old, frequency_hz: 1e9, model_solder_mask: false, net_chain_bridge_delay_as_per_mm: 0 }] }), "absent is the defaults");
+  assert.deepEqual(frequencyShown(2.4e9), { value: 2.4, unit: 3 });
+  assert.deepEqual(frequencyShown(100e6), { value: 100, unit: 2 });
+  assert.deepEqual(frequencyShown(5e3), { value: 5, unit: 1 });
+  assert.deepEqual(frequencyShown(50), { value: 50, unit: 0 });
+  assert.deepEqual(FREQUENCY_UNITS.map((u) => u.label), ["Hz", "kHz", "MHz", "GHz"]);
+  const bad = checkProfiles({ profiles: [{ ...emptyProfile(), name: "n", frequency_hz: Number.NaN }], classProfiles: {} }, ["F.Cu"]);
+  assert.equal(bad.errors[0], "The frequency is a number of hertz from 0 up");
 });

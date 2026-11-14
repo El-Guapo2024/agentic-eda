@@ -132,3 +132,12 @@ test("PP10: Properties (E) while drawing a cutout or similar zone opens the zone
   assert.deepEqual(zoneCommitPlan({ mode: "similar", sourceId: "z0" }, true, edited), { kind: "similar", sourceId: "z0", zone: edited });
   assert.deepEqual(zoneCommitPlan({ mode: "cutout", sourceId: "z0" }, true, edited), { kind: "cutout", sourceId: "z0" }, "a cutout takes only the outline");
 });
+
+test("UI-LEFT-3 B3-4: Board Setup > Zones' Locked rides on set_zone_defaults, and a new zone starts locked by it", () => {
+  const cmd = zoneDefaultsCmd({}, ["F.Cu"], "", true);
+  assert.ok(cmd.op === "set_zone_defaults" && cmd.locked === true);
+  const off = zoneDefaultsCmd({}, ["F.Cu"], "", false);
+  assert.ok(off.op === "set_zone_defaults" && off.locked === undefined, "unlocked sends no box, as an older studio did");
+  const lockedBoard = { ...board, drawings: { ...(board.drawings ?? {}), zone_defaults_locked: true } } as BoardState;
+  assert.equal(newZoneInitial(lockedBoard, { layer: "F.Cu", ruleArea: false, highlighted: [], selection: [], defaults }).locked, true, "`ExportSetting`'s `SetLocked( m_Locked )`");
+});

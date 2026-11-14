@@ -264,8 +264,14 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
             eda_kicad::merge_custom_rules(&mut model, text);
         }
     }
-    // A label's net class field puts its net in that class (`checkNetclassDrivers`, the project's `netclass_assignments`).
-    fold_label_netclasses(design, &mut model);
+    // A label's net class field puts its net in that class (`checkNetclassDrivers`, the project's `netclass_assignments`), its text variables resolved against
+    // the project's (UI-LEFT-3 B3-7).
+    let project = eda_model::text_vars::Project {
+        name: eda_kicad_engine::file_stem(std::path::Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board")),
+        variables: crate::text_variables::project_variables(dir),
+        clock: Default::default(),
+    };
+    fold_label_netclasses(design, &mut model, &project);
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(design, &mut model);
     // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
@@ -406,13 +412,31 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
 /// A directive label (`SCH_DIRECTIVE_LABEL`, the netclass flag) gives its Netclass to the net at its connection point (the wire or bus through it, else a
 /// label or a pin there), and a rule area gives the classes of the flags on its border to the wires and buses it touches and the labels and pins inside it
 /// (`SCH_RULE_AREA::RefreshContainedItemsAndDirectives`, `GetResolvedNetclasses`, read by `GetNetclassesForDriver`; UI-LEFT-2 BB3).
-fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+///
+/// Each `Netclass` is its shown text on the placement (`field->GetShownText( &aPath, FOR_NETNAME )`, KiCad 25ec2335 `conn_facts.cpp`'s `netclassReferences`
+/// and the labels' `text.netclasses`, `SCH_RULE_AREA::GetResolvedNetclasses`), and one that resolves to nothing names no class: [`label_field_shown`]
+/// (UI-LEFT-3 B3-7).
+fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintModel, project: &eda_model::text_vars::Project) {
     let nets: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
     let net_of_pin: std::collections::BTreeMap<&str, &str> = nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let mut assigned: Vec<(String, String)> = Vec::new();
     let ro: &ConstraintModel = model;
-    for e in eda_model::sheet_list::walk(design) {
+    let entries = eda_model::sheet_list::walk(design);
+    let page_count = entries.len();
+    for e in entries {
         let Some(sec) = eda_model::sheet_list::screen_of(design, &e.path) else { continue };
+        // the placement as `SCH_SHEET::ResolveTextVar` reads it (its fields, title block, page number, path), as the tracer's power values read it
+        let levels = crate::text_vars_json::sheet_levels(design, &e.path);
+        let sheet = eda_model::text_vars::SchSheet {
+            project: project.clone(),
+            sheet_path: std::iter::once("/".to_string()).chain(levels.iter().skip(1).filter_map(|l| l.fields.first()).map(|(_, n)| format!("{n}/"))).collect(),
+            levels,
+            page: e.effective_page(),
+            page_count,
+            sheet_name: if e.path.is_empty() { "Root".to_string() } else { e.name.clone() },
+            ..Default::default()
+        };
+        let netclasses_of = |id: &str, directive: bool| -> Vec<String> { label_netclasses_shown(&sheet, sec.extras.label_fields.get(id).map(Vec::as_slice).unwrap_or(&[]), directive) };
         let renamed: std::collections::BTreeMap<&str, String> = sec
             .symbols
             .iter()
@@ -435,7 +459,7 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             by_pin.or_else(|| (!w.net.is_empty()).then(|| w.net.clone())).unwrap_or_else(|| name.to_string())
         };
         for l in &sec.labels {
-            let classes = sec.extras.label_netclasses(&l.id);
+            let classes = netclasses_of(&l.id, false);
             if classes.is_empty() {
                 continue;
             }
@@ -467,9 +491,12 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             .iter()
             .filter_map(|g| match &g.shape {
                 eda_model::sch_extras::SchGraphicKind::Directive { at, netclass, .. } => {
-                    let mut classes: Vec<String> = sec.extras.label_netclasses(&g.id).into_iter().map(str::to_string).collect();
-                    if !netclass.trim().is_empty() && !classes.iter().any(|c| c == netclass.trim()) {
-                        classes.push(netclass.trim().to_string());
+                    let mut classes: Vec<String> = netclasses_of(&g.id, true);
+                    let fields = sec.extras.label_fields.get(&g.id).map(Vec::as_slice).unwrap_or(&[]);
+                    let own = label_field_shown(&sheet, fields, netclass, true);
+                    let own = own.trim();
+                    if !own.is_empty() && !classes.iter().any(|c| c == own) {
+                        classes.push(own.to_string());
                     }
                     (!classes.is_empty()).then_some((*at, classes))
                 }
@@ -571,6 +598,55 @@ fn fold_label_netclasses(design: &eda_model::ir::Design, model: &mut ConstraintM
             }
         }
     }
+}
+
+/// The net classes a label's (or a directive's) `Netclass` fields name on a placement: each field's shown text ([`label_field_shown`]), trimmed, the empty
+/// ones left out (`if( !name.empty() )`).
+fn label_netclasses_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], directive: bool) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|f| f.name == eda_model::sch_extras::NETCLASS_FIELD)
+        .map(|f| label_field_shown(sheet, fields, &f.text, directive).trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// `SCH_FIELD::GetShownText( &aPath, FOR_NETNAME )` of a label's field while the connectivity reads it (KiCad 25ec2335 `SCH_CONNECTIVITY::INPUT_TEXT_SCOPE`):
+/// the text's variables resolved by `SCH_LABEL_BASE::ResolveTextVar` -- `NET_NAME`, `SHORT_NET_NAME`, `NET_CLASS` and `OP..` are empty (a directive's
+/// `EXCLUDE_FROM_*` and `DNP` too), `REF:FIELD` the schematic's cross-reference, then the label's own fields by name, then the sheet the placement is
+/// (`SCH_SHEET::ResolveTextVar` up to the schematic and the project). **Differs**: a global or hierarchical label's `CONNECTION_TYPE` is not answered.
+pub(crate) fn label_field_shown(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], raw: &str, directive: bool) -> String {
+    fn resolve(sheet: &eda_model::text_vars::SchSheet, fields: &[eda_model::sch_extras::LabelField], token: &str, directive: bool, depth: usize) -> Option<String> {
+        // `^OP(.([0-9])?([a-zA-Z]*))?$`
+        let op = token.strip_prefix("OP").is_some_and(|rest| {
+            let mut c = rest.chars();
+            match c.next() {
+                None => true,
+                Some(_) => {
+                    let tail: String = c.collect();
+                    let tail = tail.strip_prefix(|d: char| d.is_ascii_digit()).unwrap_or(&tail);
+                    tail.chars().all(|l| l.is_ascii_alphabetic())
+                }
+            }
+        });
+        if op || matches!(token, "NET_NAME" | "SHORT_NET_NAME" | "NET_CLASS") || (directive && matches!(token, "EXCLUDE_FROM_BOM" | "EXCLUDE_FROM_BOARD" | "EXCLUDE_FROM_SIM" | "DNP")) {
+            return Some(String::new());
+        }
+        let at = sheet.levels.len().saturating_sub(1);
+        if token.contains(':') {
+            return sheet.resolve_level(at, token, depth + 1);
+        }
+        if let Some(f) = fields.iter().find(|f| f.name == token) {
+            if depth >= eda_model::text_vars::MAX_DEPTH {
+                return Some(f.text.clone());
+            }
+            let inner = |t: &str| resolve(sheet, fields, t, directive, depth + 1);
+            return Some(eda_model::text_vars::shown_text(&f.text, &inner, depth + 1));
+        }
+        sheet.resolve_level(at, token, depth + 1)
+    }
+    let resolver = |t: &str| resolve(sheet, fields, t, directive, 0);
+    eda_model::text_vars::shown_text(raw, &resolver, 0)
 }
 
 /// `SCH_RULE_AREA::RefreshContainedItemsAndDirectives`' reach of an edge for a directive's connection point: `CollideEdge( pt, nullptr, 5 )`, 5 schematic IU (100 nm each).
@@ -1508,7 +1584,7 @@ const BOM_VIEW_KEYS: [&str; 4] = ["bom_presets", "bom_settings", "bom_fmt_preset
 /// The last member is the board's and the schematic's drawing sheet file ([`Cmd::SetDrawingSheet`], a project setting in KiCad), each with the embedded file a
 /// `kicad-embed://` name points at (`OnWksFileSelection` embeds it outside the commit too).
 type SheetChoice = (Option<String>, Option<eda_model::embedded_files::EmbeddedFile>);
-type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, Option<eda_model::ir::Zone>, [Option<serde_json::Value>; 4], std::collections::BTreeSet<String>, [SheetChoice; 2]);
+type OutsideHistory = (Option<eda_model::plot_params::PlotParams>, Option<eda_model::plot_params::Ipc2581Bom>, (Option<eda_model::ir::Zone>, bool), [Option<serde_json::Value>; 4], std::collections::BTreeSet<String>, [SheetChoice; 2]);
 
 /// A drawing sheet name with the embedded file of `list` it names, if it names one.
 fn sheet_choice(name: Option<&String>, list: Option<&eda_model::embedded_files::EmbeddedFiles>) -> SheetChoice {
@@ -1517,7 +1593,8 @@ fn sheet_choice(name: Option<&String>, list: Option<&eda_model::embedded_files::
 }
 
 fn outside_history_of(design: &eda_model::ir::Design) -> OutsideHistory {
-    let (plot, ipc, zone) = design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone(), d.zone_defaults.clone())).unwrap_or_default();
+    // the zone defaults with their "Locked" (`DrawingsSection::zone_defaults_locked`, UI-LEFT-3 B3-4)
+    let (plot, ipc, zone) = design.drawings.as_ref().map(|d| (d.plot_params.clone(), d.ipc2581_bom.clone(), (d.zone_defaults.clone(), d.zone_defaults_locked))).unwrap_or_default();
     let project = design.schematic.as_ref().and_then(|s| s.extras.project_schematic.as_ref());
     let used = design.schematic.as_ref().map(|s| s.extras.used_designators.clone()).unwrap_or_default();
     let sheets = [
@@ -1556,7 +1633,7 @@ fn keep_outside_history(kept: OutsideHistory, mut restored: eda_model::ir::Desig
     }
     if (&plot, &ipc, &zone) != (&now.0, &now.1, &now.2) {
         let d = restored.drawings.get_or_insert_with(Default::default);
-        (d.plot_params, d.ipc2581_bom, d.zone_defaults) = (plot, ipc, zone);
+        (d.plot_params, d.ipc2581_bom, (d.zone_defaults, d.zone_defaults_locked)) = (plot, ipc, zone);
     }
     if bom != now.3 {
         if let Some(sch) = restored.schematic.as_mut() {
@@ -2221,6 +2298,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetTrackWidthPresets { widths } => format!("board-setup track-widths \"{}\"", widths.iter().map(|w| mm(*w)).collect::<Vec<_>>().join(" ")),
         Cmd::SetViaPresets { presets } => format!("board-setup via-sizes \"{}\"", presets.iter().map(|p| format!("{}/{}", mm(p.diameter), mm(p.drill))).collect::<Vec<_>>().join(" ")),
         Cmd::SetDiffPairPresets { presets } => format!("board-setup diff-pairs \"{}\"", presets.iter().map(|p| format!("{}/{}/{}", mm(p.width), mm(p.gap), mm(p.via_gap))).collect::<Vec<_>>().join(" ")),
+        Cmd::SetViaStackPresets { presets } => format!("board-setup microvia-stacks ({} presets)", presets.len()),
         Cmd::EditTracksAndVias { ids, .. } => format!("global-edit tracks-and-vias {}", ids.join(" ")),
 
         Cmd::AddZone { net, layer, outline } => format!("zone add --net {net} --layer {layer} --pts \"{}\"", pts(outline)),
@@ -2444,6 +2522,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetIntersheetRefs { settings } => format!("schematic intersheet-refs {}", if settings.show { "shown" } else { "hidden" }),
         Cmd::SetSchFormatting { .. } => "schematic setup formatting".to_string(),
         Cmd::SetAnnotationSettings { .. } => "schematic setup annotation".to_string(),
+        Cmd::SetSymbolParity { .. } => "schematic setup compare symbols".to_string(),
         Cmd::SetFieldNameTemplates { fields } => format!("schematic setup field-name-templates ({})", fields.len()),
         Cmd::SetBomPresets { .. } => "schematic setup bom-presets".to_string(),
         Cmd::SetBomView { save, delete, .. } => format!("schematic fields-table view{}{}", save.as_ref().and_then(|p| p.get("name")).and_then(|n| n.as_str()).map(|n| format!(" --save {n:?}")).unwrap_or_default(), delete.as_ref().map(|n| format!(" --delete {n:?}")).unwrap_or_default()),
@@ -2642,7 +2721,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::PlaceVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
-        Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } | Cmd::SetDiffPairPresets { .. } => "board-setup",
+        Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } | Cmd::SetDiffPairPresets { .. } | Cmd::SetViaStackPresets { .. } => "board-setup",
         Cmd::EditTracksAndVias { .. } => "global-edit-tracks-and-vias",
         Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } | Cmd::SetZoneOutline { .. } => "zone",
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
@@ -2763,7 +2842,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
         Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::SetIntersheetRefs { .. } => "schematic-intersheet-refs",
-        Cmd::SetSchFormatting { .. } | Cmd::SetAnnotationSettings { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } | Cmd::SetBusAliases { .. } => "schematic-setup",
+        Cmd::SetSchFormatting { .. } | Cmd::SetAnnotationSettings { .. } | Cmd::SetSymbolParity { .. } | Cmd::SetFieldNameTemplates { .. } | Cmd::SetBomPresets { .. } | Cmd::SetBomView { .. } | Cmd::SetBusAliases { .. } => "schematic-setup",
         Cmd::SetSimulator { .. } => "schematic-simulator",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -3645,7 +3724,7 @@ pub(crate) mod tests {
 
     fn a_tuning_profile(name: &str) -> eda_model::setup_pages::TuningProfile {
         use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile};
-        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_nm: mm(0.13), diff_pair_gap_nm: mm(0.15), delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_nm: mm(0.13), diff_pair_gap_nm: mm(0.15), delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![], ..Default::default() }
     }
 
     /// Formatting, Zone Hatch Offsets, Length-tuning Patterns and Tuning Profiles: each a page of one undo step, in the state the studio reads, and in the derived board file and project

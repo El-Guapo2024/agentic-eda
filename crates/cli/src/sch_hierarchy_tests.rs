@@ -2633,6 +2633,68 @@ fn slow_a_directive_labels_and_a_rule_areas_net_class_is_read_by_kicad_cli_as_ou
     directive_and_rule_area_classes(true);
 }
 
+/// UI-LEFT-3 B3-7: a flag's Netclass holding text variables names the class its shown text names (`field->GetShownText( &aPath, FOR_NETNAME )`, KiCad
+/// 25ec2335 `conn_facts.cpp`, `SCH_RULE_AREA::GetResolvedNetclasses`): `${CLASS}` of the project's variables puts the net in `HighCurrent`, a variable that
+/// is empty names no class, and kicad-cli reads it the same way (slow).
+fn directive_class_with_variables(slow: bool) {
+    use eda_model::sch_extras::{DirectiveShape, SchGraphic, SchGraphicKind};
+    let dir = mcu30_board(if slow { "slow_directive_class_vars" } else { "directive_class_vars" });
+    define_high_current(&dir);
+    step(&dir, Cmd::SetTextVariables { variables: [("CLASS".to_string(), "HighCurrent".to_string()), ("NONE".to_string(), String::new())].into_iter().collect() }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    let mut wires = root.wires.iter().filter(|w| !w.bus && !w.pins.is_empty() && w.pts.len() >= 2);
+    let first = wires.next().expect("a wire with a pin").clone();
+    let second = wires.find(|w| w.net != first.net).expect("a second wire on another net").clone();
+    let net_of = |design: &eda_model::ir::Design, pin: &str| design.nets.as_ref().unwrap().iter().find(|n| n.pins.iter().any(|p| p == pin)).unwrap().name.clone();
+    let class_nets = |dir: &Path| load(dir).unwrap().2.board.net_classes.iter().find(|c| c.name == "HighCurrent").unwrap().nets.clone();
+    let flag = |at: eda_model::ir::Point, netclass: &str| {
+        Cmd::SchEdit(eda_ops::sch_edit::SchCmd::AddGraphic {
+            graphic: SchGraphic::new(SchGraphicKind::Directive { at, orientation: 0, shape: DirectiveShape::Round, pin_length_nm: mm(2.54), netclass: netclass.into(), component_class: String::new(), text_size_nm: Nm::ZERO }),
+        })
+    };
+    let (pin1, pin2) = (first.pins[0].clone(), second.pins[0].clone());
+    let (net1, net2) = (net_of(&design, &pin1), net_of(&design, &pin2));
+    step(&dir, flag(first.pts[0], "${CLASS}"), false, "test").unwrap();
+    step(&dir, flag(second.pts[0], "${NONE}"), false, "test").unwrap();
+    let nets = class_nets(&dir);
+    assert!(nets.contains(&eda_kicad::exact_pattern(&net1)), "`${{CLASS}}` is HighCurrent: {net1} is in it ({nets:?})");
+    assert!(!nets.contains(&eda_kicad::exact_pattern(&net2)), "an empty shown text names no class ({nets:?})");
+    let (_, _, model) = load(&dir).unwrap();
+    assert!(model.board.net_classes.iter().all(|c| c.name != "${CLASS}" && !c.name.is_empty()));
+    if slow {
+        assert!(kicad_classes_of_pin(&dir, &pin1).iter().any(|c| c == "HighCurrent"), "kicad-cli resolves `${{CLASS}}` to the flag's class too");
+        assert!(!kicad_classes_of_pin(&dir, &pin2).iter().any(|c| c == "HighCurrent"));
+    }
+}
+
+#[test]
+fn a_flags_netclass_with_text_variables_names_the_class_it_shows() {
+    directive_class_with_variables(false);
+}
+
+#[test]
+fn slow_a_flags_netclass_with_text_variables_is_resolved_by_kicad_cli_as_ours() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    directive_class_with_variables(true);
+}
+
+/// `label_field_shown` under `INPUT_TEXT_SCOPE`: the label's own fields by name, `NET_NAME` and a directive's `DNP` empty, the sheet's variables last.
+#[test]
+fn a_label_fields_shown_text_reads_its_fields_then_the_sheet() {
+    use eda_model::sch_extras::LabelField;
+    let field = |name: &str, text: &str| LabelField { name: name.into(), text: text.into(), ..serde_json::from_str::<LabelField>(r#"{"name":"x"}"#).unwrap() };
+    let project = eda_model::text_vars::Project { name: "p".into(), variables: [("RAIL".to_string(), "Power".to_string())].into_iter().collect(), clock: Default::default() };
+    let sheet = eda_model::text_vars::SchSheet { project, levels: vec![Default::default()], page: "1".into(), page_count: 1, ..Default::default() };
+    let fields = vec![field("Netclass", "${KIND}"), field("KIND", "${RAIL}_HV")];
+    assert_eq!(crate::board::label_field_shown(&sheet, &fields, "${KIND}", false), "Power_HV");
+    assert_eq!(crate::board::label_field_shown(&sheet, &fields, "${NET_NAME}${OP.1V}", false), "");
+    assert_eq!(crate::board::label_field_shown(&sheet, &fields, "A${DNP}", true), "A");
+    assert_eq!(crate::board::label_field_shown(&sheet, &fields, "${PROJECTNAME}", false), "p");
+}
+
 // ---------------------------------------------------------------------------------------- ERC exclusions across sheets
 
 /// UI-LEFT-2 BB2 (slow): on a design of two sheets, an exclusion of each finding whose marker the studio writes -- the name checks between the root and the child

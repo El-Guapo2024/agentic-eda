@@ -262,6 +262,110 @@ impl AnnotationSettings {
     }
 }
 
+/// Electrical Rules > Compare Symbol with Library (KiCad 25ec2335 `PANEL_SETUP_SYMBOL_PARITY`, `SYMBOL_PARITY_SETTINGS`, the project's `schematic.compare_symbols`):
+/// which differences between a placed symbol and its library symbol count -- for ERC's `lib_symbol_mismatch` (`ERC_TESTER::TestLibSymbolIssues`) and for
+/// Compare Symbol with Library (`SCH_INSPECTION_TOOL::DiffSymbol`), both through `SCHEMATIC_SETTINGS::SymbolCompareFlags`. Each field is one box of the page;
+/// the defaults are the `PARAM<bool>`s' (UI-LEFT-3 B3-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolParitySettings {
+    /// "Check for missing fields" (`m_MissingFields`, `compare_symbols.missing_fields`, on).
+    #[serde(default = "yes")]
+    pub missing_fields: bool,
+    /// "Check for extra fields" (`m_ExtraFields`, `extra_fields`, off).
+    #[serde(default)]
+    pub extra_fields: bool,
+    /// "Compare non-reference field text" (`m_FieldTexts`, `field_texts`, on).
+    #[serde(default = "yes")]
+    pub field_texts: bool,
+    /// "Compare field visibilities" (`m_FieldVisibilities`, `field_visibilities`, off).
+    #[serde(default)]
+    pub field_visibilities: bool,
+    /// "Compare field text sizes and styles" (`m_FieldStyles`, `field_styles`, off).
+    #[serde(default)]
+    pub field_styles: bool,
+    /// "Compare field positions" (`m_FieldPositions`, `field_positions`, off).
+    #[serde(default)]
+    pub field_positions: bool,
+    /// "Compare pin name/number visibilities" (`m_PinVisibilities`, `pin_name_number_visibilities`, off).
+    #[serde(default)]
+    pub pin_visibilities: bool,
+    /// "Compare alternate pin functions" (`m_PinAltFunctions`, `pin_alt_function_definitions`, on).
+    #[serde(default = "yes")]
+    pub pin_alt_functions: bool,
+    /// "Compare exclude from board flags" (`m_ExcludeFromBoardFlags`, `exclude_from_board_flags`, on).
+    #[serde(default = "yes")]
+    pub exclude_from_board: bool,
+    /// "Compare do not populate flags" (`m_DNPFlags`, `dnp_flags`, off).
+    #[serde(default)]
+    pub dnp: bool,
+    /// "Compare exlucde from bill of materials flags" [sic] (`m_ExcludeFromBOMFlags`, `exclude_from_bom_flags`, off).
+    #[serde(default)]
+    pub exclude_from_bom: bool,
+    /// "Compare exclude from position file flags" (`m_ExcludeFromPosFileFlags`, `exclude_from_position_file_flags`, on).
+    #[serde(default = "yes")]
+    pub exclude_from_pos_files: bool,
+}
+
+impl Default for SymbolParitySettings {
+    fn default() -> Self {
+        SymbolParitySettings {
+            missing_fields: true,
+            extra_fields: false,
+            field_texts: true,
+            field_visibilities: false,
+            field_styles: false,
+            field_positions: false,
+            pin_visibilities: false,
+            pin_alt_functions: true,
+            exclude_from_board: true,
+            dnp: false,
+            exclude_from_bom: false,
+            exclude_from_pos_files: true,
+        }
+    }
+}
+
+impl SymbolParitySettings {
+    /// Each setting with the project file's key under `compare_symbols` (`SCHEMATIC_SETTINGS`' `PARAM<bool>( "compare_symbols.*" )`), in the file's order.
+    pub fn keyed(&self) -> [(&'static str, bool); 12] {
+        [
+            ("missing_fields", self.missing_fields),
+            ("extra_fields", self.extra_fields),
+            ("field_texts", self.field_texts),
+            ("field_visibilities", self.field_visibilities),
+            ("field_styles", self.field_styles),
+            ("field_positions", self.field_positions),
+            ("pin_name_number_visibilities", self.pin_visibilities),
+            ("pin_alt_function_definitions", self.pin_alt_functions),
+            ("exclude_from_board_flags", self.exclude_from_board),
+            ("dnp_flags", self.dnp),
+            ("exclude_from_bom_flags", self.exclude_from_bom),
+            ("exclude_from_position_file_flags", self.exclude_from_pos_files),
+        ]
+    }
+
+    /// The settings a project's `compare_symbols` object holds, each its default where the key is missing or not a boolean (`PARAM<bool>`'s reader).
+    pub fn from_project(compare: &serde_json::Value) -> SymbolParitySettings {
+        let d = SymbolParitySettings::default();
+        let flag = |k: &str, default: bool| compare.get(k).and_then(serde_json::Value::as_bool).unwrap_or(default);
+        SymbolParitySettings {
+            missing_fields: flag("missing_fields", d.missing_fields),
+            extra_fields: flag("extra_fields", d.extra_fields),
+            field_texts: flag("field_texts", d.field_texts),
+            field_visibilities: flag("field_visibilities", d.field_visibilities),
+            field_styles: flag("field_styles", d.field_styles),
+            field_positions: flag("field_positions", d.field_positions),
+            pin_visibilities: flag("pin_name_number_visibilities", d.pin_visibilities),
+            pin_alt_functions: flag("pin_alt_function_definitions", d.pin_alt_functions),
+            exclude_from_board: flag("exclude_from_board_flags", d.exclude_from_board),
+            dnp: flag("dnp_flags", d.dnp),
+            exclude_from_bom: flag("exclude_from_bom_flags", d.exclude_from_bom),
+            exclude_from_pos_files: flag("exclude_from_position_file_flags", d.exclude_from_pos_files),
+        }
+    }
+}
+
 /// "Symbol unit notation:" (`m_choiceSeparatorRefIdChoices`: A, .A, -A, _A, .1, -1, _1) as `PANEL_EESCHEMA_ANNOTATION_OPTIONS::TransferDataFromWindow` sets it:
 /// the first unit's id (`m_SubpartFirstId`, 'A' or '1') and the separator (`m_SubpartIdSeparator`, 0 for none).
 pub const UNIT_NOTATIONS: [(&str, u32, u32); 7] = [("A", 'A' as u32, 0), (".A", 'A' as u32, '.' as u32), ("-A", 'A' as u32, '-' as u32), ("_A", 'A' as u32, '_' as u32), (".1", '1' as u32, '.' as u32), ("-1", '1' as u32, '-' as u32), ("_1", '1' as u32, '_' as u32)];
@@ -365,15 +469,9 @@ impl NetClassSchematic {
         own.map_or(d.clone(), |o| o.or(&d))
     }
 
-    /// The panel's checks of these columns: a width that is set is not negative (`GRID_CELL_MARK_AS_NULLABLE` reads a number and KiCad takes a 0 as typed,
-    /// UI-LEFT-2 BB8; a negative one is the studio's guard; the nullable editor allows none for a class other than Default), a line style of the five, a
-    /// colour as the file writes one.
+    /// The panel's checks of these columns: a width is taken as typed (`GRID_CELL_MARK_AS_NULLABLE` reads a number, a 0 or a negative one included: UI-LEFT-2
+    /// BB8, UI-LEFT-3 B3-4), a line style of the five, a colour as the file writes one.
     pub fn validate(&self) -> Result<(), String> {
-        for (what, v) in [("wire width", self.wire_width), ("bus width", self.bus_width)] {
-            if v.is_some_and(|v| v < Nm::ZERO) {
-                return Err(format!("the {what} cannot be negative"));
-            }
-        }
         if self.line_style.is_some_and(|s| !(0..=4).contains(&s)) {
             return Err(format!("line style {} is not one of solid, dashed, dotted, dash-dot and dash-dot-dot", self.line_style.unwrap_or_default()));
         }

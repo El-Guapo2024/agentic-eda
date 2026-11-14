@@ -10,6 +10,7 @@ import {
   applyAssignments,
   assignmentRows,
   boardNetNames,
+  clipNetClassClearances,
   classOfNet,
   copperLayerNames,
   copperLayersLost,
@@ -189,14 +190,14 @@ test("the Net Classes page is refused for what KiCad's panel refuses", () => {
   assert.deepEqual(names.map((i) => [i.row, i.field, i.message]), [[2, "name", "Netclass must have a name."], [3, "name", "Netclass name already in use."], [4, "name", "Netclass name already in use."]]);
 
   const sizes = validateNetClasses(def, [cls("x", [], { track_width: 0, clearance: 0, via_diameter: -1, diff_pair_gap: 0, via_drill: Number.NaN, microvia_diameter: 0 })]);
-  assert.deepEqual(sizes.map((i) => i.field), ["via_diameter", "via_drill"], "a 0 is taken as typed, as KiCad takes it; a negative size or a number the field could not read is not");
+  assert.deepEqual(sizes.map((i) => i.field), ["via_drill"], "a 0 and a negative size are taken as typed, as KiCad takes them (UI-LEFT-3 B3-4); a number the field could not read is not");
 
   assert.equal(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM + 1 })])[0]!.field, "clearance");
+  assert.equal(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM + 1 })])[0]!.message, "Clearance was too large.  It has been clipped to 500 mm.");
+  assert.deepEqual(clipNetClassClearances([{ clearance: MAXIMUM_CLEARANCE_NM + 1 }, { clearance: 5 }, {}]), [{ clearance: MAXIMUM_CLEARANCE_NM }, { clearance: 5 }, {}], "`SetUnitValue( aRow, GRID_CLEARANCE, MAXIMUM_CLEARANCE )`");
   assert.deepEqual(validateNetClasses(def, [cls("big", [], { clearance: MAXIMUM_CLEARANCE_NM })]), []);
 
-  const drill = validateNetClasses(def, [cls("v", [], { via_diameter: 400, via_drill: 400 })]);
-  assert.deepEqual(drill.map((i) => [i.row, i.field]), [[1, "via_drill"]]);
-  assert.equal(validateNetClasses(cls("Default", [], { via_diameter: 400, via_drill: 400 }), [])[0]!.row, 0, "the Default class is checked too");
+  assert.deepEqual(validateNetClasses(def, [cls("v", [], { via_diameter: 400, via_drill: 400 })]), [], "a via hole as large as its via is taken, as `Validate` takes it");
 
   assert.deepEqual(validateNetClasses(def, [cls("p", [], { priority: 1.5 })]).map((i) => [i.row, i.field]), [[1, "priority"]]);
   assert.deepEqual(validateNetClasses(def, [cls("p", [], { priority: -2 })]), [], "a negative priority is a priority");

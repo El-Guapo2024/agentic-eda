@@ -857,6 +857,11 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
                 layer_entries,
                 via_propagation_delay_as: int(entry, "via_prop_delay"),
                 via_overrides,
+                // KiCad 25ec2335 `readUserDefinedProfileConfigurationLine`: `frequency`, `model_solder_mask` and `net_chain_bridge_prop_delay`; a profile of an
+                // older project lacks them and takes the migrations' 1 GHz, false and 0 (`migrateSchema0to1`, `migrateSchema1to2`) (UI-LEFT-3 B3-4)
+                frequency_hz: entry.get("frequency").and_then(|v| v.as_f64()).unwrap_or(1.0e9),
+                model_solder_mask: entry.get("model_solder_mask").and_then(|v| v.as_bool()).unwrap_or(false),
+                net_chain_bridge_delay_as_per_mm: int(entry, "net_chain_bridge_prop_delay"),
             });
         }
         // A profile the Tuning Profiles page would refuse is not carried (KiCad takes it; the studio keeps its page valid).
@@ -937,7 +942,7 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
     let mut read = false;
     let flag = |entry: &serde_json::Value, key: &str| entry.get(key).and_then(|v| v.as_bool());
     for entry in options.iter().filter(|e| e.is_object() && !e.as_object().is_some_and(|o| o.is_empty())) {
-        // `m_TargetVias`, `m_TargetPTHPads`, `m_TargetSMDPads`; `td_ontrackend` and `td_onroundshapesonly` name targets this port does not model.
+        // `m_TargetVias`, `m_TargetPTHPads`, `m_TargetSMDPads`, `m_UseRoundShapesOnly`; `td_ontrackend` is not read (the track-to-track block's `td_enabled` is its enable here).
         if let Some(v) = flag(entry, "td_onvia") {
             t.target_vias = v;
             read = true;
@@ -948,6 +953,11 @@ pub fn merge_project_teardrops(design: &mut Design, project_json: &str) {
         }
         if let Some(v) = flag(entry, "td_onsmdpad") {
             t.target_smd_pads = v;
+            read = true;
+        }
+        // `m_UseRoundShapesOnly` ("Round pads only", UI-LEFT-3 B3-4)
+        if let Some(v) = flag(entry, "td_onroundshapesonly") {
+            t.round_shapes_only = v;
             read = true;
         }
     }
@@ -1124,6 +1134,24 @@ pub fn project_zones_json(z: &eda_model::ir::Zone) -> serde_json::Value {
         "remove_islands": match z.island_removal_mode { IslandRemovalMode::Always => 0, IslandRemovalMode::Never => 1, IslandRemovalMode::Area => 2 },
         "min_island_area": z.min_island_area as f64 / 1e12,
     })
+}
+
+/// Board Setup > Design Rules > Microvia Stacks of a `.kicad_pro` (KiCad 25ec2335 `BOARD_DESIGN_SETTINGS`' `via_stack_presets` `PARAM_LAMBDA`): each entry with a
+/// name read as [`eda_model::setup_pages::ViaStackPreset::from_project`] reads it, a second one of a name already read (case ignored) dropped
+/// (`std::none_of( .. sameName )`), into `DrawingsSection::via_stack_presets`. A project whose `via_stack_presets` is not an array (or absent) changes
+/// nothing; an array replaces the list (`m_ViaStackPresets.clear()`). UI-LEFT-3 B3-8.
+pub fn merge_project_via_stack_presets(design: &mut Design, project_json: &str) {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
+    let Some(list) = root.pointer("/board/design_settings/via_stack_presets").and_then(|v| v.as_array()) else { return };
+    let mut presets: Vec<eda_model::setup_pages::ViaStackPreset> = Vec::new();
+    for entry in list.iter().filter(|e| e.is_object() && !e.as_object().is_some_and(|o| o.is_empty())) {
+        if let Some(p) = eda_model::setup_pages::ViaStackPreset::from_project(entry) {
+            if !presets.iter().any(|q| q.name.to_lowercase() == p.name.to_lowercase()) {
+                presets.push(p);
+            }
+        }
+    }
+    design.drawings.get_or_insert_with(Default::default).via_stack_presets = presets;
 }
 
 /// [`project_zone_defaults`] into the design (`DrawingsSection::zone_defaults`), when the project has the section.

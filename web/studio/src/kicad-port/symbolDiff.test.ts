@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LibPin, LibrarySymbol, LibSymbol } from "../api/types";
 import { diffSymbols } from "./symbolDiff";
+import { DEFAULT_SYMBOL_PARITY } from "./schSetup";
 
 const resolvedPin = (over: Partial<LibPin> = {}): LibPin => ({ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 3.81], angle_deg: 270, length_mm: 1.27, unit: 1, body_style: 1, hidden: false, ...over });
 
@@ -42,7 +43,7 @@ test("the same symbol on both sides has no differences", () => {
 
 test("a power flag, a pin, a graphic and a unit count that differ are each reported", () => {
   assert.deepEqual(diffSymbols(resolved({ power: true }), library()), ["Power flag differs."]);
-  // a pin is compared by its place only (`SCH_ITEM::compare` under ERC)
+  // a pin moved
   const moved = library();
   moved.pins[0] = { ...moved.pins[0]!, at: { x: 0, y: 5.08 } };
   assert.deepEqual(diffSymbols(resolved(), moved), ["Pin 1 differs: Pin 1 [Passive, Line]; Pin 1 [Passive, Line]"]);
@@ -59,16 +60,35 @@ test("a pin only the schematic has is extra", () => {
   assert.deepEqual(diffSymbols(resolved(), without), ["Extra pin in schematic symbol: Pin 2 [Passive, Line]."]);
 });
 
-test("r6 C6-M4: a_pin_renamed_in_the_library_is_not_a_difference (nor its type, shape, direction or length)", () => {
-  const lib = library();
-  lib.pins[0] = { ...lib.pins[0]!, name: "A", electrical_type: "input", shape: "clock", length_mm: 2.54, angle_deg: 0 };
-  assert.deepEqual(diffSymbols(resolved(), lib), []);
+test("UI-LEFT-3 B3-9 (25ec2335): a pin's name is no difference, its type, shape, direction or length is", () => {
+  const renamed = library();
+  renamed.pins[0] = { ...renamed.pins[0]!, name: "A" };
+  assert.deepEqual(diffSymbols(resolved(), renamed), []);
+  for (const over of [{ electrical_type: "input" as const }, { shape: "clock" as const }, { length_mm: 2.54 }, { angle_deg: 0 }]) {
+    const lib = library();
+    lib.pins[0] = { ...lib.pins[0]!, ...over };
+    assert.equal(diffSymbols(resolved(), lib).length, 1, JSON.stringify(over));
+  }
 });
 
-test("r6 C6-M4: a_pin_only_the_library_has_is_not_reported (KiCad looks it up in the library itself)", () => {
+test("UI-LEFT-3 B3-9 (25ec2335): a pin only the library has is missing from the schematic's symbol", () => {
   const lib = library();
   lib.pins = [...lib.pins, { ...lib.pins[0]!, number: "3", at: { x: 5, y: 5 } }];
-  assert.deepEqual(diffSymbols(resolved(), lib), []);
+  assert.deepEqual(diffSymbols(resolved(), lib), ["Missing pin in schematic symbol: Pin 3 [Passive, Line]."]);
+});
+
+test("UI-LEFT-3 B3-9: a hidden pin and the alternates count by the page's boxes", () => {
+  const hidden = library();
+  hidden.pins[0] = { ...hidden.pins[0]!, hidden: true };
+  assert.deepEqual(diffSymbols(resolved(), hidden), [], "pin visibilities are off by default");
+  assert.equal(diffSymbols(resolved(), hidden, undefined, { ...DEFAULT_SYMBOL_PARITY, pin_visibilities: true }).length, 1);
+  const alt = library();
+  alt.pins[0] = { ...alt.pins[0]!, alternates: [{ name: "SDA", electrical_type: "bidirectional", shape: "line" }] };
+  assert.equal(diffSymbols(resolved(), alt).length, 1, "alternate pin functions are compared by default");
+  assert.deepEqual(diffSymbols(resolved(), alt, undefined, { ...DEFAULT_SYMBOL_PARITY, pin_alt_functions: false }), []);
+  assert.deepEqual(diffSymbols(resolved(), library({ pin_names_hidden: true }), undefined, { ...DEFAULT_SYMBOL_PARITY, pin_visibilities: true }), ["Show pin names settings differ."]);
+  assert.deepEqual(diffSymbols({ ...resolved(), in_bom: false }, library()), [], "exclude from BOM is off by default");
+  assert.deepEqual(diffSymbols({ ...resolved(), on_board: false }, library()), ["Exclude from board settings differ."], "exclude from board is on");
 });
 
 test("r6 C6-M4: a_body_text_is_not_a_graphic_item", () => {
@@ -85,16 +105,27 @@ test("r6 C6-M4: shapes compare within EPSILON (2 IU), and two equal shapes are o
   assert.deepEqual(diffSymbols(twice, library()), []);
 });
 
-test("r6 C6-M4: a_user_field_the_library_lacks_is_an_extra_field; a moved field differs; a library field the placed symbol lacks is not reported", () => {
+test("UI-LEFT-3 B3-9: the placed fields are compared as the page's boxes say", () => {
   const at: [number, number] = [100_000_000, 50_000_000];
-  const field = (name: string, text: string, dx: number, dy: number) => ({ name, text, at: [at[0] + dx, at[1] + dy] as [number, number], vertical: false, h: "center" as const, v: "center" as const, visible: true });
-  // the library's Reference at (0, 5.08) Y up and Value at (0, 2.54): -5.08 mm and -2.54 mm on the sheet
-  const placed = { at, fields: [field("Reference", "R1", 0, -5_080_000), field("Value", "10k", 0, -2_540_000), field("MPN", "RC0603", 0, 0)] };
-  assert.deepEqual(diffSymbols(resolved(), library(), placed), ["Extra field in schematic symbol: Field MPN 'RC0603'."]);
-  const movedValue = { at, fields: [field("Value", "10k", 1_270_000, -2_540_000)] };
-  assert.deepEqual(diffSymbols(resolved(), library(), movedValue), ["Field 'Value' differs: Field Value '10k'; Field Value 'R'."]);
+  const field = (name: string, text: string, dx: number, dy: number, over: Record<string, unknown> = {}) => ({ name, text, at: [at[0] + dx, at[1] + dy] as [number, number], vertical: false, h: "center" as const, v: "center" as const, visible: true, ...over });
+  // the library's Reference at (0, 5.08) Y up and Value at (0, 2.54): -5.08 mm and -2.54 mm on the sheet; its Value text is "R"
+  const placed = { at, fields: [field("Reference", "R1", 0, -5_080_000), field("Value", "R", 0, -2_540_000), field("MPN", "RC0603", 0, 0)] };
+  assert.deepEqual(diffSymbols(resolved(), library(), placed), [], "extra fields are not checked by default, a Reference's text never");
+  assert.deepEqual(diffSymbols(resolved(), library(), placed, { ...DEFAULT_SYMBOL_PARITY, extra_fields: true }), ["Extra field in schematic symbol: MPN."]);
+  const tenK = { at, fields: [field("Value", "10k", 0, -2_540_000)] };
+  assert.deepEqual(diffSymbols(resolved(), library(), tenK), ["Field 'Value' differs: 10k; R."], "non-reference field text is compared by default");
+  assert.deepEqual(diffSymbols(resolved(), library(), tenK, { ...DEFAULT_SYMBOL_PARITY, field_texts: false }), []);
+  const moved = { at, fields: [field("Value", "R", 1_270_000, -2_540_000)] };
+  assert.deepEqual(diffSymbols(resolved(), library(), moved), [], "positions are off by default");
+  assert.deepEqual(diffSymbols(resolved(), library(), moved, { ...DEFAULT_SYMBOL_PARITY, field_positions: true }), ["Field 'Value' positions differ."]);
+  const hiddenValue = { at, fields: [field("Value", "R", 0, -2_540_000, { visible: false })] };
+  assert.deepEqual(diffSymbols(resolved(), library(), hiddenValue, { ...DEFAULT_SYMBOL_PARITY, field_visibilities: true }), ["Field 'Value' visibility flags differ."]);
+  const big = { at, fields: [field("Value", "R", 0, -2_540_000, { size_nm: 2_000_000, bold: true })] };
+  assert.deepEqual(diffSymbols(resolved(), library(), big, { ...DEFAULT_SYMBOL_PARITY, field_styles: true }), ["Field 'Value' text sizes differ.", "Field 'Value' text styles differ."]);
+  // a library user field the placed symbol lacks is missing (checked by default)
   const libWithUser = library({ fields: [{ name: "Sim.Device", text: "R" }] });
-  assert.deepEqual(diffSymbols(resolved(), libWithUser, { at, fields: [] }), []);
+  assert.deepEqual(diffSymbols(resolved(), libWithUser, { at, fields: [] }), ["Missing field in schematic symbol: Sim.Device."]);
+  assert.deepEqual(diffSymbols(resolved(), libWithUser, { at, fields: [] }, { ...DEFAULT_SYMBOL_PARITY, missing_fields: false }), []);
 });
 
 test("r6 C6-M4: a local power symbol against a global one differs (`m_options`)", () => {

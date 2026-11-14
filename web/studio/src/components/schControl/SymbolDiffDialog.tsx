@@ -1,9 +1,12 @@
 // Compare Symbol with Library (`eeschema.InspectionTool.diffSymbol`, `SCH_INSPECTION_TOOL::DiffSymbol`): the report of how the symbol the schematic
-// draws differs from its library entry -- `kicad-port/symbolDiff.ts`, with the placed symbol's own fields (`flattenedSchSymbol->SetFields( fields )`). KiCad's "Visual" page (the two drawn side by side) is not ported.
+// draws differs from its library entry -- `kicad-port/symbolDiff.ts`, with the placed symbol's own fields (`flattenedSchSymbol->SetFields( fields )`) and the
+// project's Compare Symbol with Library settings (`SymbolCompareFlags`). KiCad's "Visual" page (the two drawn side by side) is not ported.
 import { useEffect, useState } from "react";
 import { useStudioState } from "../../state/store";
 import { fetchAnySymbol } from "../../api/libraryClient";
 import { diffSymbols } from "../../kicad-port/symbolDiff";
+import { fetchSchSetup } from "../../api/client";
+import { DEFAULT_SYMBOL_PARITY } from "../../kicad-port/schSetup";
 import { SchDialogFrame } from "./SchDialogFrame";
 
 type Report = { kind: "missing"; item: string } | { kind: "diff"; lines: string[] } | null;
@@ -22,8 +25,13 @@ export function SymbolDiffDialog({ reference, onClose }: { reference: string; on
       setReport({ kind: "missing", item });
       return;
     }
-    fetchAnySymbol(libId).then(
-      ({ symbol }) => alive && setReport({ kind: "diff", lines: diffSymbols({ ...drawn, power: (drawn as { power?: boolean }).power ?? false }, symbol, sym ? { at: sym.at, fields: sym.fields } : undefined) }),
+    // `Schematic().Settings().SymbolCompareFlags()`: the project's Compare Symbol with Library settings (UI-LEFT-3 B3-9), KiCad's defaults if they cannot be read
+    const flags = fetchSchSetup().then(
+      (r) => (r.ok && r.symbol_parity ? { ...DEFAULT_SYMBOL_PARITY, ...r.symbol_parity } : DEFAULT_SYMBOL_PARITY),
+      () => DEFAULT_SYMBOL_PARITY
+    );
+    Promise.all([fetchAnySymbol(libId), flags]).then(
+      ([{ symbol }, f]) => alive && setReport({ kind: "diff", lines: diffSymbols({ ...drawn, power: (drawn as { power?: boolean }).power ?? false }, symbol, sym ? { at: sym.at, fields: sym.fields } : undefined, f) }),
       () => alive && setReport({ kind: "missing", item })
     );
     return () => {

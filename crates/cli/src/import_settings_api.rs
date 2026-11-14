@@ -31,6 +31,7 @@ pub(crate) fn import_settings(_dir: &Path, body: &[u8]) -> Value {
     eda_kicad::merge_project_teardrops(&mut design, pro);
     eda_kicad::merge_project_dimension_defaults(&mut design, pro);
     eda_kicad::merge_project_zone_defaults(&mut design, pro);
+    eda_kicad::merge_project_via_stack_presets(&mut design, pro);
     if let Some(dru) = req.get("rules").and_then(Value::as_str) {
         eda_kicad::merge_custom_rules(&mut model, dru);
     }
@@ -77,6 +78,8 @@ fn settings_json(design: &eda_model::ir::Design, model: &eda_model::ConstraintMo
         },
         "drawings": {
             "zone_defaults": design.drawings.as_ref().and_then(|d| d.zone_defaults.clone()),
+            "zone_defaults_locked": design.drawings.as_ref().is_some_and(|d| d.zone_defaults_locked),
+            "via_stack_presets": design.drawings.as_ref().map(|d| d.via_stack_presets.clone()).unwrap_or_default(),
             "dimension_settings": design.drawings.as_ref().map(|d| d.dimension_settings).unwrap_or_default(),
         },
     })

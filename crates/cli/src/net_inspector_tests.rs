@@ -159,6 +159,7 @@ fn the_time_domain_columns_are_the_tuning_profiles_delays() {
         layer_entries: vec![entry("F.Cu", 6_000_000), entry("B.Cu", 7_000_000)],
         via_propagation_delay_as: 5_000_000,
         via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_345 }],
+        ..Default::default()
     }];
     m.board.tuning_profiles.class_profiles.insert("Default".into(), "Fast".into());
     let tracks = vec![track("N", "F.Cu", &[p(11.0, 10.0), p(15.0, 10.0), p(15.0, 12.0)]), track("N", "B.Cu", &[p(15.2, 12.0), p(19.0, 12.0)])];

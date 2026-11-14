@@ -680,8 +680,9 @@ pub const MAXIMUM_CLEARANCE_NM: Nm = Nm::new(500_000_000);
 
 /// Validate a Net Classes page: the names and the sizes.
 ///
-/// `panel_setup_netclasses.cpp` refuses an empty or duplicate class name, a class named like the
-/// Default one, a pattern with no class, and a size that is not positive; the checks are the same.
+/// `panel_setup_netclasses.cpp` (`Validate`: `validateNetclassName`, `validateNetclassClearance`) refuses an empty or duplicate class name and a clearance
+/// over `MAXIMUM_CLEARANCE`, and takes every size as typed, a 0 or a negative one and a via hole as large as its via included (UI-LEFT-2 BB8, UI-LEFT-3 B3-4).
+/// The studio also needs the Default class named Default and no empty net pattern.
 pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
     let bad = |what: &str, why: String| Err(CheckResult::fail("ops_bad_netclasses", what, why));
     if s.default.name != "Default" || !s.default.nets.is_empty() {
@@ -699,22 +700,9 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
         if c.nets.iter().any(|p| p.trim().is_empty()) {
             return bad(&c.name, "a net pattern cannot be empty".into());
         }
-        for (what, v) in [("track width", c.track_width), ("clearance", c.clearance), ("via diameter", c.via_diameter), ("via drill", c.via_drill), ("microvia diameter", c.microvia_diameter), ("microvia drill", c.microvia_drill), ("differential pair width", c.diff_pair_width), ("differential pair gap", c.diff_pair_gap), ("differential pair via gap", c.diff_pair_via_gap)] {
-            if let Some(v) = v {
-                // (a 0 is taken as typed, as `PANEL_SETUP_NETCLASSES::Validate` takes it: UI-LEFT-2 BB8)
-                if v < Nm::ZERO {
-                    return bad(&c.name, format!("{what} is {v} nm; sizes cannot be negative"));
-                }
-            }
-        }
         // `MAXIMUM_CLEARANCE` (board_design_settings.h): a larger clearance overflows the integer maths in KiCad's engines.
         if c.clearance.is_some_and(|v| v > MAXIMUM_CLEARANCE_NM) {
             return bad(&c.name, format!("clearance is larger than {} mm", MAXIMUM_CLEARANCE_NM / crate::units::NM_PER_MM));
-        }
-        if let (Some(d), Some(drill)) = (c.via_diameter, c.via_drill) {
-            if drill >= d {
-                return bad(&c.name, format!("via drill {drill} nm is not smaller than the {d} nm via, which leaves no annular ring"));
-            }
         }
     }
     for (name, look) in &s.schematic {
@@ -896,10 +884,12 @@ mod tests {
         ] {
             assert!(validate_net_classes(&settings(bad)).is_err(), "{why}");
         }
+        // `PANEL_SETUP_NETCLASSES::Validate` takes every size as typed (UI-LEFT-3 B3-4): a drill as wide as its via, a negative or a 0 size
         let mut wide_drill = class("vias", &["V*"]);
         wide_drill.via_diameter = Some(Nm::new(400_000));
         wide_drill.via_drill = Some(Nm::new(400_000));
-        assert!(validate_net_classes(&settings(vec![wide_drill])).is_err(), "a drill as wide as its via leaves no annular ring");
+        let negative = NetClass { track_width: Some(Nm::new(-100_000)), clearance: Some(Nm::new(-1)), diff_pair_gap: Some(Nm::ZERO), ..class("neg", &["N*"]) };
+        assert!(validate_net_classes(&settings(vec![wide_drill, negative])).is_ok());
     }
 
     #[test]

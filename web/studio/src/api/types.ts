@@ -760,6 +760,8 @@ export interface TeardropSettings {
   track_end?: TeardropParams;
   /** `TARGET_RECT`'s block ("Default Properties for Rectangular Shapes"): a pad that is not uniformly round; its `enabled` is the round block's. Absent: the round block's sizes. UI-LEFT-2 BB8. */
   rect_shape?: TeardropParams | null;
+  /** `m_UseRoundShapesOnly` (Edit Teardrops' "Round pads only", `td_onroundshapesonly`): a pad that is not uniformly round gets none from the blocks. */
+  round_shapes_only?: boolean;
 }
 
 // ---------------------------------------------------------------- drawings
@@ -872,6 +874,24 @@ export interface Drawings {
   tables?: BoardTable[];
   /** `GetDefaultZoneSettings()`: the settings of the zone Zone Properties was last OK'd on, what a new zone's dialog opens on (UI-LEFT-2 PP10); absent: KiCad's own. */
   zone_defaults?: ZoneDefaults;
+  /** The defaults' "Locked" (`ZONE_SETTINGS::m_Locked`, Board Setup > Zones): a new zone starts locked. Absent is unlocked (UI-LEFT-3 B3-4). */
+  zone_defaults_locked?: boolean;
+  /** Board Setup > Design Rules > Microvia Stacks (KiCad 25ec2335 `m_ViaStackPresets`), in order; absent is none (UI-LEFT-3 B3-8). */
+  via_stack_presets?: ViaStackPreset[];
+}
+
+/** `eda_model::setup_pages::ViaStackPreset` (KiCad 25ec2335 `VIA_STACK_PRESET`): one microvia stack preset, sizes in nanometres. */
+export interface ViaStackPreset {
+  name: string;
+  start_layer: string;
+  end_layer: string;
+  staggered: boolean;
+  via_size_nm: Nm;
+  via_drill_nm: Nm;
+  use_netclass: boolean;
+  filled: boolean;
+  capped: boolean;
+  pitch_nm: Nm;
 }
 
 /** The board's default zone settings (`ZONE_SETTINGS`, `DrawingsSection::zone_defaults`): a zone's settings, layers and name with no outline or net. */
@@ -1515,6 +1535,12 @@ export interface TuningProfile {
   layer_entries: ProfileLayerEntry[];
   via_propagation_delay_as: number;
   via_overrides: ProfileViaOverride[];
+  /** "Frequency" in hertz (KiCad 25ec2335 `m_Frequency`); absent is 1 GHz (`migrateSchema0to1`). */
+  frequency_hz?: number;
+  /** "Model solder mask" (`m_ModelSolderMask`); absent is false (`migrateSchema0to1`). */
+  model_solder_mask?: boolean;
+  /** "Net Chain Bridge Propagation" > "Global unit delay" in attoseconds per millimetre (`m_NetChainBridgePropagationDelay`); absent is 0. */
+  net_chain_bridge_delay_as_per_mm?: number;
 }
 
 /** Design Rules > Tuning Profiles: the profiles, and the profile each net class (`Default` included) names -- one the project does not have is what kicad-cli reports as `missing_tuning_profile`. */
@@ -1578,6 +1604,22 @@ export interface SchFormatting {
   opo_i_range: string;
 }
 
+/** `eda_model::sch_setup::SymbolParitySettings`: Schematic Setup > Electrical Rules > Compare Symbol with Library (KiCad 25ec2335 `SYMBOL_PARITY_SETTINGS`). */
+export interface SymbolParitySettings {
+  missing_fields: boolean;
+  extra_fields: boolean;
+  field_texts: boolean;
+  field_visibilities: boolean;
+  field_styles: boolean;
+  field_positions: boolean;
+  pin_visibilities: boolean;
+  pin_alt_functions: boolean;
+  exclude_from_board: boolean;
+  dnp: boolean;
+  exclude_from_bom: boolean;
+  exclude_from_pos_files: boolean;
+}
+
 /** `eda_model::sch_setup::AnnotationSettings`: Schematic Setup > General > Annotation but the unit notation. */
 export interface AnnotationSettings {
   /** 0 by X, 1 by Y. */
@@ -1606,6 +1648,8 @@ export interface SchSetupReply {
   ok: boolean;
   message?: string;
   annotation: AnnotationSettings;
+  /** Compare Symbol with Library (UI-LEFT-3 B3-9); absent from an older backend. */
+  symbol_parity?: SymbolParitySettings;
   /** The unit notation: the first unit's id ('A' = 65 or '1' = 49) and the separator (0, '.', '-', '_') as character codes. */
   subpart_first_id: number;
   subpart_id_separator: number;
@@ -2318,7 +2362,8 @@ export type Cmd =
   /** The Properties panel's "Pad Number" (`PAD::SetNumber`): the pad `pad` (`REF.NUM[#k]`) renamed, keeping its net (crates/ops/src/pad_renumber.rs). */
   | { op: "set_pad_number"; pad: string; number: string }
   /** `SetDefaultZoneSettings` (Zone Properties' OK, `Edit_Zone_Params`): the board's default zone settings become `zone`'s (a zone record with no outline or net). */
-  | { op: "set_zone_defaults"; zone: ZoneDefaults & { net: string; layer: string; outline: [] } }
+  | { op: "set_via_stack_presets"; presets: ViaStackPreset[] }
+  | { op: "set_zone_defaults"; zone: ZoneDefaults & { net: string; layer: string; outline: [] }; locked?: boolean }
   /**
    * The 3D Models tab of Footprint Properties (crates/ops/src/fp_models.rs): `set_board_models` makes the footprint's whole list the one given (the dialog's OK; an empty list is a
    * footprint with no model); the others are the tab's Add, Remove and cell edits and the order of the rows, one at a time, by 0-based position (`edit_board_model` leaves a key
@@ -2486,6 +2531,7 @@ export type Cmd =
   | { op: "set_intersheet_refs"; settings: IntersheetRefs }
   | { op: "set_sch_formatting"; settings: SchFormatting }
   | { op: "set_annotation_settings"; settings: AnnotationSettings; subpart_first_id: number; subpart_id_separator: number }
+  | { op: "set_symbol_parity"; settings: SymbolParitySettings }
   | { op: "set_field_name_templates"; fields: TemplateFieldName[] }
   | { op: "set_bom_presets"; bom_presets: string[]; bom_fmt_presets: string[] }
   | { op: "set_bom_view"; save?: Record<string, unknown>; delete?: string; view?: Record<string, unknown> }

@@ -35,6 +35,7 @@ fn profile() -> TuningProfile {
         layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_nm: mm(0.13), diff_pair_gap_nm: mm(0.15), delay_as_per_mm: 6_100_000 }],
         via_propagation_delay_as: 25_000_000,
         via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 30_000_000 }],
+        ..Default::default()
     }
 }
 
@@ -388,4 +389,72 @@ fn the_projects_zone_defaults_are_read_and_written() {
     back.drawings.as_mut().unwrap().zone_defaults = None;
     eda_kicad::merge_project_zone_defaults(&mut back, &project.to_string());
     assert_eq!(back.drawings.as_ref().unwrap().zone_defaults, Some(z), "read back as written");
+}
+
+/// UI-LEFT-3 B3-4: KiCad 25ec2335's profile keys -- `frequency`, `model_solder_mask`, `net_chain_bridge_prop_delay` -- written at the file's schema 2
+/// (`saveUserDefinedProfileConfigurationLine`) and read back; a profile of an older project (schema 0, none of them) takes the migrations' 1 GHz, false and 0.
+#[test]
+fn a_profiles_frequency_solder_mask_and_bridge_delay_are_written_and_read() {
+    let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let p = TuningProfile { frequency_hz: 2.4e9, model_solder_mask: true, net_chain_bridge_delay_as_per_mm: 7_000_000, ..profile() };
+    model.board.tuning_profiles.profiles = vec![p.clone()];
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    assert_eq!(pro["tuning_profiles"]["meta"]["version"], 2, "every key of schema 2 is written, so KiCad runs no migration over it");
+    let written = &pro["tuning_profiles"]["tuning_profiles_impedance_geometric"][0];
+    assert_eq!((written["frequency"].as_f64(), written["model_solder_mask"].as_bool(), written["net_chain_bridge_prop_delay"].as_i64()), (Some(2.4e9), Some(true), Some(7_000_000)));
+    let (_, mut back, _) = import_kicad_pcb(BOARD).expect("imports");
+    merge_project_setup_pages(&mut back, &pro.to_string());
+    assert_eq!(back.board.tuning_profiles.profiles, vec![p]);
+    // schema 0: no frequency, no mask, no bridge delay
+    let mut old = pro.clone();
+    for k in ["frequency", "model_solder_mask", "net_chain_bridge_prop_delay"] {
+        old["tuning_profiles"]["tuning_profiles_impedance_geometric"][0].as_object_mut().unwrap().remove(k);
+    }
+    let (_, mut back, _) = import_kicad_pcb(BOARD).expect("imports");
+    merge_project_setup_pages(&mut back, &old.to_string());
+    let got = &back.board.tuning_profiles.profiles[0];
+    assert_eq!((got.frequency_hz, got.model_solder_mask, got.net_chain_bridge_delay_as_per_mm), (1.0e9, false, 0));
+}
+
+/// UI-LEFT-3 B3-4: Edit Teardrops' "Round pads only" (`m_UseRoundShapesOnly`) is the project's `td_onroundshapesonly`, written and read.
+#[test]
+fn round_pads_only_is_the_projects_td_onroundshapesonly() {
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let routing = design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+    routing.teardrop_settings = TeardropSettings { enabled: true, round_shapes_only: true, ..Default::default() };
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    assert_eq!(pro["board"]["design_settings"]["teardrop_options"][0]["td_onroundshapesonly"], true);
+    let mut back = design.clone();
+    back.routing.as_mut().unwrap().teardrop_settings.round_shapes_only = false;
+    merge_project_teardrops(&mut back, &pro.to_string());
+    assert!(back.routing.as_ref().unwrap().teardrop_settings.round_shapes_only);
+}
+
+/// UI-LEFT-3 B3-8: the microvia stack presets are the project's `via_stack_presets` (KiCad 25ec2335 `BOARD_DESIGN_SETTINGS`' `PARAM_LAMBDA`), written in
+/// millimetres and read back; the reader's fallbacks and clamps are KiCad's (a non-copper layer, a negative size, a pitch past 25 mm, a second preset of a
+/// name, a nameless entry).
+#[test]
+fn the_microvia_stack_presets_are_written_and_read_as_kicad_does() {
+    use eda_model::setup_pages::ViaStackPreset;
+    let (mut design, model, _) = import_kicad_pcb(BOARD).expect("imports");
+    let a = ViaStackPreset { name: "HDI 1-2".into(), start_layer: "F.Cu".into(), end_layer: "In1.Cu".into(), staggered: true, via_size_nm: mm(0.25), via_drill_nm: mm(0.1), use_netclass: false, filled: false, capped: true, pitch_nm: mm(0.4) };
+    let b = ViaStackPreset { name: "By class".into(), start_layer: "In1.Cu".into(), end_layer: "B.Cu".into(), staggered: false, via_size_nm: Nm::ZERO, via_drill_nm: Nm::ZERO, use_netclass: true, filled: true, capped: false, pitch_nm: Nm::ZERO };
+    design.drawings.get_or_insert_with(Default::default).via_stack_presets = vec![a.clone(), b.clone()];
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    let list = &pro["board"]["design_settings"]["via_stack_presets"];
+    assert_eq!(list[0], serde_json::json!({ "name": "HDI 1-2", "start_layer": "F.Cu", "end_layer": "In1.Cu", "staggered": true, "via_size": 0.25, "via_drill": 0.1, "use_netclass": false, "filled": false, "capped": true, "pitch": 0.4 }));
+    let mut back = design.clone();
+    back.drawings.as_mut().unwrap().via_stack_presets.clear();
+    eda_kicad::merge_project_via_stack_presets(&mut back, &pro.to_string());
+    assert_eq!(back.drawings.as_ref().unwrap().via_stack_presets, vec![a, b]);
+    // the loader's fallbacks
+    let odd = serde_json::json!({ "board": { "design_settings": { "via_stack_presets": [
+        { "name": "odd", "start_layer": "F.SilkS", "end_layer": "Nope", "via_size": -1.0, "via_drill": "x", "pitch": 99.0 },
+        { "name": "ODD", "start_layer": "B.Cu" },
+        { "start_layer": "B.Cu" }, {}
+    ] } } });
+    eda_kicad::merge_project_via_stack_presets(&mut back, &odd.to_string());
+    let got = &back.drawings.as_ref().unwrap().via_stack_presets;
+    assert_eq!(got.len(), 1, "a second preset of a name (case ignored) and a nameless entry are skipped");
+    assert_eq!((got[0].start_layer.as_str(), got[0].end_layer.as_str(), got[0].via_size_nm, got[0].via_drill_nm, got[0].pitch_nm, got[0].filled), ("F.Cu", "In1.Cu", Nm::ZERO, Nm::ZERO, mm(25.0), true));
 }

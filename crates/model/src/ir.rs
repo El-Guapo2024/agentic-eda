@@ -1269,6 +1269,12 @@ pub struct TeardropSettings {
     /// round block's sizes, as this port served every pad then. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect_shape: Option<crate::teardrop_params::TeardropParams>,
+    /// `TEARDROP_PARAMETERS_LIST::m_UseRoundShapesOnly` (Edit Teardrops' "Round pads only", the project's `td_onroundshapesonly`): a pad that is not uniformly
+    /// round gets no teardrop from the board's blocks (`DIALOG_GLOBAL_EDIT_TEARDROPS::visitItem`: `if( !IsUniformlyRound( aItem ) ) return`), so the rectangular
+    /// block is off. It is how KiCad turns that block off: Board Setup has no enable of a block's own (UI-LEFT-3 B3-4). Additive: absent reads as KiCad's default,
+    /// off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub round_shapes_only: bool,
 }
 
 impl TeardropSettings {
@@ -1323,6 +1329,7 @@ impl Default for TeardropSettings {
             prefer_zone_connections: true,
             track_end: crate::teardrop_params::TeardropParams::default(),
             rect_shape: None,
+            round_shapes_only: false,
         }
     }
 }
@@ -2824,6 +2831,16 @@ pub struct DrawingsSection {
     /// *aZone` with no net), as a zone with no outline, net or id. `None` is `ZONE_SETTINGS`' own. UI-LEFT-2 PP10. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone_defaults: Option<Zone>,
+    /// The board's default zone settings' "Locked" (`ZONE_SETTINGS::m_Locked`, Board Setup > Zones' box, KiCad 25ec2335 `PANEL_ZONE_PROPERTIES::AcceptOptions`):
+    /// a new zone starts locked (`ZONE_CREATE_HELPER::createNewZone`, `ExportSetting`'s `SetLocked`), here put in [`Self::locked_ids`]. A zone's lock is that
+    /// list's, not a setting of its own, so the default's is kept beside [`Self::zone_defaults`]. KiCad keeps it in memory only (`BOARD_DESIGN_SETTINGS` has no
+    /// `defaults.zones.locked`), so the derived project does not carry it; here `design.json` keeps it (UI-LEFT-3 B3-4). Additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub zone_defaults_locked: bool,
+    /// Board Setup > Design Rules > Microvia Stacks (KiCad 25ec2335 `BOARD_DESIGN_SETTINGS::m_ViaStackPresets`, `PANEL_SETUP_VIA_STACKS`), the project's
+    /// `board.design_settings.via_stack_presets`, in the page's order (UI-LEFT-3 B3-8). Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_stack_presets: Vec<crate::setup_pages::ViaStackPreset>,
     /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
     /// up by position+net; a via with no entry follows the board setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -7,6 +7,8 @@
 //                     Field Name Templates  panel_template_fieldnames.cpp (FieldNameTemplatesPage.tsx): the project's templates, Visible and URL
 //                     BOM Presets           panel_bom_presets.cpp (BomPresetsPage.tsx): the project's saved BOM and BOM formatting presets
 //   Electrical Rules  Violation Severity    common/dialogs/panel_setup_severities.cpp over eeschema/erc/erc_settings.cpp (ErcSeveritiesPage.tsx)
+//                     Compare Symbol with Library  KiCad 25ec2335 panel_setup_symbol_parity.cpp (SymbolParityPage.tsx): what lib_symbol_mismatch and Compare
+//                                           Symbol with Library compare (UI-LEFT-3 B3-9)
 //                     Pin Conflicts Map     eeschema/dialogs/panel_setup_pinmap.cpp over eeschema/erc/erc_settings.cpp (below)
 //   Project           Net Classes           common/dialogs/panel_setup_netclasses.cpp with `aIsEEschema` -- Board Setup's page (boardSetup/NetClassesPage.tsx,
 //                                           `editor="sch"`) over the same table, showing the wire and bus thickness, colour and line style columns
@@ -39,6 +41,7 @@ import { BusAliasesPage } from "./schematicSetup/BusAliasesPage";
 import { ErcSeveritiesPage } from "./schematicSetup/ErcSeveritiesPage";
 import { FieldNameTemplatesPage } from "./schematicSetup/FieldNameTemplatesPage";
 import { FormattingPage } from "./schematicSetup/FormattingPage";
+import { SymbolParityPage } from "./schematicSetup/SymbolParityPage";
 import { EmbeddedFilesPanel } from "./EmbeddedFilesPanel";
 import { SchImportSettingsDialog } from "./schematicSetup/SchImportSettingsDialog";
 import { SetupImportContext, type SchImportParts, type SetupImport } from "./boardSetup/fields";
@@ -64,6 +67,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     title: "Electrical Rules",
     pages: [
       { id: "severities", label: "Violation Severity" },
+      { id: "symbol_parity", label: "Compare Symbol with Library" },
       { id: "pinmap", label: "Pin Conflicts Map" },
     ],
   },
@@ -231,6 +235,7 @@ export function SchematicSetupDialog() {
           <FieldNameTemplatesPage hidden={page !== "field_templates"} onDirty={markers.field_templates} />
           <BomPresetsPage hidden={page !== "bom_presets"} onDirty={markers.bom_presets} />
           <ErcSeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
+          <SymbolParityPage hidden={page !== "symbol_parity"} onDirty={markers.symbol_parity} />
           <NetClassesPage editor="sch" hidden={page !== "netclasses"} onDirty={markers.netclasses} />
           <BusAliasesPage hidden={page !== "bus_aliases"} onDirty={markers.bus_aliases} />
           <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />

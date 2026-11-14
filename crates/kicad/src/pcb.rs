@@ -817,7 +817,7 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     let mut project = serde_json::json!({ "board": { "design_settings": design_settings } });
     // Design Rules > Tuning Profiles: the project's `tuning_profiles` (`common/project/tuning_profiles.cpp`), and the net classes when they name one.
     if !b.tuning_profiles.profiles.is_empty() {
-        project["tuning_profiles"] = serde_json::json!({ "meta": { "version": 0 }, "tuning_profiles_impedance_geometric": b.tuning_profiles.profiles.iter().map(project_tuning_profile).collect::<Vec<_>>() });
+        project["tuning_profiles"] = serde_json::json!({ "meta": { "version": 2 }, "tuning_profiles_impedance_geometric": b.tuning_profiles.profiles.iter().map(project_tuning_profile).collect::<Vec<_>>() });
     }
     if net_classes_in_project(model) {
         project["net_settings"] = project_net_settings(model);
@@ -839,12 +839,15 @@ pub(crate) fn net_classes_in_project(model: &ConstraintModel) -> bool {
 }
 
 /// One `TUNING_PROFILE` as the project file keeps it (`common/project/tuning_profiles.cpp`): widths and gaps in nanometres, delays in attoseconds per millimetre, via delays in
-/// attoseconds, layers by the names the board file writes (`UNDEFINED` for a reference layer a row leaves out).
+/// attoseconds, layers by the names the board file writes (`UNDEFINED` for a reference layer a row leaves out). KiCad 25ec2335's schema 2
+/// (`saveUserDefinedProfileConfigurationLine`): the frequency in hertz, "Model solder mask" and the net chain bridge delay too (UI-LEFT-3 B3-4).
 fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_json::Value {
     serde_json::json!({
         "profile_name": p.name,
         "type": p.profile_type.code(),
         "target_impedance": p.target_impedance,
+        "frequency": p.frequency_hz,
+        "model_solder_mask": p.model_solder_mask,
         "enable_time_domain_tuning": p.enable_time_domain_tuning,
         "layer_entries": p.layer_entries.iter().map(|e| serde_json::json!({
             "signal_layer": e.signal_layer,
@@ -862,6 +865,7 @@ fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_js
             "via_layer_to": v.via_layer_to,
             "delay": v.delay_as,
         })).collect::<Vec<_>>(),
+        "net_chain_bridge_prop_delay": p.net_chain_bridge_delay_as_per_mm,
     })
 }
 
@@ -992,6 +996,12 @@ pub fn write_schematic_setup(schematic: &mut serde_json::Value, extras: &eda_mod
         schematic["annotation"]["method"] = serde_json::json!(a.method);
         schematic["annotate_start_num"] = serde_json::json!(a.start_num);
         schematic["reuse_designators"] = serde_json::json!(a.reuse_designators);
+    }
+    // Compare Symbol with Library (KiCad 25ec2335 `SCHEMATIC_SETTINGS`' `compare_symbols.*`, UI-LEFT-3 B3-9): what kicad-cli's `lib_symbol_mismatch` compares
+    if let Some(p) = &extras.symbol_parity {
+        for (key, on) in p.keyed() {
+            schematic["compare_symbols"][key] = serde_json::json!(on);
+        }
     }
     // `PARAM_LAMBDA<std::string>( "used_designators" )`: `REFDES_TRACKER::Serialize` (KiCad 25ec2335's form)
     if !extras.used_designators.is_empty() {
@@ -1162,7 +1172,7 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
                 "td_onpthpad": td.target_pth_pads,
                 "td_onsmdpad": td.target_smd_pads,
                 "td_ontrackend": td.track_end.enabled,
-                "td_onroundshapesonly": false,
+                "td_onroundshapesonly": td.round_shapes_only,
             }]);
         }
     }
@@ -1173,6 +1183,10 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
         defaults["dimension_units"] = units;
         defaults["dimension_precision"] = precision;
         defaults["dimensions"] = dims;
+    }
+    // Board Setup > Design Rules > Microvia Stacks (KiCad 25ec2335 `via_stack_presets`, UI-LEFT-3 B3-8): the presets, in their order
+    if let Some(presets) = design.drawings.as_ref().map(|d| &d.via_stack_presets).filter(|p| !p.is_empty()) {
+        project["board"]["design_settings"]["via_stack_presets"] = serde_json::Value::Array(presets.iter().map(|p| p.to_project()).collect());
     }
     // Board Setup > Design Rules > Zones (KiCad 25ec2335 `defaults.zones.*`, UI-LEFT-2 BB4): the defaults a new zone starts from, once the design keeps some
     if let Some(z) = design.drawings.as_ref().and_then(|d| d.zone_defaults.as_ref()) {

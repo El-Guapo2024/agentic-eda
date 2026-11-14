@@ -426,3 +426,71 @@ fn slow_kicad_cli_lays_labels_out_by_the_formatting_ratios() {
     assert!(corners.iter().zip(&want).all(|(a, b)| near(a.0, b.0) && near(a.1, b.1)), "the flag {corners:?}, not {want:?}");
     eprintln!("kicad-cli: local text at ({x}, {y}), global text x {gx}, flag {corners:?}");
 }
+
+/// UI-LEFT-3 B3-9: Compare Symbol with Library's OK is one step; the derived project carries it as KiCad 25ec2335's `schematic.compare_symbols.*`, our reader
+/// takes it back, and one schematic-tab undo restores KiCad's defaults (none kept). The slow tier hands it to kicad-cli: with `lib_symbol_mismatch` a warning,
+/// its ERC finds as many mismatches as the boxes say (all of them off compares less than all of them on).
+#[test]
+fn compare_symbol_with_library_reaches_the_project_and_undoes() {
+    use eda_model::sch_setup::SymbolParitySettings;
+    let dir = mcu30_board(if kicad_cli_ready() { "slow_symbol_parity" } else { "symbol_parity" });
+    let custom = SymbolParitySettings { field_positions: true, missing_fields: false, dnp: true, ..Default::default() };
+    step(&dir, Cmd::SetSymbolParity { settings: custom }, false, "test").unwrap();
+    assert!(step(&dir, Cmd::SetSymbolParity { settings: custom }, false, "test").is_err(), "a change that changes nothing is refused");
+    let pro = derived_project(&dir);
+    let cmp = &pro["schematic"]["compare_symbols"];
+    assert_eq!((cmp["field_positions"].as_bool(), cmp["missing_fields"].as_bool(), cmp["dnp_flags"].as_bool(), cmp["field_texts"].as_bool(), cmp["exclude_from_position_file_flags"].as_bool()), (Some(true), Some(false), Some(true), Some(true), Some(true)));
+    assert_eq!(cmp.as_object().unwrap().len(), 12, "every key of SYMBOL_PARITY_SETTINGS: {cmp}");
+    let mut back = eda_model::sch_extras::SchExtras::default();
+    eda_kicad::project_schematic::apply(&mut back, &pro.to_string());
+    assert_eq!(back.symbol_parity, Some(custom));
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(design.schematic.as_ref().unwrap().extras.symbol_parity, None);
+    assert!(derived_project(&dir)["schematic"].get("compare_symbols").is_none());
+
+    if kicad_cli_ready() {
+        // A library of the derived schematic's own `Device:R` (byte for byte its embedded copy) but the Value's place, in the project's table: kicad-cli's
+        // `lib_symbol_mismatch` (`TestLibSymbolIssues`: `flattenedSymbol->Compare( *embedded, SymbolCompareFlags() )`) sees the moved field only with
+        // "Compare field positions".
+        step(&dir, Cmd::SetErcSeverities { severities: [("lib_symbol_mismatch".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
+        let mismatches = |positions: bool| -> usize {
+            let settings = SymbolParitySettings { field_positions: positions, ..Default::default() };
+            let _ = step(&dir, Cmd::SetSymbolParity { settings }, false, "test");
+            crate::kicad_engine::erc(&dir).expect("derived files");
+            let derived = dir.join(".kicad");
+            let sch = std::fs::read_to_string(derived.join("board.kicad_sch")).unwrap();
+            let at = sch.find("(symbol \"Device:R\"").expect("the derived schematic embeds Device:R");
+            let mut depth = 0;
+            let mut end = at;
+            for (i, c) in sch[at..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = at + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let symbol = sch[at..end].replacen("(symbol \"Device:R\"", "(symbol \"R\"", 1).replacen("(property \"Value\" \"R\" (at 0 0 0)", "(property \"Value\" \"R\" (at 2.54 0 0)", 1);
+            assert!(symbol.contains("(at 2.54 0 0)"), "{symbol}");
+            std::fs::write(derived.join("Device.kicad_sym"), format!("(kicad_symbol_lib (version 20241209) (generator \"eda\")\n{symbol}\n)\n")).unwrap();
+            std::fs::write(derived.join("sym-lib-table"), "(sym_lib_table (version 7)\n  (lib (name \"Device\")(type \"KiCad\")(uri \"${KIPRJMOD}/Device.kicad_sym\")(options \"\")(descr \"\"))\n)\n").unwrap();
+            let cli = eda_kicad_engine::find_cli().unwrap();
+            let out = derived.join("erc-parity.json");
+            let run = eda_kicad_engine::cli_command(&cli, Some(&derived.join("board.kicad_pro"))).current_dir(&derived).args(["sch", "erc", "--format", "json", "--severity-all", "--output"]).arg(&out).arg("board.kicad_sch").output().unwrap();
+            assert!(out.exists(), "{}", String::from_utf8_lossy(&run.stderr));
+            let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+            let n = report["sheets"].as_array().into_iter().flatten().flat_map(|s| s["violations"].as_array().into_iter().flatten()).filter(|v| v["type"] == "lib_symbol_mismatch").count();
+            n
+        };
+        let (off, on) = (mismatches(false), mismatches(true));
+        println!("lib_symbol_mismatch: positions off {off}, on {on}");
+        assert_eq!(off, 0, "only the Value's place differs, which is not compared by default");
+        assert!(on > 0, "kicad-cli reads `compare_symbols.field_positions` as written: every Device:R mismatches");
+    }
+}

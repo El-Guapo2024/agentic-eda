@@ -1,7 +1,6 @@
-// Board Setup > Board Stackup > Physical Stackup (+ Board Finish) -- port of pcbnew/board_stackup_manager/panel_board_stackup.cpp and panel_board_finish.cpp: the
+// Board Setup > Board Stackup > Physical Stackup -- port of pcbnew/board_stackup_manager/panel_board_stackup.cpp (Board Finish is its own page, BoardFinishPage.tsx): the
 // number of copper layers, "Impedance controlled", one row per sublayer of each layer (`lazyBuildRowUI`: a dielectric's Core / PrePreg choice on its first
-// sublayer only, its thickness lock), Add and Remove Dielectric Layer with KiCad's lists, Adjust Dielectric Thickness, the checks of the "Errors" box, and the
-// finish. The table is the `(stackup ..)` of the derived `.kicad_pcb`; the board thickness is what the layers add up to (`BuildBoardThicknessFromStackup`), and
+// sublayer only, its thickness lock), Add and Remove Dielectric Layer with KiCad's lists, Adjust Dielectric Thickness and the checks of the "Errors" box. The table is the `(stackup ..)` of the derived `.kicad_pcb`; the board thickness is what the layers add up to (`BuildBoardThicknessFromStackup`), and
 // the copper layers are the board's layers. The pure parts are kicad-port/physicalStackup.ts.
 //
 // Fewer copper layers while something is on a layer that goes asks KiCad's question (`PANEL_SETUP_LAYERS::TransferDataFromWindow`: "Warning", "Items have been found
@@ -80,13 +79,10 @@ import type { StackupSettings, StackupSublayer } from "../../api/types";
 import { DialogShell } from "../pcbDialogKit";
 import { ColorDialog, MessageDialog, NameDialog, Pane, PickDialog } from "../panels/appearance/shared";
 import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps, useSetupImport } from "./fields";
+import { finishDraftOf, withFinish } from "../../kicad-port/boardFinish";
 
 const COPPER_COUNTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 2);
 
-/** `GetStandardCopperFinishes`: the standard names (the ones a `.gbrjob` file knows); "Not specified" writes none. */
-const COPPER_FINISHES = ["ENIG", "ENEPIG", "HAL SnPb", "HAL lead-free", "Hard gold", "Immersion tin", "Immersion nickel", "Immersion silver", "Immersion gold", "HT_OSP", "OSP", "None"];
-
-const EDGE_CONNECTORS = ["No", "Yes", "Yes, bevelled"];
 
 /** A colour swatch (`LAYER_PRESENTATION::DrawColorSwatch`, `m_colorSwatchesSize` 14 x 14). */
 function ColorSwatch({ css }: { css: string }) {
@@ -337,9 +333,10 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
   const setKind = (r: StackupRow, kind: string) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, layers: d.stackup.layers.map((l, i) => (i === r.layer ? { ...l, kind } : l)) } }));
   const setStackup = (patch: Partial<StackupSettings["stackup"]>) => page.edit((d) => ({ ...d, stackup: { ...d.stackup, ...patch } }));
 
-  // `transferDataFromUIToStackup`: every row's values written as KiCad writes them
+  // `transferDataFromUIToStackup`: every row's values written as KiCad writes them; the finish is the Board Finish page's (`m_panelFinish->TransferDataFromWindow`),
+  // here the board's as that page last applied it
   const send = (settings: StackupSettings, deleteItems: boolean) => {
-    const written = { ...settings, stackup: withKicadValues(settings.stackup) };
+    const written = { ...settings, stackup: withFinish(withKicadValues(settings.stackup), finishDraftOf(rules?.stackup ?? undefined)) };
     void apply.run(deleteItems ? { op: "set_stackup", settings: written, delete_items_on_removed_layers: true } : { op: "set_stackup", settings: written }, page.markClean);
   };
 
@@ -380,7 +377,7 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
    */
   const onExport = () => {
     if (!draft || !entriesOk()) return;
-    const report = buildStackupReport(draft, units, layerName);
+    const report = buildStackupReport({ ...draft, stackup: withFinish(draft.stackup, finishDraftOf(rules?.stackup ?? undefined)) }, units, layerName);
     void navigator.clipboard?.writeText(report).catch(() => undefined);
   };
 
@@ -518,31 +515,6 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
               Export to Clipboard
             </button>
           </div>
-
-          <div className="bs-section">Board Finish</div>
-          <FieldRow label="Copper finish:">
-            <select aria-label="Copper finish" value={draft.stackup.copper_finish ?? ""} onChange={(e) => setStackup({ copper_finish: e.target.value === "" ? undefined : e.target.value })}>
-              <option value="">Not specified</option>
-              {COPPER_FINISHES.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
-              {draft.stackup.copper_finish && !COPPER_FINISHES.includes(draft.stackup.copper_finish) && <option value={draft.stackup.copper_finish}>{draft.stackup.copper_finish}</option>}
-            </select>
-          </FieldRow>
-          <Check checked={draft.stackup.edge_plating ?? false} onChange={(v) => setStackup({ edge_plating: v })}>
-            Plated board edge
-          </Check>
-          <FieldRow label="Edge card connectors:" title="Options for edge card connectors.">
-            <select aria-label="Edge card connectors" value={draft.stackup.edge_connector ?? 0} onChange={(e) => setStackup({ edge_connector: Number(e.target.value) })}>
-              {EDGE_CONNECTORS.map((label, i) => (
-                <option key={label} value={i}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </FieldRow>
 
           {dialog?.kind === "add" && (
             <PickDialog

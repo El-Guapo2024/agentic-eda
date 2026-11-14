@@ -1731,6 +1731,14 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
         if let Some(z) = &d.zone_defaults {
             drawings["zone_defaults"] = serde_json::to_value(z).unwrap_or(serde_json::Value::Null);
         }
+        // Board Setup > Microvia Stacks (UI-LEFT-3 B3-8)
+        if !d.via_stack_presets.is_empty() {
+            drawings["via_stack_presets"] = serde_json::to_value(&d.via_stack_presets).unwrap_or(serde_json::Value::Null);
+        }
+        // the defaults' "Locked" (Board Setup > Zones, UI-LEFT-3 B3-4)
+        if d.zone_defaults_locked {
+            drawings["zone_defaults_locked"] = json!(true);
+        }
         // `BOARD::LegacyTeardrops()` (UI-LEFT-2 PP24): the Properties panel hides its Teardrops rows, the dialogs grey theirs, a teardrop zone can be picked.
         if d.legacy_teardrops {
             drawings["legacy_teardrops"] = json!(true);
@@ -3101,7 +3109,7 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         }
     }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "keywords": s.connectivity.keywords, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "in_bom": s.in_bom, "on_board": s.on_board, "body_style_count": s.body_style_count(), "body_style_names": (1..=s.body_style_count()).map(|n| s.body_style_description(n)).filter(|_| s.body_style_count() > 1).collect::<Vec<_>>(), "unit_names": s.connectivity.unit_names, "unit_count": s.unit_count, "power_local": s.power && s.connectivity.power_local })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

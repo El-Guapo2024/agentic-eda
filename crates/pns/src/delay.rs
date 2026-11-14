@@ -145,6 +145,7 @@ mod tests {
             ],
             via_propagation_delay_as: 5_000_000,
             via_overrides: vec![ViaOverride { signal_layer_from: "F.Cu".into(), signal_layer_to: "B.Cu".into(), via_layer_from: "F.Cu".into(), via_layer_to: "B.Cu".into(), delay_as: 12_000_000 }],
+            ..Default::default()
         }
     }
 

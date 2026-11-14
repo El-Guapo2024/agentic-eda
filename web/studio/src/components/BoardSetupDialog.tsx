@@ -27,6 +27,8 @@ import { DrillChartPage } from "./boardSetup/DrillChartPage";
 import { NetClassesPage } from "./boardSetup/NetClassesPage";
 import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
 import { StackupPage } from "./boardSetup/StackupPage";
+import { BoardFinishPage } from "./boardSetup/BoardFinishPage";
+import { ViaStacksPage } from "./boardSetup/ViaStacksPage";
 import { TextGraphicsPage } from "./boardSetup/TextGraphicsPage";
 import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import { TuningPatternsPage } from "./boardSetup/TuningPatternsPage";
@@ -41,6 +43,7 @@ import "../styles/boardSetup.css";
 export type Page =
   | "board_layers"
   | "stackup"
+  | "board_finish"
   | "mask_paste"
   | "drill_chart"
   | "zones"
@@ -50,6 +53,7 @@ export type Page =
   | "text_variables"
   | "constraints"
   | "tracks_vias"
+  | "via_stacks"
   | "teardrops"
   | "tuning_patterns"
   | "tuning_profiles"
@@ -66,6 +70,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     pages: [
       { id: "board_layers", label: "Board Editor Layers" },
       { id: "stackup", label: "Physical Stackup" },
+      // KiCad 25ec2335: Board Finish is a page of its own (`m_boardFinishPage`, UI-LEFT-3 B3-8)
+      { id: "board_finish", label: "Board Finish" },
       { id: "mask_paste", label: "Solder Mask/Paste" },
       // KiCad 25ec2335 adds Drill Chart here, after Solder Mask/Paste (`m_drillChartPage`); 8303b2ad's Zone Hatch Offsets, which 25ec2335 folds into Design
       // Rules > Zones (`PANEL_SETUP_ZONES`), stays the last of the group as 8303b2ad has it.
@@ -86,6 +92,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     pages: [
       { id: "constraints", label: "Constraints" },
       { id: "tracks_vias", label: "Pre-defined Sizes" },
+      // KiCad 25ec2335 `m_viaStacksPage` (UI-LEFT-3 B3-8)
+      { id: "via_stacks", label: "Microvia Stacks" },
       // KiCad 25ec2335: Zones (`PANEL_SETUP_ZONES`: the default zone settings, then the hatch offsets that were 8303b2ad's own "Zone Hatch Offsets" page)
       { id: "zones", label: "Zones" },
       { id: "teardrops", label: "Teardrops" },
@@ -342,6 +350,8 @@ export function BoardSetupDialog() {
 
           <BoardLayersPage hidden={page !== "board_layers"} onDirty={markers.board_layers} />
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
+          <BoardFinishPage hidden={page !== "board_finish"} onDirty={markers.board_finish} />
+          <ViaStacksPage hidden={page !== "via_stacks"} onDirty={markers.via_stacks} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
           <DrillChartPage hidden={page !== "drill_chart"} onDirty={markers.drill_chart} />
           <ZonesPage hidden={page !== "zones"} onDirty={markers.zones} />
@@ -480,6 +490,10 @@ export function BoardSetupDialog() {
               </label>
               <label className="filter-row" style={{ display: "block" }}>
                 <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads
+              </label>
+              {/* Edit Teardrops' "Round pads only" (`m_UseRoundShapesOnly`): the rectangular block's way off, as KiCad has no enable of a block's own (UI-LEFT-3 B3-4) */}
+              <label className="filter-row" style={{ display: "block" }} title="Rectangular and other non-round pads get no teardrops: the Rectangular Shapes block below is then not used.">
+                <input type="checkbox" aria-label="Round pads only" checked={td.round_shapes_only ?? false} onChange={(e) => setTdField("round_shapes_only", e.target.checked)} /> Round pads only
               </label>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Default Properties for Round Shapes</p>

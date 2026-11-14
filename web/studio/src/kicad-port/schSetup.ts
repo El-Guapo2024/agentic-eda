@@ -9,7 +9,7 @@
 //   Project > Bus Alias Definitions  panel_setup_buses.cpp       the grid's vetoes with their words, members split at spaces, the list sorted
 //
 // The verbs that store each page are crates/ops/src/sch_setup.rs (and Board Setup's `set_net_classes`).
-import type { AnnotationSettings, BusAliasDef, NetClassSchematic, SchFormatting, TemplateFieldName } from "../api/types";
+import type { AnnotationSettings, BusAliasDef, NetClassSchematic, SchFormatting, SymbolParitySettings, TemplateFieldName } from "../api/types";
 
 /** Nanometres in a mil. */
 export const NM_PER_MIL = 25_400;
@@ -292,7 +292,7 @@ export function schematicOf(table: Readonly<Record<string, NetClassSchematic>> |
   return table?.[name] ?? {};
 }
 
-/** The columns' checks: a width that is set may not be negative -- a 0 is taken as typed, as KiCad's grid takes it (UI-LEFT-2 BB8) -- and the Default row may not be blank (`GRID_CELL_MARK_AS_NULLABLE`). Null when fine. */
+/** The columns' checks: a width is taken as typed, a 0 or a negative one included, as KiCad's grid takes it (UI-LEFT-2 BB8, UI-LEFT-3 B3-4), and the Default row may not be blank (`GRID_CELL_MARK_AS_NULLABLE`). Null when fine. */
 export function schematicColumnsIssue(look: NetClassSchematic, isDefault: boolean): string | null {
   for (const [what, v] of [
     ["Wire thickness", look.wire_width],
@@ -303,7 +303,6 @@ export function schematicColumnsIssue(look: NetClassSchematic, isDefault: boolea
       continue;
     }
     if (!Number.isFinite(v)) return `${what} is not a number.`;
-    if (v < 0) return `${what} cannot be negative.`;
   }
   return null;
 }
@@ -328,3 +327,50 @@ export function schematicToSend(table: Readonly<Record<string, NetClassSchematic
 export function defaultClassSchematic(own: NetClassSchematic | undefined): NetClassSchematic {
   return { wire_width: own?.wire_width ?? 6 * NM_PER_MIL, bus_width: own?.bus_width ?? 12 * NM_PER_MIL, color: own?.color ?? null, line_style: own?.line_style ?? 0 };
 }
+
+/** `SYMBOL_PARITY_SETTINGS`' defaults (KiCad 25ec2335 `SCHEMATIC_SETTINGS`' `PARAM<bool>( "compare_symbols.*", .., default )`). */
+export const DEFAULT_SYMBOL_PARITY: Readonly<SymbolParitySettings> = {
+  missing_fields: true,
+  extra_fields: false,
+  field_texts: true,
+  field_visibilities: false,
+  field_styles: false,
+  field_positions: false,
+  pin_visibilities: false,
+  pin_alt_functions: true,
+  exclude_from_board: true,
+  dnp: false,
+  exclude_from_bom: false,
+  exclude_from_pos_files: true,
+};
+
+/** `PANEL_SETUP_SYMBOL_PARITY_BASE`'s boxes, in its three groups and its order, with its labels word for word (its typo included). */
+export const SYMBOL_PARITY_GROUPS: ReadonlyArray<{ title: string; boxes: ReadonlyArray<{ key: keyof SymbolParitySettings; label: string }> }> = [
+  {
+    title: "Fields",
+    boxes: [
+      { key: "missing_fields", label: "Check for missing fields" },
+      { key: "extra_fields", label: "Check for extra fields" },
+      { key: "field_texts", label: "Compare non-reference field text" },
+      { key: "field_visibilities", label: "Compare field visibilities" },
+      { key: "field_styles", label: "Compare field text sizes and styles" },
+      { key: "field_positions", label: "Compare field positions" },
+    ],
+  },
+  {
+    title: "Pins",
+    boxes: [
+      { key: "pin_visibilities", label: "Compare pin name/number visibilities" },
+      { key: "pin_alt_functions", label: "Compare alternate pin functions" },
+    ],
+  },
+  {
+    title: "Attributes",
+    boxes: [
+      { key: "exclude_from_board", label: "Compare exclude from board flags" },
+      { key: "dnp", label: "Compare do not populate flags" },
+      { key: "exclude_from_bom", label: "Compare exlucde from bill of materials flags" },
+      { key: "exclude_from_pos_files", label: "Compare exclude from position file flags" },
+    ],
+  },
+];

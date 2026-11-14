@@ -329,6 +329,10 @@ pub struct SchExtras {
     /// hold it. Additive. (Counts in `writes_nothing`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotation: Option<crate::sch_setup::AnnotationSettings>,
+    /// Schematic Setup > Electrical Rules > Compare Symbol with Library ([`crate::sch_setup::SymbolParitySettings`], KiCad 25ec2335 `SYMBOL_PARITY_SETTINGS`, the
+    /// project's `compare_symbols.*`). `None`: KiCad's defaults. Only the root sheet's extras hold it (UI-LEFT-3 B3-9). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_parity: Option<crate::sch_setup::SymbolParitySettings>,
     /// The references the numbering gave out (`REFDES_TRACKER::m_allRefDes`, the project's `used_designators`, read and written as KiCad 25ec2335's
     /// `Deserialize` / `Serialize`): with "Allow reference reuse" off ([`Self::annotation`]) Annotate, placing and pasting skip a number given before (UI-LEFT-2
     /// SS17). Empty: none. Only the root sheet's extras hold it. Additive. (Counts in `writes_nothing`.)
@@ -911,6 +915,7 @@ impl SchExtras {
         self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none() && self.intersheet_refs.is_none() && self.ngspice.is_none() && self.sim_workbook.is_none() && self.subpart_id_separator.is_none() && self.subpart_first_id.is_none() && self.project_schematic.is_none()
             && self.formatting.is_none()
             && self.annotation.is_none()
+            && self.symbol_parity.is_none()
             && self.used_designators.is_empty()
             && self.field_name_templates.is_empty()
             && self.variants.is_empty()

@@ -162,8 +162,9 @@ const SIZE_LABELS: Record<(typeof SIZE_FIELDS)[number], string> = {
 
 /**
  * The Net Classes page's checks (`validateNetclassName`, `validateNetclassClearance`, and the backend's size checks): a name for every class and no
- * two alike (case ignored), no negative size (a 0 is taken as typed, as `Validate` takes it: UI-LEFT-2 BB8), a clearance no larger than `MAXIMUM_CLEARANCE`, a via
- * hole smaller than its via, and no empty pattern. A size that is not a number (`NaN`: text the field could not read) is a mistake too.
+ * two alike (case ignored), a clearance no larger than `MAXIMUM_CLEARANCE`, and no empty pattern; every size is taken as typed, a 0 or a negative one and a via
+ * hole as large as its via included, as `Validate` takes them (UI-LEFT-2 BB8, UI-LEFT-3 B3-4). A size that is not a number (`NaN`: text the field could not read)
+ * is a mistake.
  */
 export function validateNetClasses(defaultClass: NetClass, classes: readonly NetClass[], rows: readonly AssignmentRow[] = []): NetClassIssue[] {
   const issues: NetClassIssue[] = [];
@@ -178,19 +179,21 @@ export function validateNetClasses(defaultClass: NetClass, classes: readonly Net
       const v = c[f];
       if (v === undefined) continue;
       if (!Number.isFinite(v)) issues.push({ row, field: f, message: `${SIZE_LABELS[f]} is not a number.` });
-      else if (v < 0) issues.push({ row, field: f, message: `${SIZE_LABELS[f]} cannot be negative.` });
-      else if (f === "clearance" && v > MAXIMUM_CLEARANCE_NM) issues.push({ row, field: f, message: "Clearance was too large. The most is 500 mm." });
+      // `validateNetclassClearance`: "Clearance was too large.  It has been clipped to %s." (the page clips the cell: `clipNetClassClearances`)
+      else if (f === "clearance" && v > MAXIMUM_CLEARANCE_NM) issues.push({ row, field: f, message: "Clearance was too large.  It has been clipped to 500 mm." });
     }
     if (!Number.isInteger(c.priority)) issues.push({ row, field: "priority", message: "Priority must be a whole number." });
-    if (c.via_diameter !== undefined && c.via_drill !== undefined && Number.isFinite(c.via_diameter) && Number.isFinite(c.via_drill) && c.via_drill >= c.via_diameter) {
-      issues.push({ row, field: "via_drill", message: "The via hole must be smaller than the via, or it leaves no annular ring." });
-    }
   });
   if (defaultClass.name.trim() !== "Default") issues.push({ row: 0, field: "name", message: "The default net class is required." });
   rows.forEach((r, i) => {
     if (r.pattern.trim() === "" && r.netclass !== "") issues.push({ row: i, field: "pattern", message: "A pattern cannot be empty." });
   });
   return issues;
+}
+
+/** `validateNetclassClearance`'s clip: each clearance over `MAXIMUM_CLEARANCE` set to it (`SetUnitValue( aRow, GRID_CLEARANCE, MAXIMUM_CLEARANCE )`). */
+export function clipNetClassClearances<C extends { clearance?: number }>(classes: readonly C[]): C[] {
+  return classes.map((c) => (c.clearance !== undefined && c.clearance > MAXIMUM_CLEARANCE_NM ? { ...c, clearance: MAXIMUM_CLEARANCE_NM } : c));
 }
 
 /** The net names a board uses: every pad's net, and every track, via and zone's. */
