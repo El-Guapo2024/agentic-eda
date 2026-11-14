@@ -20,8 +20,10 @@
 // and the menus of the tools that take over the right click: pcbnew/router/router_tool.cpp (ROUTER_TOOL::Init, while routing) and
 // pcbnew/tools/drawing_tool.cpp (DRAWING_TOOL::Init, while a graphic, zone, text, dimension or via is being drawn).
 //
-// Not built, because the IR has nothing for them: generators (Update All Tuning Patterns). An entry
-// KiCad offers that this studio has not wired is still listed, disabled, as the schematic's menu does (`MenuNodeView` knows which actions have a handler).
+//   pcbnew/tools/generator_tool.cpp       GENERATOR_TOOL::Init                                   Update All Tuning Patterns (the selection's and the router's menus)
+//   pcbnew/tools/pcb_edit_table_tool.cpp  EDIT_TABLE_TOOL_BASE::addMenus                         the table cells' rows, columns, merge, Edit Table, Export to CSV
+//
+// An entry KiCad offers that this studio has not wired is still listed, disabled, as the schematic's menu does (`MenuNodeView` knows which actions have a handler).
 //
 // The entries of the Zoom and Grid submenus, the Track/Via Width list and the like are data, handed in by the caller (`PcbMenuContext`). Pure: no store, no
 // DOM. Unit-tested in pcbContextMenu.test.ts.
@@ -76,6 +78,8 @@ export interface PcbSelectionSummary {
   /** The other item kinds, by `KICAD_T`: `PCB_FIELD_T` (a footprint's field), `PCB_TEXTBOX_T`, `PCB_BARCODE_T`, `PCB_POINT_T`, `PCB_REFERENCE_IMAGE_T`, and
    *  `PCB_GENERATOR_T` (via stitchings and tuning patterns); the grid items and drill maps under `other`. Absent counts are 0. */
   others?: Partial<Record<OtherKind, number>>;
+  /** Selected tuning patterns (`GENERATOR_TOOL::Init`'s `tuningPatternCondition`: a `PCB_GENERATOR` of type `tuning_pattern`); they count as `others.generator` too. */
+  tuningPatterns?: number;
   /** KiCad 10: selected via stitchings that have exclusions (`VIA_STITCH_TOOL::Init`'s `hasExclusionsCondition`). */
   stitchesWithExclusions?: number;
   /** `groupWithDesignBlockLink` (pcb_edit_frame.cpp): the one selected item is a group linked to a design block -- Place Linked Design Block and Save to Linked Design Block are on only for it. */
@@ -347,6 +351,7 @@ const A = {
   unmergeCells: "common.TableEditor.unmergeCell",
   editTable: "pcbnew.TableEditor.editTable",
   exportTableCSV: "common.TableEditor.exportTableCSV",
+  regenerateAllTuning: "pcbnew.Generator.regenerateAllTuning",
   selectColumns: "common.InteractiveSelection.SelectColumns",
   selectRows: "common.InteractiveSelection.Rows",
   selectTable: "common.InteractiveSelection.SelectTable",
@@ -818,6 +823,9 @@ export function buildSelectionMenu(): ConditionalMenu {
   // ---- GROUP_TOOL::Init
   menu.addMenu("Grouping", groupingMenu, notEmpty, 100);
 
+  // ---- GENERATOR_TOOL::Init: `menu.AddItem( PCB_ACTIONS::regenerateAllTuning, tuningPatternCondition, 100 )` (UI-LEFT-3 P3-17)
+  menu.addItem(A.regenerateAllTuning, (s) => (s.tuningPatterns ?? 0) > 0, 100);
+
   // ---- VIA_STITCH_TOOL::Init (KiCad 10)
   menu.addItem("pcbnew.Generator.clearStitchViaExclusions", (s) => (s.stitchesWithExclusions ?? 0) > 0, 100);
 
@@ -933,6 +941,8 @@ export function routerMenu(r: RouterMenuContext): MenuNode[] {
   menu.addMenu("Select Differential Pair Dimensions", () => [...r.diffPairMenu], () => r.diffPair);
   menu.addItem(R.settings, always);
   menu.addSeparator();
+  // GENERATOR_TOOL::Init: `routerTool->GetToolMenu().GetMenu().AddItem( PCB_ACTIONS::regenerateAllTuning, SELECTION_CONDITIONS::ShowAlways, 100 )`
+  menu.addItem(A.regenerateAllTuning, always, 100);
   // frame->AddStandardSubMenus
   menu.addSeparator(always, 1000);
   menu.addMenu("Zoom", zoomMenu, always, 1000);

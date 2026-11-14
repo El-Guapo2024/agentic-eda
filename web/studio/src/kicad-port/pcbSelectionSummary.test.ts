@@ -186,3 +186,16 @@ test("Zone Priority (r7 C7-2): a multi-layer zone can rise over a zone on its se
   const inHole = summarizePcbSelection(board({ routing: routing([], [ring, zone("in", { priority: 1, outline: [[8_000, 8_000], [12_000, 8_000], [12_000, 12_000], [8_000, 12_000]] })]) }), ["in"]);
   assert.deepEqual([inHole.zoneCanRaise, inHole.zoneCanLower], [false, false]);
 });
+
+test("P3-17: a tuning pattern counts as a generator, not a group: Update All Tuning Patterns, and no Ungroup or Enter Group", () => {
+  const b = board({
+    routing: routing([track("t1"), track("t2")]),
+    drawings: drawings({ groups: [{ id: "tp1", name: "", member_ids: ["t1", "t2"], generator: "tuning_pattern" }], tuning_patterns: [{ id: "tp1", member_ids: ["t1", "t2"], origin: { x: 0, y: 0 } }] }),
+  });
+  const s = summarizePcbSelection(b, ["tp1"]);
+  assert.deepEqual([s.total, s.groups, s.tuningPatterns, s.others?.generator], [1, 0, 1, 1]);
+  assert.equal(s.group.hasGroup, false, "`item->Type() == PCB_GROUP_T` is false for a generator");
+  const acts = menuActions(pcbSelectionMenu(s));
+  assert.ok(acts.includes("pcbnew.Generator.regenerateAllTuning"));
+  assert.ok(!acts.includes(A.groupEnter));
+});

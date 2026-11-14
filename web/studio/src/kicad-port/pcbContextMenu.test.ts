@@ -392,9 +392,23 @@ test("the router's menu: Cancel first, the tool and route commands, vias and pos
     "Select Track/Via Width >",
     "pcbnew.InteractiveRouter.SettingsDialog",
     "-",
+    // GENERATOR_TOOL::Init adds Update All Tuning Patterns to the router's menu, `ShowAlways`, order 100 (UI-LEFT-3 P3-17)
+    "pcbnew.Generator.regenerateAllTuning",
+    "-",
     "Zoom >",
     "Grid >",
   ]);
+});
+
+test("P3-17: a tuning pattern is a generator: Update All Tuning Patterns at order 100, no Enter Group or Ungroup", () => {
+  const s: PcbSelectionSummary = { ...emptyPcbSummary(), total: 1, unlocked: 1, tuningPatterns: 1, others: { generator: 1 }, group: { hasGroup: false, onlyOneGroup: false, hasUngroupedItems: true, hasMember: false } };
+  const acts = menuActions(pcbSelectionMenu(s));
+  assert.ok(acts.includes("pcbnew.Generator.regenerateAllTuning"));
+  assert.ok(!acts.includes(A.groupEnter));
+  assert.ok(!menuActions(pcbSelectionMenu({ ...emptyPcbSummary(), total: 1, unlocked: 1, groups: 1 })).includes("pcbnew.Generator.regenerateAllTuning"), "a plain group has none");
+  // it sits with the other order-100 entries, after Mirror / Rotate and before Cut
+  const o = outline(pcbSelectionMenu(s));
+  assert.ok(o.indexOf("pcbnew.Generator.regenerateAllTuning") < o.indexOf(A.cut) || o.indexOf(A.cut) < 0, JSON.stringify(o));
 });
 
 test("while routing: no new tool, no Break Track or Drag; Route From Other End and Attempt Finish need something left to connect to", () => {
