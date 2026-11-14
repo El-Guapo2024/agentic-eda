@@ -156,6 +156,28 @@ fn add_image(b: &mut Board<'_>, layer: &str, at: Point) -> String {
     images(b).last().unwrap().id.clone()
 }
 
+/// UI-LEFT-3 P3-10: `REFERENCE_IMAGE::SetTransformOriginOffset` kept by the image's id; `(0, 0)` keeps none, a deleted image takes its offset with it, and the board file has no
+/// token for it (KiCad's writer has none either).
+#[test]
+fn a_reference_images_transform_offset_is_kept_by_its_id_and_never_written() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+    let id = add_image(&mut b, "Cmts.User", p(mm(5.0), mm(6.0)));
+    let offset = p(mm(1.0), mm(-0.5));
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset })).unwrap();
+    assert_eq!(drawings(&b).board_items.image_offsets.get(&id), Some(&offset));
+    let pcb = eda_kicad::export_kicad_pcb(b.design(), &m, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+    let image = &pcb[pcb.find("(image").expect("the image is written")..];
+    let image = &image[..image.find("(data").unwrap()];
+    assert!(image.contains("(at 5 6)") && !image.contains("offset") && !image.contains("origin"), "the file has no transform offset: {image}");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset: p(Nm::ZERO, Nm::ZERO) })).unwrap();
+    assert!(drawings(&b).board_items.image_offsets.is_empty(), "the centre is no offset");
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id: id.clone(), offset })).unwrap();
+    b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::DeleteRefImage { id: id.clone() })).unwrap();
+    assert!(drawings(&b).board_items.image_offsets.is_empty(), "gone with its image");
+    assert_eq!(b.apply(&Cmd::PcbItem(pcb_items::PcbItemCmd::SetRefImageOffset { id, offset })).unwrap_err()[0].check, "ops_unknown_ref_image");
+}
+
 #[test]
 fn a_reference_image_is_added_with_an_id_of_ours_edited_and_deleted() {
     let m = model(&["F.Cu", "B.Cu"]);

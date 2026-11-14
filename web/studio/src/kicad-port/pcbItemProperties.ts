@@ -34,6 +34,26 @@ function imageCmd(i: BoardRefImage, patch: { layer?: string; scale_ppm?: number 
   return [{ op: "pcb_item", verb: "edit_ref_image", id: i.id, layer: patch.layer ?? i.layer, at: { x: i.x, y: i.y }, scale_ppm: patch.scale_ppm ?? i.scale_ppm }];
 }
 
+/** `KiROUND`. */
+const kiRound = (v: number): number => (v < 0 ? -Math.round(-v) : Math.round(v));
+
+/**
+ * `REFERENCE_IMAGE::SetImageScale` -> `scaleBy( ratio )`: the image is scaled about its transform origin (its centre plus the offset), so its centre moves and the offset
+ * scales with it: `edit_ref_image` with the new centre and scale, and `set_ref_image_offset` when there is an offset, in one step (UI-LEFT-3 P3-10). A scale that is not
+ * positive is ignored (`if( aScale <= 0 ) return;`).
+ */
+export function rescaleImageCmds(i: BoardRefImage, scalePpm: number): Cmd[] {
+  if (!(scalePpm > 0) || scalePpm === i.scale_ppm) return [];
+  const ratio = scalePpm / i.scale_ppm;
+  const ox = i.offset?.x ?? 0;
+  const oy = i.offset?.y ?? 0;
+  const origin = { x: i.x + ox, y: i.y + oy };
+  const at = { x: kiRound(origin.x - ox * ratio), y: kiRound(origin.y - oy * ratio) };
+  const cmds: Cmd[] = [{ op: "pcb_item", verb: "edit_ref_image", id: i.id, layer: i.layer, at, scale_ppm: scalePpm }];
+  if (ox !== 0 || oy !== 0) cmds.push({ op: "pcb_item", verb: "set_ref_image_offset", id: i.id, offset: { x: kiRound(ox * ratio), y: kiRound(oy * ratio) } });
+  return cmds;
+}
+
 /** Register `PCB_REFERENCE_IMAGE` and its properties (`PCB_REFERENCE_IMAGE_DESC`, pcbnew/pcb_reference_image.cpp). */
 function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => Choice[]): void {
   pm.registerType("PCB_REFERENCE_IMAGE");
@@ -56,20 +76,24 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
     name: "Scale",
     kind: "double",
     get: (i) => own(i).scale_ppm / SCALE_PPM,
-    set: (i, v) => {
-      const ppm = Math.round(num(v) * SCALE_PPM);
-      return ppm <= 0 || ppm === own(i).scale_ppm ? [] : imageCmd(own(i), { scale_ppm: ppm });
-    },
+    set: (i, v) => rescaleImageCmds(own(i), Math.round(num(v) * SCALE_PPM)),
   });
-  // "Transform Offset X/Y" (`SetTransformOriginOffsetX` / `Y`, between Scale and Width as `PCB_REFERENCE_IMAGE_DESC` registers them): the point the image is scaled
-  // about, from its centre. The board's image keeps none (the schematic's does, `SchExtras::image_offsets`), so the rows read 0 -- its centre -- and are read-only.
+  // "Transform Offset X/Y" (`SetTransformOriginOffsetX` / `Y`, between Scale and Width as `PCB_REFERENCE_IMAGE_DESC` registers them, `PT_COORD` with `ABS_X_COORD` /
+  // `ABS_Y_COORD`): the point the image is scaled about, from its centre (`BoardItems::image_offsets`, `set_ref_image_offset`; UI-LEFT-3 P3-10).
   (["X", "Y"] as const).forEach((axis) =>
     row({
       name: `Transform Offset ${axis}`,
       kind: "int",
-      display: "size",
-      get: () => 0,
-      readOnlyReason: "The board's reference image keeps no transform offset here: it is scaled about its centre.",
+      display: "coord",
+      coordType: axis === "X" ? "abs_x" : "abs_y",
+      get: (i) => (axis === "X" ? own(i).offset?.x : own(i).offset?.y) ?? 0,
+      set: (i, v) => {
+        const image = own(i);
+        const [ox, oy] = [image.offset?.x ?? 0, image.offset?.y ?? 0];
+        const n = Math.round(num(v));
+        if ((axis === "X" ? ox : oy) === n) return [];
+        return [{ op: "pcb_item", verb: "set_ref_image_offset", id: image.id, offset: axis === "X" ? { x: n, y: oy } : { x: ox, y: n } }];
+      },
     })
   );
   // `SetWidth` / `SetHeight`: `scaleBy( width / current width )`, ignored for a size that is not positive (`REFERENCE_IMAGE::SetWidth`); the rows are `PT_COORD`
@@ -84,8 +108,7 @@ function registerReferenceImage(pm: PM, add: Add, layerChoices: (c: PcbCtx) => C
         const image = own(i);
         const want = Math.round(num(v));
         if (want <= 0 || want === (name === "Width" ? image.w : image.h)) return [];
-        const ppm = name === "Width" ? scaleForWidthNm(image.px, image.ppi, want) : scaleForHeightNm(image.px, image.ppi, want);
-        return ppm <= 0 || ppm === image.scale_ppm ? [] : imageCmd(image, { scale_ppm: ppm });
+        return rescaleImageCmds(image, name === "Width" ? scaleForWidthNm(image.px, image.ppi, want) : scaleForHeightNm(image.px, image.ppi, want));
       },
     });
   side("Width");

@@ -28,6 +28,7 @@ import { viaChoiceOf } from "../../actions/routerViaActions";
 import { layerPairsOf } from "../../actions/pcbRouterSweep";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdDimension, CmdShape, Dimension, Part } from "../../api/types";
+import type { BoardRefImage } from "../../api/pcbItemTypes";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { drawStrokeWidthNm, graphicPolygonStyle } from "../../kicad-port/layerDefaults";
 import { activeLayerName, layerIsVisible } from "../../kicad-port/layerPresets";
@@ -93,6 +94,7 @@ import { findNearestContourCorner, flatVertices, moveContourCorner, zoneContours
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { fpDimensionClick, fpDimensionHeightOffGrid, fpDimensionMotion, fpDimensionOnLayer } from "../../kicad-port/fpDrawTools";
 import { boardDimensionStyle, dimensionPointAt, moveDimensionPoint, type DimPointId } from "../../kicad-port/dimensionDraw";
+import { imagePointAt, imagePointCmds, moveImagePoint, type ImagePointId } from "../../kicad-port/refImagePointEdit";
 import { toCmdDimension } from "../../kicad-port/dimensionConvert";
 import { fetchDimensionPreview } from "../../api/dimensionPreview";
 import { drawTableSession } from "../../kicad-port/tables";
@@ -203,6 +205,8 @@ type DragState =
   | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint }
   /** The point editor on a dimension (kicad-port/dimensionDraw.ts): `base` is the dimension at drag-start, `cmd` the dimension as the drag has it so far. */
   | { kind: "dimPoint"; dimId: string; base: Dimension; point: DimPointId; cmd: CmdDimension | null }
+  /** The point editor on a reference image (kicad-port/refImagePointEdit.ts, UI-LEFT-3 P3-10): `base` is the image at drag-start, every move recomputes from it. */
+  | { kind: "imagePoint"; imageId: string; base: BoardRefImage; point: ImagePointId }
   /** A selected tuning pattern's edit point (`PCB_TUNING_PATTERN::MakeEditPoints`) being dragged: the pattern is tuned again through an edit session (`genStartEdit` .. `genFinishEdit`). */
   | { kind: "tuneHandle"; drag: TuneHandleDrag };
 
@@ -257,6 +261,8 @@ export function Canvas() {
   const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][]; holes?: [number, number][][] } | null>(null);
   /** The live preview of a graphic shape's handle drag (the shape as it would be once dropped). */
   const [shapePointPreview, setShapePointPreview] = useState<{ id: string; shape: Shape } | null>(null);
+  /** The live preview of a reference image's handle drag (the image as it would be once dropped). */
+  const [imagePointPreview, setImagePointPreview] = useState<{ id: string; image: BoardRefImage } | null>(null);
   // The dimension the Draw Dimension tool is drawing (`id` null) or the point editor is reshaping, as the server works it out (`POST /api/dimension/preview`):
   // drawn in place of the committed one. Only the latest request's reply is kept.
   const [dimPreview, setDimPreview] = useState<{ id: string | null; dim: Dimension } | null>(null);
@@ -510,6 +516,7 @@ export function Canvas() {
       rulerFlip: { x: state.prefs.pcbInvertXAxis, y: state.prefs.pcbInvertYAxis },
       zoneCornerPreview,
       shapePointPreview,
+      imagePointPreview,
       dimensionPreview: dimPreview,
       dashRatios: boardDashRatios(board),
       layerVisible: state.layerVisible,
@@ -573,7 +580,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
+  }, [gridDisplay, gridYNm, board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.prefs.ratsnestThicknessPx, state.prefs.showCourtyardCollisions, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridNm, state.gridVisible, state.movePreview, state.cursorNm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.prefs.pcbInvertXAxis, state.prefs.pcbInvertYAxis, state.bcx, state.enteredGroupId, state.prefs.pcbNetNames, state.prefs.pcbTrackClearance, state.prefs.pcbPadClearance, ownClearances, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, imagePointPreview, dimPreview, containerSize, imageVersion, importPreview, menuHighlight]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -1251,6 +1258,16 @@ export function Canvas() {
           return;
         }
       }
+      // A selected reference image's corners and transform origin (`REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR`, kicad-port/refImagePointEdit.ts), unless it is locked.
+      const image = board.drawings?.images?.find((x) => x.id === soleId);
+      if (image && !isLocked(board, soleId)) {
+        const hit = imagePointAt(image, [wx, wy], zoneCornerToleranceNm(state.view.scale));
+        if (hit) {
+          dragRef.current = { kind: "imagePoint", imageId: image.id, base: image, point: hit };
+          setImagePointPreview(null);
+          return;
+        }
+      }
       // The same for a single selected graphic shape's handles (kicad-port/pcbPointEdit.ts), unless it is locked.
       const shape = api.shapeById(soleId);
       // `if( !item || item->IsLocked() )`: its own lock or a locked group above it
@@ -1624,6 +1641,10 @@ export function Canvas() {
       const cmd = moveDimensionPoint(drag.base, drag.point, at);
       drag.cmd = cmd;
       requestDimPreview(cmd, drag.dimId);
+    } else if (drag.kind === "imagePoint") {
+      if (!motion?.dragging) return; // `PCB_POINT_EDITOR::Main` starts editing at the drag
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.imageId]) });
+      setImagePointPreview({ id: drag.imageId, image: moveImagePoint(drag.base, drag.point, [p[0], p[1]]) });
     } else if (drag.kind === "shapePoint") {
       if (!motion?.dragging) return;
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.shapeId]) });
@@ -1722,6 +1743,12 @@ export function Canvas() {
       dimPreviewSeq.current++;
       setDimPreview(null);
       if (drag.cmd && JSON.stringify(drag.cmd) !== JSON.stringify(toCmdDimension(drag.base))) void api.cmd({ op: "edit_dimension", id: drag.dimId, dimension: drag.cmd });
+    } else if (drag.kind === "imagePoint") {
+      // Dropping the handle changes the image in place (`commit.Modify( item )`): its centre and scale, its origin; one undo step.
+      const preview = imagePointPreview;
+      setImagePointPreview(null);
+      const cmds = preview ? imagePointCmds(drag.base, preview.image) : [];
+      if (cmds.length > 0) void api.cmdBatch(cmds);
     } else if (drag.kind === "shapePoint") {
       // Dropping the handle changes the shape in place (`replace_shape`, as the point editor's `commit.Modify( item )`): it keeps its id, so its group and its hatch; one undo step.
       const preview = shapePointPreview;

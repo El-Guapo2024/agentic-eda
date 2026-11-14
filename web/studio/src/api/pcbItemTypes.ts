@@ -92,6 +92,8 @@ export interface BoardRefImage {
   px: [number, number];
   ppi: number;
   hash: string;
+  /** The transform origin offset (`REFERENCE_IMAGE::GetTransformOriginOffset`, `BoardItems::image_offsets`): the point Scale scales the image about, from its centre. Absent is the centre. */
+  offset?: PointXY;
 }
 
 /** `PCB_POINT`: a marker on the board (a cross with a ring), a snap anchor for the grid helper. `x`, `y` are its centre, `size` its extent in nm. */
@@ -252,6 +254,8 @@ export type PcbItemCmd =
   | { verb: "add_ref_image"; image: CmdRefImage }
   /** Reference Image Properties' OK (`DIALOG_REFERENCE_IMAGE_PROPERTIES::TransferDataFromWindow`): the position, the layer and the scale; the pixels stay. */
   | { verb: "edit_ref_image"; id: string; layer: string; at: PointXY; scale_ppm: number }
+  /** "Transform Offset X/Y" and the point editor's origin handle (`REFERENCE_IMAGE::SetTransformOriginOffset`): the point the image is scaled about, from its centre (UI-LEFT-3 P3-10). */
+  | { verb: "set_ref_image_offset"; id: string; offset: PointXY }
   /** The pixels replaced (Convert to Greyscale): the position, scale and layer stay. */
   | { verb: "set_ref_image_data"; id: string; data: string }
   | { verb: "delete_ref_image"; id: string }

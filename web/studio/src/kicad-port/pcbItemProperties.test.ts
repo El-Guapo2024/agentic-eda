@@ -154,6 +154,22 @@ test("the scale, the size and the layer of an image are one edit_ref_image that 
   }
 });
 
+test("Transform Offset X / Y set the point an image is scaled about; Scale, Width and Height scale about it (REFERENCE_IMAGE::scaleBy, UI-LEFT-3 P3-10)", () => {
+  const b = withImage();
+  assert.equal(pcbGrid(b, ["img_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Transform Offset X")?.writable, true);
+  assert.deepEqual(edit(b, ["img_a"], "Transform Offset X", 2_000_000), [{ op: "pcb_item", verb: "set_ref_image_offset", id: "img_a", offset: { x: 2_000_000, y: 0 } }]);
+  assert.deepEqual(edit(b, ["img_a"], "Transform Offset Y", 0), [], "the centre it already has");
+  b.drawings!.images![0] = { ...refImage, offset: { x: 2_000_000, y: -1_000_000 } };
+  // the origin (52, 39) stays where it is: the centre moves towards it by half the offset, and the offset halves
+  const half = edit(b, ["img_a"], "Scale", 0.5);
+  assert.deepEqual(half, [
+    { op: "pcb_item", verb: "edit_ref_image", id: "img_a", layer: "Cmts.User", at: { x: 51_000_000, y: 39_500_000 }, scale_ppm: 500_000 },
+    { op: "pcb_item", verb: "set_ref_image_offset", id: "img_a", offset: { x: 1_000_000, y: -500_000 } },
+  ]);
+  assert.equal(edit(b, ["img_a"], "Width", 24_000_000).length, 2, "a width is a scale about the origin too");
+  assert.equal(pcbGrid(b, ["img_a"], "mm").groups.flatMap((g) => g.rows).find((r) => r.name === "Transform Offset Y")?.value, -1_000_000);
+});
+
 // ------------------------------------------------------------------------------------------------------------------------------- points
 
 test("a point is a PCB_POINT with the rows of PCB_POINT_DESC: position, lock, layer and a Size; its lock is not writeable", () => {

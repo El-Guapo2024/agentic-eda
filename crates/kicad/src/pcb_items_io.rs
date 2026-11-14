@@ -27,6 +27,7 @@ pub(crate) fn read_all(root: &[Sexpr], refs: &mut ItemRefs) -> BoardItems {
         drill_charts: Vec::new(),
         drill_maps: crate::drill_chart_io::read_maps(root, &mut refs.drill_maps),
         drill_profile: crate::drill_chart_io::read_profile(root),
+        ..Default::default()
     }
 }
 

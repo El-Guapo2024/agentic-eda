@@ -419,6 +419,11 @@ pub struct BoardItems {
     /// The board's drill symbol profile (`(setup (drill_symbol_profile ..))`); `None` is KiCad's default one. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drill_profile: Option<crate::drill_chart::DrillSymbolProfile>,
+    /// A reference image's transform origin offset by its id (`REFERENCE_IMAGE::m_transformOriginOffset`, the Properties panel's "Transform Offset X/Y" and the point
+    /// editor's centre handle): the point Scale, Width and Height scale the image about, from its centre (`REFERENCE_IMAGE::scaleBy`). KiCad keeps it with the image in
+    /// memory and its file has no token for it, so the writer leaves it out, as the schematic's `SchExtras::image_offsets`. None is the centre. Additive (UI-LEFT-3 P3-10).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub image_offsets: std::collections::BTreeMap<String, Point>,
 }
 
 impl BoardItems {
@@ -427,6 +432,7 @@ impl BoardItems {
             && self.drill_charts.is_empty()
             && self.drill_maps.is_empty()
             && self.drill_profile.is_none()
+            && self.image_offsets.is_empty()
     }
 
     /// Every id of the items, for the id sets that name them (a shape's style is the shape's, not an item).
