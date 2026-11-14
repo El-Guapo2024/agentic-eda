@@ -2495,6 +2495,40 @@ fn a_labels_expression_names_its_net_as_kicad_cli_does() {
     }
 }
 
+/// UI-LEFT-3 S3-15 (`SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol` reads a placed symbol's `(property ..)` in file order, `saveSymbol` writes them so,
+/// `DIALOG_SYMBOL_PROPERTIES` lists them so): R1's user fields `Zeta`, `Alpha`, `Mid` come in that order -- not by name -- in Symbol Properties (the fields the
+/// studio sends for the unit), in the derived file, and after Move Up / Move Down (`reorder_fields`) in the new order, read back from the derived file so.
+#[test]
+fn a_kicad_files_user_fields_keep_the_files_order() {
+    let (dir, _root, _) = round_case("v18_fields", "order");
+    let names_of = |dir: &Path| -> Vec<String> {
+        let (_, design, model) = load(dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        crate::studio::owner_fields_json(sch, &model, &eda_model::ir::field_key("R1", 1)).iter().filter_map(|f| f["name"].as_str().map(String::from)).collect()
+    };
+    let user = |names: Vec<String>| -> Vec<String> { names.into_iter().filter(|n| !["Reference", "Value", "Footprint", "Datasheet", "Description"].contains(&n.as_str())).collect() };
+    assert_eq!(user(names_of(&dir)), ["Zeta", "Alpha", "Mid"], "Symbol Properties' rows");
+    let written_order = |dir: &Path| -> Vec<String> {
+        let (_, design, model) = load(dir).unwrap();
+        let text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }).unwrap();
+        let r1 = text.split("(symbol").find(|s| s.contains("\"R1\"") && s.contains("(lib_id")).map(|_| ()).and_then(|_| text.find("(property \"Reference\" \"R1\"")).unwrap();
+        let tail = &text[r1..];
+        let tail = &tail[..tail.find("(instances").unwrap_or(tail.len())];
+        tail.split("(property \"").skip(1).filter_map(|s| s.split('"').next().map(String::from)).filter(|n| ["Zeta", "Alpha", "Mid"].contains(&n.as_str())).collect()
+    };
+    assert_eq!(written_order(&dir), ["Zeta", "Alpha", "Mid"], "the derived file");
+    step(&dir, Cmd::sch(eda_ops::sch_edit::SchCmd::ReorderFields { key: eda_model::ir::field_key("R1", 1), names: vec!["Mid".into(), "Zeta".into(), "Alpha".into()] }), false, "test").unwrap();
+    assert_eq!(user(names_of(&dir)), ["Mid", "Zeta", "Alpha"], "Move Up / Move Down");
+    assert_eq!(written_order(&dir), ["Mid", "Zeta", "Alpha"]);
+    let (_, design, model) = load(&dir).unwrap();
+    let text = eda_kicad::export_kicad_sch(&design, &model, &eda_kicad::ExportMeta { date: "2026-11-14", title: "t" }).unwrap();
+    let (back, back_model, _) = eda_kicad::import_kicad_sch(&text).unwrap();
+    let back_sch = back.schematic.as_ref().unwrap();
+    let r1 = back_sch.symbols.iter().find(|s| s.id == "R1").unwrap();
+    let specs = eda_engine::fields::symbol_specs_in(back_sch, r1, back_model.part("R1"), "");
+    assert_eq!(user(specs.iter().map(|s| s.name.clone()).collect()), ["Mid", "Zeta", "Alpha"], "read back in the written order");
+}
+
 /// UI-LEFT-3 S3-20 (`SCH_CONNECTION::IsBusLabel` of the label's shown text, `NET_SETTINGS::ParseBusGroup`; `NETLIST_EXPORTER_XML::makeListOfNets`): a label
 /// whose `@{..}` fails stays as written, and `N@{1/0}` / `M@{5-}` then read as bus groups, as `Z{A B}` does -- kicad-cli's netlist has no node for R1.1, R1.2
 /// or R3.1, and neither has the studio's net list; `V_{OK}@{1+1}` (a subscript, then 2) is the net `/V_{OK}2`. kicad-cli reads the derived file so too.
