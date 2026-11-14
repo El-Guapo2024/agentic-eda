@@ -69,6 +69,8 @@ impl LibraryRecord {
             Some(o) if record.pads.len() == on.definition.pads.len() => o.iter().map(|&j| record.pads[j].clone()).collect::<Vec<PadMaskInfo>>(),
             _ => Vec::new(),
         };
+        // the library footprint's groups (KiCad's board footprint is its clone, `GetGroups()` with the rest: UI-LEFT-3 P3-31)
+        record.groups = carried_groups(&on.groups, &on.definition, target, order.as_deref());
         // the pad margins by the place of their pad in `target` (`PadEdit::nth` counts the pads of a number in the footprint's order)
         let nth_in = |f: &Footprint, i: usize| f.pads[..i].iter().filter(|p| p.number == f.pads[i].number).count() as u32 + 1;
         let mut pad_margins = Vec::new();
@@ -101,6 +103,65 @@ pub(crate) fn with_copper_pads_only(lib: &LibraryFootprint) -> LibraryFootprint 
     let mut out = lib.clone();
     out.pads.retain(|p| p.layers.is_empty() || p.layers.iter().any(|l| l.ends_with(".Cu")));
     out
+}
+
+/// The library footprint's groups (`groups`, each member by its place in `from`, the footprint the board's reader made of the library's) as the groups of `target`, the
+/// footprint the part is put on: a pad by its place in `target` (`order`, [`pad_order`]), a graphic or a text by its place while the two footprints' art is the same, a
+/// field, an item and a courtyard item as they are. A member with no place in `target` is left out, a group left with none goes (and its place in a group that held it),
+/// as the board's reader leaves a group (`resolveGroups`).
+fn carried_groups(groups: &[eda_model::ir::FootprintGroup], from: &Footprint, target: &Footprint, order: Option<&[usize]>) -> Vec<eda_model::ir::FootprintGroup> {
+    if groups.is_empty() {
+        return Vec::new();
+    }
+    let same_art = from.art.shapes == target.art.shapes && from.art.texts == target.art.texts;
+    let nth_in = |f: &Footprint, i: usize| f.pads[..i].iter().filter(|p| p.number == f.pads[i].number).count() + 1;
+    let pad_place = |member: &str| -> Option<String> {
+        let (number, k) = member.strip_prefix("pad:")?.rsplit_once('#')?;
+        let j = from.pads.iter().enumerate().filter(|(_, p)| p.number == number).nth(k.parse::<usize>().ok()?.checked_sub(1)?)?.0;
+        let i = order?.iter().position(|&o| o == j)?;
+        Some(format!("pad:{}#{}", target.pads[i].number, nth_in(target, i)))
+    };
+    let mut out: Vec<Option<eda_model::ir::FootprintGroup>> = groups
+        .iter()
+        .map(|g| {
+            let members = g
+                .members
+                .iter()
+                .filter_map(|m| match m.split_once(':').map(|(k, _)| k) {
+                    Some("art" | "arttext") => same_art.then(|| m.clone()),
+                    Some("pad") => pad_place(m),
+                    _ => Some(m.clone()),
+                })
+                .collect();
+            Some(eda_model::ir::FootprintGroup { members, ..g.clone() })
+        })
+        .collect();
+    // a group with no member goes, and its place in the groups that held it (until nothing changes)
+    loop {
+        let gone: Vec<String> = out.iter().enumerate().filter(|(_, g)| g.as_ref().is_some_and(|g| g.members.is_empty())).map(|(i, _)| format!("group:{i}")).collect();
+        if gone.is_empty() {
+            break;
+        }
+        for g in out.iter_mut() {
+            if g.as_ref().is_some_and(|g| g.members.is_empty()) {
+                *g = None;
+            } else if let Some(g) = g {
+                g.members.retain(|m| !gone.contains(m));
+            }
+        }
+    }
+    let kept: Vec<usize> = (0..out.len()).filter(|i| out[*i].is_some()).collect();
+    out.into_iter()
+        .flatten()
+        .map(|mut g| {
+            for m in g.members.iter_mut() {
+                if let Some(i) = m.strip_prefix("group:").and_then(|i| i.parse::<usize>().ok()) {
+                    *m = format!("group:{}", kept.iter().position(|k| *k == i).unwrap_or(usize::MAX));
+                }
+            }
+            g
+        })
+        .collect()
 }
 
 /// For each pad of `target`, the pad of `from` it is: the same number at the same place, else the k-th pad of the number. `None` when a pad has none, or the counts differ.
@@ -205,13 +266,21 @@ impl Board<'_> {
         let old: Vec<Zone> = rt.zones.iter().filter(|z| z.parent_footprint.as_deref() == Some(reference)).cloned().collect();
         rt.zones.retain(|z| z.parent_footprint.as_deref() != Some(reference));
         let had = !old.is_empty() || !zones.is_empty();
+        // (each old zone hands its uuid on once: to the copy's zone cloned from it first)
+        let mut used: Vec<String> = Vec::new();
+        let cloned: Vec<String> = zones.iter().filter(|z| old.iter().any(|o| !z.id.is_empty() && o.id == z.id)).map(|z| z.id.clone()).collect();
         for z in zones {
+            let source_id = z.id.clone();
             let mut placed = zone_through(z, &steps, copper);
             placed.parent_footprint = Some(reference.to_string());
             placed.id = String::new();
-            if let Some(o) = old.iter().find(|o| o.layer_set() == placed.layer_set() && o.outline == placed.outline && o.holes == placed.holes) {
+            // a zone as it was keeps its uuid; so does the one Edit Footprint's copy cloned from it, changed or not (the copy's zone keeps the board zone's id:
+            // `SaveFootprintToBoard`'s `fixUuid`)
+            let same = |o: &&Zone| !used.contains(&o.id) && !cloned.contains(&o.id) && o.layer_set() == placed.layer_set() && o.outline == placed.outline && o.holes == placed.holes;
+            if let Some(o) = old.iter().find(|o| !source_id.is_empty() && o.id == source_id).or_else(|| old.iter().find(same)) {
                 placed.uuid = o.uuid.clone();
                 placed.id = o.id.clone();
+                used.push(o.id.clone());
             }
             rt.zones.push(placed);
         }

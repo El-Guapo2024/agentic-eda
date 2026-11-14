@@ -509,6 +509,8 @@ impl Board<'_> {
         };
         // the pads are the new footprint's (with the pin names and types a renumbered pad carries over), each with the library pad's own margins
         edit.pads.clear();
+        // (a pad taken off the old footprint is not taken off the new one: KiCad's new footprint has every pad)
+        edit.removed_pads.clear();
         for m in library.as_ref().map(|l| l.pad_margins.clone()).unwrap_or_default() {
             edit.set_pad(m);
         }
@@ -612,6 +614,8 @@ impl Board<'_> {
             for p in record.pads.iter_mut() {
                 p.net = None;
             }
+            // the uuids Update Footprint on Board kept were the old children's (the new footprint's are new; Update Footprint on Board puts its own back after)
+            record.child_uuids.clear();
             dr.footprint_extras.push(record);
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }
@@ -700,6 +704,17 @@ impl Board<'_> {
     /// The part's footprint before its pad edits: the copy the board keeps of it, else what the model resolves.
     pub(crate) fn unedited_footprint(&self, part: &Part) -> Option<Footprint> {
         self.design.footprint_assignment(&part.reference).and_then(|a| a.definition.clone()).or_else(|| self.model.library_footprint_of(part))
+    }
+
+    /// The footprint the part's pad edits are laid on: [`Self::unedited_footprint`] without the pads taken off it (`FootprintEdit::removed_pads`, "Allow free pads"'
+    /// Delete of a pad). Its pads are the board's, in the board's order and numbering (`REF.NUM#k`); a copy of the footprint the board keeps is made from
+    /// [`Self::unedited_footprint`], so that the places the removals name stay true.
+    pub(crate) fn pads_footprint(&self, part: &Part) -> Option<Footprint> {
+        let base = self.unedited_footprint(part)?;
+        Some(match self.design.footprint_edit(&part.reference) {
+            Some(e) if !e.removed_pads.is_empty() => eda_model::fp_edit::without_removed(&base, &e.removed_pads),
+            _ => base,
+        })
     }
 }
 

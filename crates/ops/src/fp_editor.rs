@@ -203,10 +203,11 @@ fn library_forms(fp: &LibraryFootprint) -> Vec<String> {
 /// A board footprint's groups (`FootprintExtra::groups`, each member by its place) as the copy's (`FootprintItems::groups`, by the copy's ids, once the copy's items have
 /// theirs): `art:<i>` is the i-th graphic of the copy (`from_engine_footprint` lists the art's shapes in order), `arttext:<i>` its i-th text, `pad:<n>#<k>` the k-th pad
 /// numbered `n`, `field:<name>` the copy's field of that name (`PCB_FIELD` is groupable: `BOARD_ITEM::IsGroupableType`, and the clone keeps the group's field,
-/// UI-LEFT-3 F3-11), `item:<id>` the item, `group:<i>` the i-th group (`resolveGroups` creates every group before it resolves the members). A member the copy has no
-/// place for (a courtyard item kept as text) is left out, as KiCad leaves out of a group a member that is gone, and a group left with none is no group. A locked group's
-/// lock is the copy's kept lock of its id.
-fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootprint) {
+/// UI-LEFT-3 F3-11), `item:<id>` the item, `group:<i>` the i-th group (`resolveGroups` creates every group before it resolves the members), `uuid:<u>` a courtyard
+/// item kept as the file's text, which the copy holds as a graphic (`by_uuid`: the copy's id of the item the board writes with that uuid). A member the copy has no
+/// place for is left out, as KiCad leaves out of a group a member that is gone, and a group left with none is no group. A locked group's lock is the copy's kept lock
+/// of its id. The copy's id of each group, by its place (`None` for one left out).
+fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootprint, by_uuid: &dyn Fn(&str) -> Option<String>) -> Vec<Option<String>> {
     let pad_id = |number: &str, k: usize| fp.pads.iter().filter(|p| p.number == number).nth(k.saturating_sub(1)).map(|p| p.id.clone());
     let fields = crate::fp_items::live_ids(fp);
     let mut made: Vec<(eda_model::ir::Group, Vec<usize>)> = Vec::new();
@@ -221,6 +222,7 @@ fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootpri
                 "pad" => rest.split_once('#').and_then(|(n, k)| pad_id(n, k.parse().ok()?)),
                 "field" => Some(format!("{}{rest}", crate::fp_items::FIELD_PREFIX)).filter(|id| fields.contains(id)),
                 "item" => fp.items.has(rest).then(|| rest.to_string()),
+                "uuid" | "crtyd" => by_uuid(m),
                 "group" => {
                     inner.extend(rest.parse::<usize>().ok());
                     None
@@ -250,17 +252,24 @@ fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootpri
             fp.kicad.locked.insert(ids[i].clone());
         }
     }
+    let kept: Vec<Option<String>> = made.iter().map(|(g, _)| (!g.member_ids.is_empty()).then(|| g.id.clone())).collect();
     fp.items.groups = made.into_iter().map(|(g, _)| g).filter(|g| !g.member_ids.is_empty()).collect();
+    kept
 }
 
 /// The reverse of [`copy_groups`]: the copy's groups as the board footprint's, each member by its place in the footprint the copy becomes (`new`, the copy's engine
 /// footprint: the art's shapes are the copy's graphics on the art layers, in order). A member that has no place there is left out, and a group left with none is no group.
-fn board_groups(fp: &LibraryFootprint) -> Vec<eda_model::ir::FootprintGroup> {
+/// A courtyard graphic of the copy is `courtyard_member`'s: `uuid:<u>` while the board writes the courtyard items its file had (their own uuids), else `crtyd:<j>`.
+fn board_groups(fp: &LibraryFootprint, courtyard_member: &dyn Fn(usize, &str) -> String) -> Vec<eda_model::ir::FootprintGroup> {
     let art_ids: Vec<&str> = fp.graphics.iter().filter(|g| eda_model::fp_art::is_art_layer(g.layer())).map(|g| g.id()).collect();
+    let crtyd_ids: Vec<&str> = fp.graphics.iter().filter(|g| !eda_model::fp_art::is_art_layer(g.layer())).map(|g| g.id()).collect();
     let index_of_group: std::collections::BTreeMap<&str, usize> = fp.items.groups.iter().enumerate().map(|(i, g)| (g.id.as_str(), i)).collect();
     let place = |id: &str| -> Option<String> {
         if let Some(i) = art_ids.iter().position(|a| *a == id) {
             return Some(format!("art:{i}"));
+        }
+        if let Some(j) = crtyd_ids.iter().position(|a| *a == id) {
+            return Some(courtyard_member(j, id));
         }
         if let Some(i) = fp.texts.iter().position(|t| t.id == id) {
             return Some(format!("arttext:{i}"));
@@ -284,6 +293,48 @@ fn board_groups(fp: &LibraryFootprint) -> Vec<eda_model::ir::FootprintGroup> {
         .iter()
         .map(|g| eda_model::ir::FootprintGroup { name: g.name.clone(), locked: fp.kicad.locked.contains(&g.id), members: g.member_ids.iter().filter_map(|m| place(m)).collect() })
         .collect()
+}
+
+/// `SaveFootprintToBoard`'s `fixUuid` over the copy's children: each by its place in the footprint the copy becomes (the places of [`board_groups`]), with the uuid of the
+/// board item it was cloned from (`BoardFootprintCopy::board_uuids`), else a new one (`KIID()`, made from the reference and the child's id here). A group's place
+/// counts the groups the board keeps (those with a member).
+fn child_uuids_of(copy: &BoardFootprintCopy, courtyard_member: &dyn Fn(usize, &str) -> String) -> std::collections::BTreeMap<String, String> {
+    let fp = &copy.footprint;
+    let mut out = std::collections::BTreeMap::new();
+    let mut put = |place: String, id: &str| {
+        let u = copy.board_uuids.get(id).cloned().unwrap_or_else(|| eda_kicad::uuid_from_seed(&format!("footprint:{}:new:{id}", copy.reference)));
+        out.insert(place, u);
+    };
+    for (i, g) in fp.graphics.iter().filter(|g| eda_model::fp_art::is_art_layer(g.layer())).enumerate() {
+        put(format!("art:{i}"), g.id());
+    }
+    for (j, g) in fp.graphics.iter().filter(|g| !eda_model::fp_art::is_art_layer(g.layer())).enumerate() {
+        // (a courtyard item written as its kept text keeps its own uuid there)
+        let place = courtyard_member(j, g.id());
+        if place.starts_with("crtyd:") {
+            put(place, g.id());
+        }
+    }
+    for (i, t) in fp.texts.iter().enumerate() {
+        put(format!("arttext:{i}"), &t.id);
+    }
+    let mut nth: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for p in &fp.pads {
+        let k = nth.entry(p.number.as_str()).or_insert(0);
+        *k += 1;
+        put(format!("pad:{}#{k}", p.number), &p.id);
+    }
+    for id in crate::fp_items::live_ids(fp).iter().filter(|id| crate::fp_items::field_name(id).is_some()) {
+        put(id.clone(), id);
+    }
+    let placed = eda_model::fp_items_place::placed_kinds(&fp.items);
+    for id in placed.ids() {
+        put(format!("item:{id}"), id);
+    }
+    for (i, g) in fp.items.groups.iter().filter(|g| !g.member_ids.is_empty()).enumerate() {
+        put(format!("group:{i}"), &g.id);
+    }
+    out
 }
 
 impl Board<'_> {
@@ -382,8 +433,13 @@ impl Board<'_> {
         let fpid = footprint_name_of(&part);
         let key = BoardFootprintCopy::key_of(reference);
 
-        // the pads, drawings, courtyard and models as the board has them (`aFootprint->Clone()`)
-        let mut fp = LibraryFootprint::from_engine_footprint(&bf.footprint);
+        // the pads, drawings, courtyard and models as the board has them (`aFootprint->Clone()`): the courtyard's graphics too, after the drawings -- the items the board
+        // file had, else the library footprint's (`board_courtyard`)
+        let art_count = bf.footprint.art.shapes.len();
+        let courtyard = self.board_courtyard(reference);
+        let mut engine = bf.footprint.clone();
+        engine.art.shapes.extend(courtyard.iter().map(|(s, _)| s.clone()));
+        let mut fp = LibraryFootprint::from_engine_footprint(&engine);
         fp.name = key.clone();
         let edit = self.design.footprint_edit(reference).cloned();
         // the Reference shows the part's reference (the clone keeps it), the Value the part's value
@@ -467,15 +523,78 @@ impl Board<'_> {
             }
         }
         fp.assign_missing_ids();
+        // `m_boardFootprintUuids`: the uuid of the board item each child of the copy is cloned from, by the child's id (`recordAndUpdateUuid`)
+        let places = eda_kicad::footprint_child_uuids(&self.design, self.model, reference);
+        let mut board_uuids: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        let by_place = |board_uuids: &mut std::collections::BTreeMap<String, String>, place: String, id: &str| {
+            if let Some(u) = places.get(&place) {
+                board_uuids.insert(id.to_string(), u.clone());
+            }
+        };
+        for (i, g) in fp.graphics.iter().take(art_count).enumerate() {
+            by_place(&mut board_uuids, format!("art:{i}"), g.id());
+        }
+        for (i, t) in fp.texts.iter().enumerate() {
+            by_place(&mut board_uuids, format!("arttext:{i}"), &t.id);
+        }
+        let mut nth: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for p in &fp.pads {
+            let k = nth.entry(p.number.as_str()).or_insert(0);
+            *k += 1;
+            by_place(&mut board_uuids, format!("pad:{}#{k}", p.number), &p.id);
+        }
+        for id in crate::fp_items::live_ids(&fp).iter().filter(|id| crate::fp_items::field_name(id).is_some()) {
+            by_place(&mut board_uuids, id.clone(), id);
+        }
+        let placed = eda_model::fp_items_place::placed_kinds(&fp.items);
+        for id in placed.ids() {
+            by_place(&mut board_uuids, format!("item:{id}"), id);
+        }
+        // the courtyard's graphics: a kept item by the uuid its text has, a library footprint's by the one it is written with
+        for (j, g) in fp.graphics.iter().skip(art_count).enumerate() {
+            match courtyard.get(j).and_then(|(_, u)| u.clone()) {
+                Some(u) => {
+                    board_uuids.insert(g.id().to_string(), u);
+                }
+                None => by_place(&mut board_uuids, format!("crtyd:{j}"), g.id()),
+            }
+        }
         // its groups, by the copy's ids
         if let Some(e) = extra.as_ref().filter(|e| !e.groups.is_empty() && e.source_name == written) {
-            copy_groups(&e.groups, &mut fp);
+            let crtyd: Vec<(usize, String)> = fp.graphics.iter().skip(art_count).map(|g| g.id().to_string()).enumerate().collect();
+            let by_uuid = |m: &str| -> Option<String> {
+                let (kind, rest) = m.split_once(':')?;
+                match kind {
+                    "uuid" => crtyd.iter().find(|(_, id)| board_uuids.get(id).is_some_and(|u| u == rest)).map(|(_, id)| id.clone()),
+                    _ => crtyd.iter().find(|(j, _)| rest.parse::<usize>().ok() == Some(*j)).map(|(_, id)| id.clone()),
+                }
+            };
+            let ids = copy_groups(&e.groups, &mut fp, &by_uuid);
+            for (i, id) in ids.iter().enumerate() {
+                if let (Some(id), Some(u)) = (id, places.get(&format!("group:{i}"))) {
+                    board_uuids.insert(id.clone(), u.clone());
+                }
+            }
         }
         let lib = self.footprint_library_mut();
         // the editor holds one footprint: a copy of another board footprint is gone (`Clear_Pcb`)
         lib.board_copies.clear();
-        lib.board_copies.push(BoardFootprintCopy { reference: reference.to_string(), fpid, footprint: fp });
+        lib.board_copies.push(BoardFootprintCopy { reference: reference.to_string(), fpid, footprint: fp, board_uuids });
         Ok(())
+    }
+
+    /// The courtyard graphics of the board footprint `reference` in its definition's frame, each with the uuid the board writes it with when that is its own: the
+    /// courtyard items its board file had while the board writes them (`FootprintExtra::courtyard_items`, the uuids of their text), else the library footprint's
+    /// (`FpArt::courtyard`). None for a courtyard the board makes up from the pads.
+    fn board_courtyard(&self, reference: &str) -> Vec<(eda_model::fp_art::FpShape, Option<String>)> {
+        let Some(part) = self.model.part(reference) else { return Vec::new() };
+        let side = self.pose_of(reference).map_or(Side::Top, |p| p.side);
+        let written = eda_model::fp_items_place::written_name(self.model, part);
+        let extra = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference));
+        if let Some(e) = extra.filter(|e| !e.courtyard_items.is_empty() && e.source_name == written && e.courtyard_bottom == (side == Side::Bottom)) {
+            return eda_kicad::courtyard_items::courtyard_item_shapes(e);
+        }
+        self.model.footprint_of(part).map(|f| f.art.courtyard.into_iter().map(|s| (s, None)).collect()).unwrap_or_default()
     }
 
     /// See [`FpEditorCmd::Save`].
@@ -494,6 +613,9 @@ impl Board<'_> {
         let fpid = if part.footprint.is_none() && part.package.as_deref() == Some(copy.fpid.as_str()) { eda_model::footprint::footprint_lib_id(&part) } else { copy.fpid.clone() };
         let mut new = copy.footprint.to_engine_footprint();
         new.name = fpid.clone();
+        // the copy's courtyard graphics are the footprint's (KiCad's copy is the board footprint, its courtyard lines with it)
+        new.art.courtyard = eda_model::fp_art::courtyard_from_library_kept(&copy.footprint.graphics, &copy.footprint.kicad);
+        let opened_courtyard: Vec<eda_model::ir::Shape> = self.board_courtyard(&reference).into_iter().map(|(s, _)| s.shape).collect();
         let old = self.model.footprint_of(&part).unwrap_or_default();
         // the board file's record of the footprint as it stands, and whether its file form is the footprint's (the writer writes its tokens)
         let old_record = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).cloned();
@@ -609,8 +731,9 @@ impl Board<'_> {
         // the copy's items' locks (UI-LEFT PP14); its zones go on the board below
         extra.locked_items = copy.footprint.kicad.locked.iter().filter(|id| extra.items.has(id)).cloned().collect();
         extra.zones_pose = None;
-        // the courtyard as the file drew it, while the copy's courtyard is the board's
-        if new.courtyard != old.courtyard {
+        // the courtyard as the file drew it, while the copy's courtyard is the board's: its box and its graphics as the copy was given them
+        let courtyard_kept = new.courtyard == old.courtyard && new.art.courtyard.iter().map(|s| &s.shape).eq(opened_courtyard.iter());
+        if !courtyard_kept {
             extra.courtyard_items.clear();
             extra.courtyard_bottom = false;
             extra.no_courtyard = false;
@@ -625,10 +748,20 @@ impl Board<'_> {
         // (the board's art as the copy holds it, so a copy nothing was drawn in compares equal); the copy's own groups, each member by its place, when it has any (the copy
         // shows the board's: UI-LEFT FF4)
         let old_art = LibraryFootprint::from_engine_footprint(&old).to_engine_footprint().art;
+        // (a courtyard graphic of a group: by the uuid of its kept text while the board writes those, else by its place among the courtyard's graphics)
+        let kept_text = courtyard_kept && !extra.courtyard_items.is_empty();
+        let courtyard_member = |j: usize, id: &str| match copy.board_uuids.get(id).filter(|_| kept_text) {
+            Some(u) => format!("uuid:{u}"),
+            None => format!("crtyd:{j}"),
+        };
         if !fp.items.groups.is_empty() {
-            extra.groups = board_groups(fp).into_iter().filter(|g| !g.members.is_empty()).collect();
-        } else if !same_pads || new.art != old_art || extra.source_name != written {
+            extra.groups = board_groups(fp, &courtyard_member).into_iter().filter(|g| !g.members.is_empty()).collect();
+        } else if !same_pads || (eda_model::fp_art::FpArt { courtyard: Vec::new(), ..new.art.clone() }) != old_art || extra.source_name != written {
             extra.groups.clear();
+        }
+        // `fixUuid`: each child of the copy takes the uuid of the board item it was cloned from (`m_boardFootprintUuids`), a child the copy added a new one
+        if !copy.board_uuids.is_empty() {
+            extra.child_uuids = child_uuids_of(&copy, &courtyard_member);
         }
         // the footprint's mask margin, solder mask bridges, net ties, clearance and zone connection (a footprint with no pad writes its own) are the board file's facts
         extra.solder_mask_margin = fp.settings.solder_mask_margin;

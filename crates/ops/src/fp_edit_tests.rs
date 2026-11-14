@@ -487,7 +487,7 @@ fn a_footprints_pad_edit_that_differs_from_the_libraries_padstack_is_found_by_pa
 
 /// UI-LEFT-3 R3-7, "Allow free pads": a pad moved, turned or mirrored on its own (`PAD::Move`, `PAD::Rotate`, `mirrorPad`) keeps what it became as a pad edit of its
 /// footprint, in the footprint's frame, so the footprint moved after takes it along; two pads swap their copper's places (`PAD::SwapShapePositions`); a pad is
-/// turned over with its footprint only.
+/// turned over alone (`PAD::Flip`).
 #[test]
 fn a_free_pad_moves_turns_mirrors_and_swaps_on_its_own() {
     let m = model(&["F.Cu", "B.Cu"]);
@@ -513,6 +513,7 @@ fn a_free_pad_moves_turns_mirrors_and_swaps_on_its_own() {
     let at = |b: &Board<'_>, r: &str, n: &str| edit_of(b, r).and_then(|e| e.pad(n, 1)).and_then(|e| e.at);
     b.apply(&Cmd::SwapItems { ids: ids(&["U1.1", "U1.3"]), centres: Default::default() }).unwrap();
     assert_eq!((at(&b, "U1", "1"), at(&b, "U1", "3")), (Some(p(mm(-1.5), mm(0.7))), Some(p(mm(-1.5), mm(-0.6)))));
-    // a pad is turned over with its footprint only
-    assert!(refusal(&mut b, Cmd::FlipItems { ids: ids(&["U1.2"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).contains("ops_bad_transform"));
+    // a pad is turned over alone (`PAD::Flip`, crate::free_pads): the footprint stays on its side
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1.2"]), pivot: p(mm(30.0), mm(20.0)), direction: FlipDirection::LeftRight }).unwrap();
+    assert_eq!((pad2(&b).opposite_side, pose(&b, "U1").side), (Some(true), eda_model::ir::Side::Top));
 }

@@ -375,6 +375,10 @@ pub struct PadEdit {
     /// and `(back_post_machining ..)` in place of the ones a board file gave it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drill_props: Option<crate::via_extra::PadDrillProps>,
+    /// `PAD::Flip` of the pad alone ("Allow free pads", UI-LEFT-3; `EDIT_TOOL::Flip` keeps a free pad as itself): `Some(true)` puts an SMD pad's copper on the side
+    /// opposite its footprint's ([`Pad::opposite_side`]), `Some(false)` on its footprint's side; `None` keeps the library's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposite_side: Option<bool>,
 }
 
 impl PadEdit {
@@ -410,6 +414,7 @@ impl PadEdit {
             && self.pin_type.is_none()
             && self.connector.is_none()
             && self.drill_props.is_none()
+            && self.opposite_side.is_none()
     }
 
     /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius, the copper's
@@ -429,6 +434,7 @@ impl PadEdit {
             || self.chamfer_corners.is_some()
             || self.custom.is_some()
             || self.stack.is_some()
+            || self.opposite_side.is_some()
     }
 
     /// The same pad, identified: `REF.NUM` for the first pad with the number, `REF.NUM#k` for the k-th (k from 2).
@@ -519,6 +525,43 @@ pub struct FootprintEdit {
     /// footprint has from its board file ([`crate::ir::FootprintExtra::embedded`]); `Some` of an empty list is a footprint that embeds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded: Option<crate::embedded_files::EmbeddedFiles>,
+    /// The pads taken off the footprint (`EDIT_TOOL::DeleteItems`' `case PCB_PAD_T` with "Allow free pads": `commit.Remove( pad )`), each by its place in the
+    /// footprint before any was taken off -- the library's or the board's copy of it, the order of the board file's pad records (`FootprintExtra::pads`) -- sorted.
+    /// [`edited_footprint`] leaves them out before it lays the pad edits on, so the pad edits, the studio's pad ids (`REF.NUM#k`) and every reader that counts the
+    /// footprint's pads see the footprint without them. An exchange (Update / Change Footprint) brings them back, as KiCad's new footprint has every pad.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_pads: Vec<RemovedPad>,
+}
+
+/// A pad taken off a board footprint ([`FootprintEdit::removed_pads`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemovedPad {
+    /// Its place in the footprint before any pad was taken off.
+    pub index: usize,
+    /// Its number, which that place must still hold (a footprint whose pads changed under the edit keeps the pad).
+    pub number: String,
+}
+
+/// `footprint` without the pads `removed` names ([`FootprintEdit::removed_pads`]): a place the footprint has with the number it names goes, any other is skipped.
+pub fn without_removed(footprint: &Footprint, removed: &[RemovedPad]) -> Footprint {
+    if removed.is_empty() {
+        return footprint.clone();
+    }
+    let mut out = footprint.clone();
+    out.pads = footprint.pads.iter().enumerate().filter(|(i, p)| !removed.iter().any(|r| r.index == *i && r.number == p.number)).map(|(_, p)| p.clone()).collect();
+    out
+}
+
+/// The place, in the footprint before any pad was taken off, of the `index`-th pad of the footprint without them (`removed` sorted by place).
+pub fn base_pad_index(removed: &[RemovedPad], index: usize) -> usize {
+    let mut i = index;
+    for r in removed {
+        if r.index <= i {
+            i += 1;
+        }
+    }
+    i
 }
 
 impl FootprintEdit {
@@ -528,7 +571,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none() && self.solder_paste_margin.is_none() && self.solder_paste_ratio.is_none()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none() && self.embedded.is_none() && self.extruded_body.is_none() && self.solder_paste_margin.is_none() && self.solder_paste_ratio.is_none() && self.removed_pads.is_empty()
     }
 
     /// The edit of the `nth` pad numbered `number`.
@@ -793,6 +836,9 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     if let Some(at) = e.at {
         pad.at = (at.x, at.y);
     }
+    if let Some(o) = e.opposite_side {
+        pad.opposite_side = o;
+    }
     if let Some(r) = e.roundrect_ratio {
         pad.roundrect_ratio = Some(r);
     }
@@ -926,11 +972,35 @@ pub fn pad_edits_between(base: &Footprint, edited: &Footprint) -> Vec<PadEdit> {
         if pad.ext.stack != was.ext.stack {
             e.stack = Some(pad.ext.stack.clone());
         }
+        if pad.opposite_side != was.opposite_side {
+            e.opposite_side = Some(pad.opposite_side);
+        }
         if !e.is_empty() {
             out.push(e);
         }
     }
     out
+}
+
+/// The pads of `base` that `edited` has no more ([`FootprintEdit::removed_pads`]): each pad of `edited` is the pad of `base` with its number at its place, else the next
+/// one with its number; a pad of `base` none is is taken off. Empty when `edited` has as many pads as `base` or more, or a pad of `edited` is none of `base`'s.
+pub fn removed_between(base: &Footprint, edited: &Footprint) -> Vec<RemovedPad> {
+    if edited.pads.len() >= base.pads.len() {
+        return Vec::new();
+    }
+    let mut taken = vec![false; base.pads.len()];
+    let mut unplaced = Vec::new();
+    for p in &edited.pads {
+        match base.pads.iter().enumerate().position(|(j, q)| !taken[j] && q.number == p.number && q.at == p.at) {
+            Some(j) => taken[j] = true,
+            None => unplaced.push(p),
+        }
+    }
+    for p in unplaced {
+        let Some(j) = base.pads.iter().enumerate().position(|(j, q)| !taken[j] && q.number == p.number) else { return Vec::new() };
+        taken[j] = true;
+    }
+    taken.iter().enumerate().filter(|(_, t)| !**t).map(|(j, _)| RemovedPad { index: j, number: base.pads[j].number.clone() }).collect()
 }
 
 /// `footprint` with the edits laid on its pads. An edit that names a pad the footprint does not have is skipped.
@@ -944,9 +1014,10 @@ pub fn patched_footprint(footprint: &Footprint, edits: &[PadEdit]) -> Footprint 
     out
 }
 
-/// `footprint` as the board has it with `edit` laid on: the pad edits ([`patched_footprint`]) and the list of 3D models the edit sets.
+/// `footprint` as the board has it with `edit` laid on: the pads taken off left out ([`without_removed`]), the pad edits ([`patched_footprint`]) and the list of 3D
+/// models the edit sets.
 pub fn edited_footprint(footprint: &Footprint, edit: &FootprintEdit) -> Footprint {
-    let mut out = patched_footprint(footprint, &edit.pads);
+    let mut out = patched_footprint(&without_removed(footprint, &edit.removed_pads), &edit.pads);
     if let Some(models) = &edit.models3d {
         crate::fp_models::set_models(&mut out, models);
     }
@@ -1062,6 +1133,19 @@ mod tests {
         assert_eq!(parse_pad_id("J1.A.1#3"), Some(("J1".into(), "A.1".into(), 3)));
         assert_eq!(parse_pad_id("J1"), None);
         assert_eq!(parse_pad_id(".3"), None);
+    }
+
+    #[test]
+    fn the_pads_a_footprint_lost_are_found_by_number_and_place() {
+        let base = Footprint { name: "X".into(), pads: vec![pad("1", (Nm::ZERO, Nm::ZERO)), pad("MP", (Nm::new(-3_000_000), Nm::ZERO)), pad("MP", (Nm::new(3_000_000), Nm::ZERO))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let mut edited = base.clone();
+        edited.pads.remove(1);
+        assert_eq!(removed_between(&base, &edited), [RemovedPad { index: 1, number: "MP".into() }], "the first MP, by its place");
+        assert_eq!(without_removed(&base, &removed_between(&base, &edited)).pads, edited.pads);
+        assert!(removed_between(&base, &base).is_empty());
+        let mut other = edited.clone();
+        other.pads[0].number = "9".into();
+        assert!(removed_between(&base, &other).is_empty(), "a pad the base has not: nothing is said");
     }
 
     #[test]

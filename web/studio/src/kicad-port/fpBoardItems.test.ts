@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Part } from "../api/types";
 import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../api/pcbItemTypes";
-import { fpDimensionHitDistance, fpItemsBounds, fpItemsHitDistance, fpTableHitDistance, parseFpItemId, shownFootprintImages } from "./fpBoardItems";
+import { fpDimensionHitDistance, fpItemsBounds, fpItemsHitDistance, fpTableHitDistance, onPrivateLayer, parseFpItemId, shownFootprintImages } from "./fpBoardItems";
 import { footprintBox } from "./footprintBox";
 
 const box: BoardTextBox = {
@@ -25,8 +25,8 @@ test("the id of a footprint's item names the footprint and the item", () => {
 test("a click on any of a footprint's items is a click on the footprint, while its layer and side show", () => {
   assert.equal(fpItemsHitDistance(part, 12_000_000, 11_000_000, {}), 0, "inside the text box");
   assert.equal(fpItemsHitDistance(part, 5_000_000, 0, {}), 0, "on the point");
-  assert.equal(fpItemsHitDistance(part, 0, 0, {}), 0, "on the image");
-  assert.equal(fpItemsHitDistance(part, 0, 0, { "obj:bitmaps": false }), 4_000_000, "the Images object off: the nearest is then the barcode's box, 4 mm away");
+  // a reference image is not drawn on the board ("Never draw footprint reference images on board", UI-LEFT-3 P3-31): the nearest is the barcode's box, 4 mm away
+  assert.equal(fpItemsHitDistance(part, 0, 0, {}), 4_000_000, "not on the image");
   assert.equal(fpItemsHitDistance(part, 12_000_000, 11_000_000, { "obj:footprints_front": false }), Infinity, "a hidden side hides the footprint's items");
 });
 
@@ -38,10 +38,17 @@ test("the footprint's box counts its text boxes and barcodes, not its images; wi
   assert.deepEqual(without, [-250_000, -250_000, 14_050_000, 12_050_000], "the barcode on Dwgs.User is an annotation");
 });
 
-test("the images of the footprints whose side and layer show", () => {
-  assert.equal(shownFootprintImages({ parts: [part] }, {}).length, 1);
-  assert.equal(shownFootprintImages({ parts: [part] }, { "obj:footprints_front": false }).length, 0);
-  assert.equal(shownFootprintImages({ parts: [{ ...part, placed: false }] }, {}).length, 0);
+test("the board draws no footprint's reference image (`PCB_PAINTER::Draw`, UI-LEFT-3 P3-31)", () => {
+  assert.equal(shownFootprintImages({ parts: [part] }, {}).length, 0);
+});
+
+test("an item on one of the footprint's private layers is not drawn, boxed or hit on the board (`GetPrivateLayers`, UI-LEFT-3 P3-31)", () => {
+  const privateDwgs = { ...part, private_layers: ["Dwgs.User"] } as unknown as Part;
+  // the barcode is on Dwgs.User: it no longer counts in the box, nor is it hit
+  assert.deepEqual(fpItemsBounds(privateDwgs), fpItemsBounds({ ...part, items: { ...part.items, barcodes: [] } } as unknown as Part));
+  assert.notEqual(fpItemsHitDistance(privateDwgs, 0, 0, {}), 4_000_000);
+  assert.equal(onPrivateLayer(privateDwgs, "Dwgs.User"), true);
+  assert.equal(onPrivateLayer(privateDwgs, "F.SilkS"), false);
 });
 
 // UI-LEFT PP14: a footprint's dimension and table are hit by their lines and cells (a click picks the footprint), and count in its box -- the dimension only with the text

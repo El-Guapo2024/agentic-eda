@@ -28,6 +28,8 @@
 //! | `PCB_TABLE` (`pcb_table.cpp`) | its first cell's position | moved by the difference |
 //! | `PCB_GROUP` (`pcb_group.cpp`) | the centre of its bounding box | moved by the difference |
 //! | `PAD` (`pad.cpp`) | its position (the hole) | moved there |
+//! | `PCB_GENERATOR` (`pcb_generator.h`): a tuning pattern, a via stitching | `m_origin` (a via stitching: its outline's first corner) | `m_origin = aPos` |
+//! | `PCB_GRID_ITEM`, `PCB_DRILL_MAP` (KiCad 25ec2335) | `m_pos`, `m_offset` | set there |
 //!
 //! `GetLayer` / `SetLayer` for the second rule: a via's is its drill's start (`PCB_VIA::GetLayer` / `SetLayer`, `Padstack().Drill().start`), a zone's is its one layer
 //! or `UNDEFINED_LAYER` for a zone on several, which `ZONE::SetLayer` ignores (an empty `LSET`, see [`set_zone_layer`]), a shape leaves its net when it lands off copper
@@ -43,8 +45,14 @@
 //! - A via: a through via (from the outermost copper layer to the other) stays one, as `PCB_VIA::SanitizeLayers` and the writer (`VIATYPE::THROUGH`: `F_Cu`, `B_Cu`) make it
 //!   on the next load; a blind or buried via given a start below its end has the two in order (`SanitizeLayers`'s `std::swap`), and one whose start would be its end keeps
 //!   its layers (KiCad would make a via on one layer).
-//! - Not swapped (refused, the studio leaves them out): tuning patterns and via stitchings (`PCB_GENERATOR::SetPosition` sets their origin alone, away from their tracks
-//!   and vias), table cells (a `PCB_TABLECELL` moved out of its table), KiCad 10's grid items and drill charts.
+//! - Not swapped (refused, the studio leaves them out): a table cell. KiCad's `PCB_TABLECELL` (a text box, `EDA_SHAPE::setPosition`) would leave its table's grid until
+//!   something normalizes the table; the studio's table keeps its cells on the grid (`PCB_TABLE::Normalize`'s layout is all it holds, `eda_model::table`).
+//!
+//! The generators and KiCad 10's items (UI-LEFT-3 P3-33) as KiCad has them: a tuning pattern and a via stitching are both `PCB_GENERATOR_T` -- `GetPosition` is
+//! `m_origin` (25ec2335 `PCB_VIA_STITCH::GetPosition`: its outline's first corner), `SetPosition` sets `m_origin` alone (the pattern's tracks, the stitching's outline
+//! and vias stay; nothing regenerates them in the swap's commit), two of them swap layers (`PCB_TUNING_PATTERN::GetLayer` is its first track's, `SetLayer` sets its
+//! tracks' too). 25ec2335's grid item: `m_pos`, no layer ("Grids don't have layers"); drill map: `m_offset` and its layer; drill chart: a table
+//! (`PCB_GENERATED_TABLE`) of its own type, so a chart and a plain table do not swap layers.
 
 use super::Board;
 use crate::fp_items::{field_layout_mut, field_name, live_ids, transform_ids};
@@ -80,6 +88,14 @@ pub(crate) enum SwapType {
     Barcode,
     Table,
     Group,
+    /// `PCB_GENERATOR_T`: a tuning pattern and a via stitching are one type (KiCad 25ec2335's `PCB_VIA_STITCH` is a `PCB_GENERATOR_POLY`).
+    Generator,
+    /// KiCad 25ec2335's `PCB_GRID_ITEM_T`.
+    Grid,
+    /// KiCad 25ec2335's `PCB_DRILL_MAP_T`.
+    DrillMap,
+    /// KiCad 25ec2335's `PCB_DRILL_CHART_T`: a table (`PCB_GENERATED_TABLE`), of a type of its own.
+    DrillChart,
 }
 
 fn dimension_type(k: &DimensionKind) -> SwapType {
@@ -284,16 +300,26 @@ impl SwapHost for Board<'_> {
                 return Ok(SwapType::Barcode);
             }
             if dr.tables.iter().any(|t| t.id == id) {
-                return Ok(SwapType::Table);
+                // a drill chart is a table of a type of its own (`PCB_DRILL_CHART_T`)
+                return Ok(if bi.drill_charts.iter().any(|c| c.table_id == id) { SwapType::DrillChart } else { SwapType::Table });
             }
             if dr.is_group(id) {
                 return Ok(SwapType::Group);
             }
             if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) {
-                return Err(fail("ops_swap", id, "a tuning pattern or a via stitching is not swapped here (PCB_GENERATOR::SetPosition moves its origin alone)"));
+                return Ok(SwapType::Generator);
+            }
+            if bi.grid_items.iter().any(|g| g.id == id) {
+                return Ok(SwapType::Grid);
+            }
+            if bi.drill_maps.iter().any(|m| m.id == id) {
+                return Ok(SwapType::DrillMap);
+            }
+            if dr.tables.iter().any(|t| crate::pcb_swap::has_cell(t, id)) {
+                return Err(fail("ops_swap", id, "a table cell is not swapped here (the studio keeps a table's cells on its grid, as PCB_TABLE::Normalize lays them)"));
             }
         }
-        Err(fail("ops_unknown_item", id, "no footprint, via, arc, zone, shape, text, field, dimension, text box, point, image, barcode, table or group with this id"))
+        Err(fail("ops_unknown_item", id, "no footprint, via, arc, zone, shape, text, field, dimension, text box, point, image, barcode, table, group, tuning pattern, via stitching, grid, drill map or drill chart with this id"))
     }
 
     fn swap_position(&mut self, id: &str, t: SwapType) -> Point {
@@ -320,7 +346,14 @@ impl SwapHost for Board<'_> {
             SwapType::Point => dr.and_then(|d| d.board_items.points.iter().find(|x| x.id == id)).map(|p| p.at),
             SwapType::Image => dr.and_then(|d| d.board_items.images.iter().find(|x| x.id == id)).map(|i| i.at),
             SwapType::Barcode => dr.and_then(|d| d.barcodes.iter().find(|x| x.id == id)).map(|b| b.at),
-            SwapType::Table => dr.and_then(|d| d.tables.iter().find(|x| x.id == id)).map(|t| t.at),
+            SwapType::Table | SwapType::DrillChart => dr.and_then(|d| d.tables.iter().find(|x| x.id == id)).map(|t| t.at),
+            // `PCB_GENERATOR::GetPosition`: `m_origin`; a via stitching's (25ec2335 `PCB_VIA_STITCH::GetPosition`) is its outline's first corner, the origin when it has none
+            SwapType::Generator => dr.and_then(|d| {
+                d.tuning_patterns.iter().find(|p| p.id == id).map(|p| p.origin).or_else(|| d.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.outline.first().copied().unwrap_or(v.origin)))
+            }),
+            // 25ec2335 `PCB_GRID_ITEM::GetPosition`: `m_pos`; `PCB_DRILL_MAP::GetPosition`: `m_offset`
+            SwapType::Grid => dr.and_then(|d| d.board_items.grid_items.iter().find(|g| g.id == id)).map(|g| g.at),
+            SwapType::DrillMap => dr.and_then(|d| d.board_items.drill_maps.iter().find(|m| m.id == id)).map(|m| m.offset),
             SwapType::Group => None,
         };
         found.unwrap_or_default()
@@ -342,6 +375,28 @@ impl SwapHost for Board<'_> {
             SwapType::DimAligned | SwapType::DimOrthogonal | SwapType::DimRadial | SwapType::DimCenter | SwapType::DimLeader => {
                 let d = self.drawings_mut().dimensions.iter_mut().find(|d| d.id == id).ok_or_else(|| fail("ops_unknown_item", id, "no dimension with this id"))?;
                 d.start = at;
+                Ok(())
+            }
+            // `PCB_GENERATOR::SetPosition`: `m_origin = aPos`, nothing else -- the pattern's tracks and the stitching's outline and vias stay where they are.
+            SwapType::Generator => {
+                let dr = self.drawings_mut();
+                if let Some(p) = dr.tuning_patterns.iter_mut().find(|p| p.id == id) {
+                    p.origin = at;
+                } else if let Some(v) = dr.board_items.via_stitches.iter_mut().find(|v| v.id == id) {
+                    v.origin = at;
+                }
+                Ok(())
+            }
+            SwapType::Grid => {
+                if let Some(g) = self.drawings_mut().board_items.grid_items.iter_mut().find(|g| g.id == id) {
+                    g.at = at;
+                }
+                Ok(())
+            }
+            SwapType::DrillMap => {
+                if let Some(m) = self.drawings_mut().board_items.drill_maps.iter_mut().find(|m| m.id == id) {
+                    m.offset = at;
+                }
                 Ok(())
             }
             _ => {
@@ -388,8 +443,18 @@ impl SwapHost for Board<'_> {
             SwapType::Point => dr?.board_items.points.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
             SwapType::Image => dr?.board_items.images.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
             SwapType::Barcode => dr?.barcodes.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
-            SwapType::Table => dr?.tables.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
-            SwapType::Footprint | SwapType::Pad | SwapType::Group => None,
+            SwapType::Table | SwapType::DrillChart => dr?.tables.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
+            // `PCB_TUNING_PATTERN::GetLayer`: its first track's layer, else its own; a via stitching's own (`BOARD_ITEM::m_layer`)
+            SwapType::Generator => {
+                if let Some(p) = dr?.tuning_patterns.iter().find(|p| p.id == id) {
+                    let tracks = rt.map(|rt| rt.tracks.as_slice()).unwrap_or_default();
+                    return Some(p.member_ids.iter().find_map(|m| tracks.iter().find(|t| &t.id == m)).map_or_else(|| p.layer.clone(), |t| t.layer.clone()));
+                }
+                dr?.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.layer.clone())
+            }
+            SwapType::DrillMap => dr?.board_items.drill_maps.iter().find(|m| m.id == id).map(|m| m.layer.clone()),
+            // 25ec2335 `PCB_GRID_ITEM::GetLayer`: "Grids don't have layers": `UNDEFINED_LAYER`
+            SwapType::Grid | SwapType::Footprint | SwapType::Pad | SwapType::Group => None,
         }
     }
 
@@ -466,12 +531,32 @@ impl SwapHost for Board<'_> {
                 }
             }
             // `PCB_TABLE::SetLayer`: the table and each of its cells.
-            SwapType::Table => {
+            SwapType::Table | SwapType::DrillChart => {
                 if let Some(x) = self.drawings_mut().tables.iter_mut().find(|x| x.id == id) {
                     x.layer = layer.to_string();
                 }
             }
-            SwapType::Zone | SwapType::Footprint | SwapType::Pad | SwapType::Group => {}
+            // `PCB_TUNING_PATTERN::SetLayer`: its own and each of its tracks'; a via stitching's own alone (`PCB_GENERATOR::SetLayer`)
+            SwapType::Generator => {
+                let members = self.design.drawings.as_ref().and_then(|d| d.tuning_patterns.iter().find(|p| p.id == id)).map(|p| p.member_ids.clone());
+                let dr = self.drawings_mut();
+                if let Some(p) = dr.tuning_patterns.iter_mut().find(|p| p.id == id) {
+                    p.layer = layer.to_string();
+                } else if let Some(v) = dr.board_items.via_stitches.iter_mut().find(|v| v.id == id) {
+                    v.layer = layer.to_string();
+                }
+                if let (Some(members), Some(rt)) = (members, self.design.routing.as_mut()) {
+                    for t in rt.tracks.iter_mut().filter(|t| members.contains(&t.id)) {
+                        t.layer = layer.to_string();
+                    }
+                }
+            }
+            SwapType::DrillMap => {
+                if let Some(m) = self.drawings_mut().board_items.drill_maps.iter_mut().find(|m| m.id == id) {
+                    m.layer = layer.to_string();
+                }
+            }
+            SwapType::Zone | SwapType::Footprint | SwapType::Pad | SwapType::Group | SwapType::Grid => {}
         }
         Ok(())
     }
@@ -560,7 +645,7 @@ impl SwapHost for FpSwap<'_> {
             SwapType::Image => fp.items.images.iter().find(|x| x.id == id).map(|x| x.at),
             SwapType::Barcode => fp.items.barcodes.iter().find(|x| x.id == id).map(|x| x.at),
             SwapType::Table => fp.items.tables.iter().find(|x| x.id == id).map(|x| x.at),
-            SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group => None,
+            SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group | SwapType::Generator | SwapType::Grid | SwapType::DrillMap | SwapType::DrillChart => None,
         };
         found.unwrap_or_default()
     }
@@ -597,7 +682,7 @@ impl SwapHost for FpSwap<'_> {
             SwapType::Image => it.images.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
             SwapType::Barcode => it.barcodes.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
             SwapType::Table => it.tables.iter().find(|x| x.id == id).map(|x| x.layer.clone()),
-            SwapType::Pad | SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group => None,
+            SwapType::Pad | SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group | SwapType::Generator | SwapType::Grid | SwapType::DrillMap | SwapType::DrillChart => None,
         }
     }
 
@@ -658,7 +743,7 @@ impl SwapHost for FpSwap<'_> {
                     x.layer = l;
                 }
             }
-            SwapType::Zone | SwapType::Pad | SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group => {}
+            SwapType::Zone | SwapType::Pad | SwapType::Footprint | SwapType::Via | SwapType::Arc | SwapType::Group | SwapType::Generator | SwapType::Grid | SwapType::DrillMap | SwapType::DrillChart => {}
         }
         Ok(())
     }
@@ -682,4 +767,9 @@ impl SwapHost for FpSwap<'_> {
         pads[ib].at = Point { x: sa.x - ob.x, y: sa.y - ob.y };
         Ok(())
     }
+}
+
+/// Whether `id` names one of `table`'s cells (the studio's `TABLE:ROW:COL`).
+pub(crate) fn has_cell(table: &eda_model::table::Table, id: &str) -> bool {
+    id.strip_prefix(table.id.as_str()).and_then(|rest| rest.strip_prefix(':')).is_some_and(|rc| rc.split(':').count() == 2 && rc.split(':').all(|n| n.parse::<u32>().is_ok()))
 }

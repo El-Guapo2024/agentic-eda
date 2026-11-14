@@ -170,6 +170,11 @@ impl PcbShown {
 
     /// `GetShownText` of an item of the footprint `part` on `layer` (`PCB_TEXTBOX::GetShownText`, a barcode's text: `${LAYER}` is the item's layer, then
     /// `FOOTPRINT::ResolveTextVar`, then the board); a free text's when the board has no such footprint placed.
+    /// The text variables of the board footprint of `part` (`FOOTPRINT::ResolveTextVar`).
+    pub(crate) fn footprint_vars(&self, part: &str) -> Option<&eda_model::text_vars::PcbFootprint> {
+        self.by_part.get(part).map(|&i| &self.board.footprints[i])
+    }
+
     pub(crate) fn footprint_text_shown(&self, part: &str, raw: &str, layer: &str) -> String {
         if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
             return raw.to_string();

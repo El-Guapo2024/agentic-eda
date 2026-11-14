@@ -96,7 +96,7 @@ impl Board<'_> {
             };
             for reference in references {
                 let Some(part) = self.model.part(&reference).cloned() else { continue };
-                let Some(library) = self.unedited_footprint(&part) else { continue };
+                let Some(library) = self.pads_footprint(&part) else { continue };
                 let edits: Vec<PadEdit> = self.design.footprint_edit(&reference).map(|e| e.pads.clone()).unwrap_or_default();
                 let patched = patched_footprint(&library, &edits);
                 let whole = req.selected.is_none() || parts.contains(&reference);

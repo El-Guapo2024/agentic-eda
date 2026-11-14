@@ -318,3 +318,65 @@ fn two_zones_swap_layers_and_a_zone_on_several_layers_is_undefined_layer() {
     swap(&mut b, &["zone_m", "zone_b"]).unwrap();
     assert_eq!((z(&b, "zone_m").layer_set(), z(&b, "zone_b").layer_set()), (vec!["F.Cu"], vec!["F.Cu"]));
 }
+
+/// UI-LEFT-3 P3-33: a tuning pattern and a via stitching are `PCB_GENERATOR`s (`SetPosition` sets `m_origin` alone, two of them swap layers -- a pattern's tracks
+/// with it); a grid item swaps its position and has no layer; a drill map swaps its offset and its layer; a drill chart is a table of a type of its own; a table
+/// cell is refused.
+#[test]
+fn generators_grid_items_drill_maps_and_charts_swap_as_kicad_and_a_cell_is_refused() {
+    use eda_model::tuning::TuningPattern;
+    let m = four_layer_model();
+    let mut b = board_with(&m, |d| {
+        let rt = d.routing.as_mut().unwrap();
+        rt.tracks.push(track("trk_m", "In1.Cu", &[(mm(10.0), mm(30.0)), (mm(20.0), mm(30.0))]));
+        let dr = d.drawings.as_mut().unwrap();
+        let mut tp: TuningPattern = serde_json::from_str(r#"{"mode":"single","layer":"In1.Cu","origin":{"x":10000000,"y":30000000},"end":{"x":20000000,"y":30000000},"min_amplitude":200000,"max_amplitude":1000000,"spacing":600000}"#).unwrap();
+        tp.id = "tun_a".into();
+        tp.member_ids = vec!["trk_m".into()];
+        dr.tuning_patterns.push(tp);
+        let mut vs = eda_model::via_stitch::ViaStitch::new(vec![p(mm(50.0), mm(60.0)), p(mm(60.0), mm(60.0)), p(mm(60.0), mm(70.0))]);
+        vs.id = "vst_a".into();
+        vs.layer = "B.Cu".into();
+        dr.board_items.via_stitches.push(vs);
+        let mut g = eda_model::grid_item::GridItem::new(p(mm(80.0), mm(10.0)));
+        g.id = "grd_a".into();
+        dr.board_items.grid_items.push(g);
+        let mut dm = eda_model::drill_chart::DrillMap::new("Dwgs.User", mm(1.0));
+        dm.id = "drm_a".into();
+        dm.offset = p(mm(1.0), mm(2.0));
+        dr.board_items.drill_maps.push(dm);
+        for (id, layer, x) in [("tbl_a", "F.SilkS", 30.0), ("tbl_b", "Dwgs.User", 40.0), ("tbl_c", "Cmts.User", 50.0)] {
+            let mut t = eda_model::table::Table::new_grid(layer, p(mm(x), mm(90.0)), 2, 2, mm(4.0), mm(2.0), mm(0.1));
+            t.id = id.into();
+            dr.tables.push(t);
+        }
+        dr.board_items.drill_charts.push(eda_model::drill_chart::DrillChart::new("tbl_b"));
+    });
+    // a pattern and a stitching: the origins alone, then the layers (the pattern's track too)
+    swap(&mut b, &["tun_a", "vst_a"]).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.tuning_patterns[0].origin, p(mm(50.0), mm(60.0)), "the stitching's position is its outline's first corner");
+    assert_eq!(dr.board_items.via_stitches[0].origin, p(mm(10.0), mm(30.0)));
+    assert_eq!(dr.board_items.via_stitches[0].outline[0], p(mm(50.0), mm(60.0)), "the outline stays");
+    assert_eq!((dr.tuning_patterns[0].layer.as_str(), dr.board_items.via_stitches[0].layer.as_str()), ("B.Cu", "In1.Cu"), "two generators swap layers");
+    let trk = routing(&b).tracks.iter().find(|t| t.id == "trk_m").unwrap();
+    assert_eq!((trk.layer.as_str(), trk.pts[0]), ("B.Cu", p(mm(10.0), mm(30.0))), "the pattern's track takes its layer and stays");
+    // a grid item and a drill map: positions (the map's offset); no layer swap of two kinds
+    swap(&mut b, &["grd_a", "drm_a"]).unwrap();
+    let dr = drawings(&b);
+    assert_eq!((dr.board_items.grid_items[0].at, dr.board_items.drill_maps[0].offset), (p(mm(1.0), mm(2.0)), p(mm(80.0), mm(10.0))));
+    assert_eq!(dr.board_items.drill_maps[0].layer, "Dwgs.User");
+    // a grid item and a text: the text to the grid's place
+    swap(&mut b, &["grd_a", "txt_a"]).unwrap();
+    assert_eq!(text_at(&b, "txt_a").at, p(mm(1.0), mm(2.0)));
+    assert_eq!(drawings(&b).board_items.grid_items[0].at, p(mm(70.0), mm(80.0)));
+    // a plain table and a drill chart trade places, not layers (`PCB_DRILL_CHART_T` is not `PCB_TABLE_T`); two plain tables would
+    swap(&mut b, &["tbl_a", "tbl_b"]).unwrap();
+    let t = |b: &Board<'_>, id: &str| drawings(b).tables.iter().find(|t| t.id == id).map(|t| (t.at, t.layer.clone())).unwrap();
+    assert_eq!(t(&b, "tbl_a"), (p(mm(40.0), mm(90.0)), "F.SilkS".to_string()));
+    assert_eq!(t(&b, "tbl_b"), (p(mm(30.0), mm(90.0)), "Dwgs.User".to_string()));
+    swap(&mut b, &["tbl_a", "tbl_c"]).unwrap();
+    assert_eq!(t(&b, "tbl_a"), (p(mm(50.0), mm(90.0)), "Cmts.User".to_string()));
+    // a table cell is refused: the studio's table keeps its cells on its grid
+    assert_eq!(swap(&mut b, &["tbl_c:0:1", "txt_a"]).unwrap_err()[0].check, "ops_swap");
+}

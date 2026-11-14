@@ -30,7 +30,7 @@ use eda_model::{ConstraintModel, Footprint};
 use crate::fp_fields::{effects_with, parse_layout};
 use crate::import::{legacy_arc, mm_to_nm, xy_point};
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, sexpr_str};
+use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// `DEFAULT_LINE_WIDTH` (`board_design_settings.h`), 0.1 mm: what a stroke of no width that is not filled is given (`parsePCB_SHAPE`).
 const DEFAULT_LINE_WIDTH_NM: Nm = Nm::new(100_000);
@@ -134,6 +134,11 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
 pub(crate) fn read_courtyard(fp: &[Sexpr], side: Side) -> Vec<FpShape> {
     let on_courtyard = |l: &str| l == "F.CrtYd" || l == "B.CrtYd";
     fp.iter().filter_map(Sexpr::as_list).filter_map(|item| sexpr::tag(item).filter(|t| SHAPE_TAGS.contains(t)).and_then(|tag| read_shape_on(item, tag, side, on_courtyard))).collect()
+}
+
+/// One courtyard graphic (`fp_line` .. on `F.CrtYd` / `B.CrtYd`) of a footprint on `side`, as [`read_courtyard`] reads it.
+pub(crate) fn read_courtyard_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
+    SHAPE_TAGS.contains(&tag).then(|| read_shape_on(item, tag, side, |l| l == "F.CrtYd" || l == "B.CrtYd")).flatten()
 }
 
 fn read_shape_on(item: &[Sexpr], tag: &str, side: Side, keep: impl Fn(&str) -> bool) -> Option<FpShape> {
@@ -399,12 +404,13 @@ fn quote(s: &str) -> String {
 
 /// The art of the footprint `fp`, in the file's frame: shapes, then texts (`format( FOOTPRINT )` writes the drawings sorted by type, shapes before
 /// text), each with a uuid made from the footprint and the item's place in the art.
-pub(crate) fn write_art(out: &mut String, art: &FpArt, fp: &FootprintInstance) {
+/// A place's uuid is the one the footprint's record `own` keeps for it (`FootprintExtra::child_uuids`, [`crate::child_uuid`]) when it keeps one.
+pub(crate) fn write_art_of(out: &mut String, art: &FpArt, fp: &FootprintInstance, own: Option<&eda_model::ir::FootprintExtra>) {
     for (i, s) in art.shapes.iter().enumerate() {
-        write_shape(out, s, fp, &duid_for(&format!("footprint:{}:art:{i}", fp.id), &fp.id));
+        write_shape(out, s, fp, &crate::child_uuid(own, &fp.id, &format!("art:{i}"), &format!("footprint:{}:art:{i}", fp.id)));
     }
     for (i, t) in art.texts.iter().enumerate() {
-        write_text(out, t, fp, &duid_for(&format!("footprint:{}:arttext:{i}", fp.id), &fp.id));
+        write_text(out, t, fp, &crate::child_uuid(own, &fp.id, &format!("arttext:{i}"), &format!("footprint:{}:arttext:{i}", fp.id)));
     }
 }
 
@@ -559,7 +565,7 @@ mod tests {
                 let art = read_art(&parse(FIXTURE), Side::Top, 0);
                 let fp = inst(side, rot);
                 let mut text = String::new();
-                write_art(&mut text, &art, &fp);
+                write_art_of(&mut text, &art, &fp, None);
                 let again = read_art(&parse(&format!("(footprint \"x\" {text})")), side, rot);
                 assert_eq!(again, art, "{side:?} {rot}\n{text}");
             }
@@ -570,7 +576,7 @@ mod tests {
     fn a_bottom_side_footprint_is_written_mirrored_on_the_other_layers() {
         let art = read_art(&parse(FIXTURE), Side::Top, 0);
         let mut text = String::new();
-        write_art(&mut text, &art, &inst(Side::Bottom, 0));
+        write_art_of(&mut text, &art, &inst(Side::Bottom, 0), None);
         // x negated, the silkscreen on the back, the fab on the back
         assert!(text.contains("(fp_line (start 2 -1.5) (end -2 -1.5) (stroke (width 0.12) (type solid)) (layer \"B.SilkS\")"), "{text}");
         assert!(text.contains("(fp_circle (center 0 0) (end -0.5 0) (stroke (width 0.1) (type solid)) (fill yes) (layer \"B.Fab\")"), "{text}");
@@ -583,7 +589,7 @@ mod tests {
         assert!(text.contains("(justify left bottom mirror)"), "{text}");
         // and the footprint's turn is the file's, negated, in its angles
         let mut turned = String::new();
-        write_art(&mut turned, &art, &inst(Side::Top, 90_000));
+        write_art_of(&mut turned, &art, &inst(Side::Top, 90_000), None);
         assert!(turned.contains("(fp_text user \"${REFERENCE}\" (at 0 0.5 0) (layer \"F.Fab\")"), "angle 90 on a part turned 90 clockwise on the screen reads 0 in the file: {turned}");
     }
 

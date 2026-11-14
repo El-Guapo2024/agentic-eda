@@ -3295,7 +3295,9 @@ impl Design {
                 thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
             };
         } else if let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) {
-            let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
+            // (a pad taken off the board's footprint is not in `pad_count`: the library's pads are counted from before, `FootprintEdit::removed_pads`)
+            let removed = self.footprint_edit(fp_id).map(|e| e.removed_pads.as_slice()).unwrap_or_default();
+            let pad = if lib.pads.len() == pad_count + removed.len() { lib.pads.get(crate::fp_edit::base_pad_index(removed, pad_idx)) } else { None };
             pad_clearance = pad.and_then(|p| p.clearance_override);
             facts = PadZoneFacts {
                 pad_clearance: None,
@@ -3575,6 +3577,12 @@ pub struct FootprintExtra {
     /// (UI-LEFT PP14). `None`: they are where the footprint's pose is now. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zones_pose: Option<crate::fp_items_place::ZonesPose>,
+    /// The uuid each of the footprint's children is written with, by its place (`art:<i>`, `arttext:<i>`, `crtyd:<i>`, `pad:<number>#<k>`, `field:<name>`,
+    /// `item:<id>`, `group:<i>`, as [`FootprintGroup::members`] name them), where it is not the one the writer makes from the place: what Update Footprint on Board
+    /// puts back (`FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard`'s `fixUuid`: a child of the editor's copy takes the uuid of the board item it was cloned from,
+    /// `m_boardFootprintUuids`; a new one a new uuid). Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub child_uuids: std::collections::BTreeMap<String, String>,
 }
 
 impl FootprintExtra {
@@ -3753,6 +3761,10 @@ pub struct BoardFootprintCopy {
     pub reference: String,
     pub fpid: String,
     pub footprint: LibraryFootprint,
+    /// `m_boardFootprintUuids` (`LoadFootprintFromBoard`'s `recordAndUpdateUuid`): the uuid the board item each child of the copy was cloned from is written with, by
+    /// the child's id in the copy. Update Footprint on Board gives them back (`SaveFootprintToBoard`'s `fixUuid`). Additive.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub board_uuids: std::collections::BTreeMap<String, String>,
 }
 
 impl BoardFootprintCopy {

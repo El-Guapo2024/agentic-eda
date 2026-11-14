@@ -604,6 +604,22 @@ impl FpArt {
     }
 }
 
+/// The courtyard graphics (`F.CrtYd`, `B.CrtYd`) of an editor footprint's `graphics`, with their looks (`keep`), as a footprint's [`FpArt::courtyard`]: what Update
+/// Footprint on Board makes of the courtyard lines Edit Footprint's copy holds (KiCad's copy is a clone of the board footprint, its courtyard graphics with it).
+pub fn courtyard_from_library_kept(graphics: &[Shape], keep: &crate::lib_keep::LibraryFootprintKeep) -> Vec<FpShape> {
+    graphics
+        .iter()
+        .filter(|g| !is_art_layer(g.layer()))
+        .map(|g| {
+            let mut s = FpShape::new(strip_id(g));
+            s.style = keep.stroke_types.get(g.id()).and_then(|t| LineStyle::from_token(t)).unwrap_or(LineStyle::Solid);
+            s.hatch = keep.hatches.get(g.id()).copied();
+            s.endings = keep.endings.get(g.id()).copied().unwrap_or_default();
+            s
+        })
+        .collect()
+}
+
 fn strip_id(s: &Shape) -> Shape {
     let mut s = s.clone();
     s.set_id(String::new());

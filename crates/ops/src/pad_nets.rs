@@ -90,7 +90,7 @@ impl Board<'_> {
                 return Err(refuse("ops_unknown_item", id, "no pad of a footprint on the board with this id"));
             };
             let part = self.model.part(&reference).ok_or_else(|| refuse("ops_unknown_item", id, "no such part"))?;
-            let footprint = self.unedited_footprint(part).ok_or_else(|| refuse("ops_no_footprint", &reference, "this part has no footprint geometry"))?;
+            let footprint = self.pads_footprint(part).ok_or_else(|| refuse("ops_no_footprint", &reference, "this part has no footprint geometry"))?;
             if eda_model::fp_edit::pad_index(&footprint, &number, nth).is_none() {
                 return Err(refuse("ops_unknown_pad", id, format!("{reference} has no pad {number}")));
             }
@@ -171,7 +171,7 @@ impl Board<'_> {
 
         // The pads of each unit, by position in the unit (`FindPadByNumber`: the first pad with the number).
         let part = self.model.part(&reference).ok_or_else(|| refuse("ops_unknown_item", &reference, "no such part"))?;
-        let footprint = self.unedited_footprint(part).ok_or_else(|| refuse("ops_no_footprint", &reference, "this part has no footprint geometry"))?;
+        let footprint = self.pads_footprint(part).ok_or_else(|| refuse("ops_no_footprint", &reference, "this part has no footprint geometry"))?;
         let nets = self.nets_in_force();
         let mut unit_pads: Vec<Vec<PadKey>> = Vec::new();
         for &u in &active {

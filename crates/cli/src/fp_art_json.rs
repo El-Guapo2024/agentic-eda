@@ -130,6 +130,23 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
 
 /// Put the footprint's courtyard graphics into the part's JSON `p` (`courtyard_graphics: [{ id, layer }]`, [`eda_ops::courtyard_graphics`]): the canvas draws the
 /// courtyard as a box, but Edit Text & Graphics Properties' "Footprint graphic items" reaches each of them (UI-LEFT-2 PP23). Absent when there are none.
+/// The footprint's private layers (`FOOTPRINT::GetPrivateLayers`, `(private_layers ..)` of its record while the part is on the footprint the record describes), as
+/// `private_layers`: the board does not draw its items on them (`PCB_PAINTER::Draw`: "For single-layer objects, exclude all layers"; a multi-layer one only on those),
+/// nor counts them in its box (`FOOTPRINT::GetBoundingBox`), nor snaps to them (`PCB_GRID_HELPER`); the Footprint Editor shows them (UI-LEFT-3 P3-31).
+pub(crate) fn add_private_layers(p: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, part: &Part) {
+    let written = eda_model::fp_items_place::written_name(model, part);
+    let Some(e) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference)).filter(|e| e.source_name == written) else { return };
+    let mut forms: Vec<String> = e.tokens.iter().filter(|t| t.starts_with("(private_layers")).cloned().collect();
+    if forms.is_empty() {
+        return;
+    }
+    let mut st = eda_model::fp_settings::FootprintSettings::default();
+    st.absorb_kept(&mut forms);
+    if !st.private_layers.is_empty() {
+        p["private_layers"] = json!(st.private_layers);
+    }
+}
+
 pub(crate) fn add_courtyard_graphics(p: &mut Value, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, part: &Part, fp: &FootprintInstance, footprint: &Footprint) {
     let list = eda_ops::courtyard_graphics(design, model, part, fp, footprint);
     if !list.is_empty() {

@@ -718,7 +718,8 @@ export interface FieldToDraw {
 
 /** The fields of the placed footprints, each with its footprint. */
 export function fieldsToDraw(parts: readonly Part[]): FieldToDraw[] {
-  return parts.flatMap((part) => (part.placed ? (part.fields ?? []).map((field) => ({ field, part })) : []));
+  // (a field on one of the footprint's private layers is not drawn on the board: `PCB_PAINTER::Draw`, UI-LEFT-3 P3-31)
+  return parts.flatMap((part) => (part.placed ? (part.fields ?? []).filter((field) => !part.private_layers?.includes(field.layer)).map((field) => ({ field, part })) : []));
 }
 
 /**

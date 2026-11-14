@@ -9,6 +9,7 @@ import { splitCarried } from "./pcbCarry";
 import { movableItem } from "./pcbEditActions";
 import { mirrorableIds, planMirror } from "./pcbMirror";
 import { getAllowFreePads, setAllowFreePads } from "./freePads";
+import { boardDeleteCmds } from "./deleteCmds";
 
 function board(partial: Partial<BoardState>): BoardState {
   return { name: "t", dir: "", outline: null, layers: ["F.Cu", "B.Cu"], snap: 100, parts: [], rules: [], routing: null, drawings: null, checks: [], activity: [], job: "idle", ...partial } as BoardState;
@@ -39,12 +40,13 @@ test("off (KiCad's default): a pad stands for its footprint", () => {
   });
 });
 
-test("on: Move, Swap, Mirror, Position Relative and the carry take the pad as itself; Flip and Duplicate promote it", () => {
+test("on: Move, Swap, Mirror, Flip, Position Relative and the carry take the pad as itself; Duplicate promotes it", () => {
   withFreePads(true, () => {
     assert.deepEqual(editableSelection(b, ["U1.2"]).ids, ["U1.2"]);
     assert.deepEqual(planMove(b, ["U1.2"], 100, 0).cmds, [{ op: "move_items", ids: ["U1.2"], dx: 100, dy: 0 }]);
     assert.deepEqual(editableSelection(b, ["U1.2"], { forcePromotion: true }).ids, ["U1"], "Duplicate's `FilterCollectorForFreePads( aCollector, true )`");
-    assert.deepEqual(planFlip(b, ["U1.2"]).ids, ["U1"], "a pad is turned over with its footprint");
+    // `PAD::Flip` of the pad alone, about its own position (`updateModificationPoint`: a lone item's `GetPosition()`, the hole)
+    assert.deepEqual(planFlip(b, ["U1.2"]).cmds, [{ op: "flip_items", ids: ["U1.2"], pivot: { x: 1000, y: 0 }, direction: "left_right" }]);
     assert.deepEqual(planSwap(b, ["U1.1", "U1.2"]).cmd, { op: "swap_items", ids: ["U1.1", "U1.2"] });
     assert.deepEqual(mirrorableIds(b, ["U1.2"]), ["U1.2"]);
     assert.deepEqual(planMirror(b, ["U1.2"], [0, 0], "leftRight").cmds, [{ op: "mirror_items", ids: ["U1.2"], pivot: { x: 0, y: 0 }, direction: "left_right" }]);
@@ -69,4 +71,18 @@ test("a pad of a locked footprint is locked (`PAD::IsLocked`)", () => {
   assert.equal(isLocked(locked, "U1.2"), true);
   assert.equal(isLocked(locked, "U2.1"), false);
   withFreePads(true, () => assert.deepEqual(editableSelection(locked, ["U1.2", "U2.1"]), { ids: ["U2.1"], lockedOut: true }));
+});
+
+test("Delete: on, a pad leaves its footprint (the later pads of a number first); off, the caller has promoted it", () => {
+  const dup = board({ parts: [part("U1", [0, 0], [pad("1", -1000, 0), pad("2", 1000, 0), { ...pad("2", 2000, 0) }, pad("3", 3000, 0)])] });
+  withFreePads(true, () => {
+    assert.deepEqual(boardDeleteCmds(dup, ["U1.2", "U1.3", "U1.2#2"]).cmds, [
+      { op: "remove_board_pad", pad: "U1.2#2" },
+      { op: "remove_board_pad", pad: "U1.2" },
+      { op: "remove_board_pad", pad: "U1.3" },
+    ]);
+    // a pad of a footprint that is deleted too goes with it
+    assert.deepEqual(boardDeleteCmds(dup, ["U1.2", "U1"]).cmds, [{ op: "rip", part: "U1" }]);
+  });
+  withFreePads(false, () => assert.deepEqual(boardDeleteCmds(dup, ["U1.2"]).cmds, []));
 });

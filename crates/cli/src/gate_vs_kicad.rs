@@ -1244,4 +1244,91 @@ mod tests {
         eprintln!("{judged} component drags judged by kicad-cli");
         assert!(judged >= 6, "{judged} component drags judged");
     }
+
+    /// The pads of footprint `reference` in a `.kicad_pcb` text: `(number, the pad's form on one line)`.
+    fn written_pads(text: &str, reference: &str) -> Vec<(String, String)> {
+        let fp = text.split("\n\t(footprint ").find(|b| b.contains(&format!("(property \"Reference\" \"{reference}\""))).unwrap_or_else(|| panic!("{reference} is written"));
+        fp.split("\n\t\t(pad ").skip(1).map(|p| {
+            let one = p.split("\n\t\t(").next().unwrap_or(p).split_whitespace().collect::<Vec<_>>().join(" ");
+            (one.split('"').nth(1).unwrap_or_default().to_string(), one)
+        }).collect()
+    }
+
+    /// Stage 28's left, "Allow free pads": Delete of a pad takes it off its footprint (`EDIT_TOOL::DeleteItems`, `case PCB_PAD_T`) and Flip turns it over alone
+    /// (`PAD::Flip`), on a board read from KiCad's (`stickhub-extra-via`: J7 and J8, JST connectors whose two `MP` pads share a number). The board file's records
+    /// of the other pads stay theirs -- each pad written with its own net, pin name and type -- the flipped pad is written on the back, kicad-cli reads the
+    /// board and reports nothing new but the dangling copper a removed pad leaves, and the studio's reader takes the pads back as they were written.
+    #[test]
+    fn a_free_pad_deleted_or_flipped_on_a_kicad_board_is_written_with_the_other_pads_records_and_kicad_cli_reads_it() {
+        if !kicad_available() {
+            return;
+        }
+        let Some((design, model)) = qa_board("stickhub-extra-via") else {
+            eprintln!("KICAD_QA_DATA has no stickhub-extra-via; skipping");
+            return;
+        };
+        let meta = eda_kicad::ExportMeta { date: "2026-11-14", title: "board" };
+        let before_text = eda_kicad::export_kicad_pcb(&design, &model, &meta).expect("export");
+        let j7_before = written_pads(&before_text, "J7");
+        assert_eq!(j7_before.len(), 6);
+        let dir = scratch("free_pad_delete_flip");
+        // (kicad-cli's violations by kind, but those of J8's flipped pad: on the back it meets the back's copper, silkscreen and mask, as in KiCad)
+        let kinds = |design: &Design, model: &ConstraintModel| -> std::collections::BTreeMap<String, usize> {
+            let report = eda_kicad_engine::drc(design, model, &dir, false).unwrap_or_else(|e| panic!("kicad-cli: {e:?}"));
+            let mut out = std::collections::BTreeMap::new();
+            for v in report.violations.iter().filter(|v| !v.excluded) {
+                if v.items.iter().any(|i| i.description.contains("Pad MP") && i.description.contains("of J8") && i.description.contains("B.Cu")) {
+                    eprintln!("the flipped pad: {} {:?}", v.kind, v.items.iter().map(|i| &i.description).collect::<Vec<_>>());
+                    continue;
+                }
+                *out.entry(v.kind.clone()).or_insert(0) += 1;
+            }
+            out
+        };
+        let before = kinds(&design, &model);
+
+        let mut b = eda_ops::Board::new(design.clone(), &model, mm(0.1), mm(0.3));
+        // J7's pad 1 and its first MP (the one at x -2.8), then J8's second MP turned over
+        for cmd in [eda_ops::Cmd::RemoveBoardPad { pad: "J7.1".into() }, eda_ops::Cmd::RemoveBoardPad { pad: "J7.MP".into() }] {
+            b.apply(&cmd).expect("the pad is removed");
+        }
+        let j8_mp2 = eda_model::footprint::placed_pads(&model, model.part("J8").unwrap(), design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "J8").unwrap()).unwrap().into_iter().filter(|p| p.number == "MP").nth(1).unwrap().center;
+        b.apply(&eda_ops::Cmd::FlipItems { ids: vec!["J8.MP#2".into()], pivot: j8_mp2, direction: eda_ops::FlipDirection::LeftRight }).expect("the pad is flipped");
+        let design = b.into_design();
+        let mut model = model;
+        board::fold_footprint_edits(&design, &mut model);
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &meta).expect("export");
+
+        // J7: the four pads left, each with its own record (net, pin name, type), as before
+        let j7 = written_pads(&text, "J7");
+        assert_eq!(j7.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["2", "3", "4", "MP"], "{j7:?}");
+        let tail = |s: &str| s[s.find("(net ").unwrap_or(0)..].split(" (uuid").next().unwrap_or_default().to_string();
+        for (n, line) in &j7 {
+            let was = j7_before.iter().filter(|(m, _)| m == n).map(|(_, l)| l).last().unwrap();
+            assert_eq!(tail(line), tail(was), "pad {n} keeps its own record");
+            assert_eq!(line.split(" (net").next(), was.split(" (net").next(), "pad {n} keeps its place and shape");
+        }
+        assert!(j7[3].1.contains("(at 2.8 "), "the MP left is the one at x 2.8: {}", j7[3].1);
+        // J8: the second MP on the back, its record's layers turned over, its net and pin kept
+        let j8 = written_pads(&text, "J8");
+        let mp2 = &j8.iter().filter(|(n, _)| n == "MP").nth(1).unwrap().1;
+        assert!(mp2.contains("(layers \"B.Cu\"") && mp2.contains("\"B.Mask\"") && mp2.contains("\"B.Paste\"") && mp2.contains("(net ") && mp2.contains("(pinfunction \"MountPin\")"), "{mp2}");
+        assert!(!j8[..5].iter().any(|(_, l)| l.contains("B.Cu")), "only that pad is on the back: {j8:?}");
+
+        // kicad-cli reads it: nothing new but the copper the removed pad 1 leaves dangling (and the ratsnest of the flipped pad)
+        let after = kinds(&design, &model);
+        for (kind, n) in &after {
+            if matches!(kind.as_str(), "track_dangling" | "unconnected_items" | "via_dangling") {
+                continue;
+            }
+            assert!(*n <= before.get(kind).copied().unwrap_or(0), "{kind}: {after:?} (before {before:?})");
+        }
+        // the studio's reader takes the pads back as written
+        let (back, back_model, _) = eda_kicad::import_kicad_pcb(&text).expect("re-import");
+        let pads = |m: &ConstraintModel, r: &str| m.part(r).and_then(|p| m.footprint_of(p)).map(|f| f.pads.iter().map(|p| (p.number.clone(), p.opposite_side)).collect::<Vec<_>>()).unwrap();
+        assert_eq!(pads(&back_model, "J7").iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["2", "3", "4", "MP"]);
+        assert_eq!(pads(&back_model, "J8").iter().filter(|(_, o)| *o).count(), 1);
+        assert_eq!(back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "J7").map(|e| e.pads.len()), Some(4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

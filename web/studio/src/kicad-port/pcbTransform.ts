@@ -92,7 +92,7 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
     // (`forClipboard`: Copy and Cut take a pad and a table cell as themselves -- `copyToClipboard`'s filter has neither `FilterCollectorForFreePads` nor
     // `FilterCollectorForTableCells`: `SaveSelection` copies a cell's table cut down to the selected cells, and Cut's `DeleteItems` clears the cell)
     // (with "Allow free pads" a pad stays a pad -- `FilterCollectorForFreePads( aCollector, aForcePromotion )`, kicad-port/freePads.ts -- unless the tool forces the
-    // promotion: Duplicate, and Flip here, which turns a pad over with its footprint only)
+    // promotion: Duplicate)
     const id = kind === "pad" ? (opts.forClipboard || padStaysPad(opts.forcePromotion) ? raw : padParent(board, raw)) : kind === "tablecell" ? (opts.forClipboard ? raw : (cellById(board, raw)?.table.id ?? null)) : raw;
     if (id == null || seen.has(id) || itemKind(board, id) == null) continue;
     seen.add(id);
@@ -207,9 +207,8 @@ export function planRotate(board: BoardState, selection: readonly string[], quar
  * `PCBNEW_SETTINGS::m_FlipDirection` says (`direction`, left/right by default).
  */
 export function planFlip(board: BoardState, selection: readonly string[], direction: FlipDirection = "left_right"): TransformPlan {
-  // (`PAD::Flip` takes a pad to the other side alone; the studio holds a pad on its footprint's side, so a pad is turned over with its footprint whatever
-  // "Allow free pads" says)
-  const { ids, lockedOut } = editableSelection(board, selection, { forcePromotion: true });
+  // (`FilterCollectorForFreePads`: with "Allow free pads" a pad stays a pad, and `PAD::Flip` takes it to the other side alone -- crates/ops/src/free_pads.rs)
+  const { ids, lockedOut } = editableSelection(board, selection);
   if (ids.length === 0) return { ...EMPTY, lockedOut };
   const pivot = flipPivot(board, ids);
   if (!pivot) return { ...EMPTY, lockedOut };

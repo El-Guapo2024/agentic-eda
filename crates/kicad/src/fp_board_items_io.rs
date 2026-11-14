@@ -181,8 +181,9 @@ pub(crate) fn read_items(fp: &[Sexpr], version: i64, pose: &FootprintInstance, t
 
 /// The uuid an item of the footprint `reference` is written with: made from the footprint and the item's id, as the art's are made from their places
 /// (`crate::fp_art_io::write_art`).
-pub(crate) fn item_uuid(reference: &str, id: &str) -> String {
-    crate::duid_for(&format!("footprint:{reference}:item:{id}"), reference)
+/// The record `own` may keep another for the item (`FootprintExtra::child_uuids`, `item:<id>`).
+pub(crate) fn item_uuid_of(own: Option<&eda_model::ir::FootprintExtra>, reference: &str, id: &str) -> String {
+    crate::child_uuid(own, reference, &format!("item:{id}"), &format!("footprint:{reference}:item:{id}"))
 }
 
 /// The footprint's items as `format( const FOOTPRINT* )` writes them, after its graphics and texts: the images, the text boxes (`fp_text_box`), the tables, the barcodes
@@ -190,7 +191,9 @@ pub(crate) fn item_uuid(reference: &str, id: &str) -> String {
 /// points (`Points()`, before the pads). `pose` is the footprint's pose in the model, `turn` whether it is written half a turn from it (`write_footprint`'s `turn`), `locked`
 /// whether an item is locked (`FootprintExtra::item_locked`). An image, a point, a barcode and a dimension are written where they are on the board, a text box and a table
 /// in the file's frame.
-pub(crate) fn write_items(out: &mut String, items: &FootprintItems, pose: &FootprintInstance, turn: bool, locked: &dyn Fn(&str) -> bool) {
+/// `own` is the footprint's record, whose kept uuids the items take ([`item_uuid_of`]).
+pub(crate) fn write_items_of(out: &mut String, items: &FootprintItems, pose: &FootprintInstance, turn: bool, locked: &dyn Fn(&str) -> bool, own: Option<&eda_model::ir::FootprintExtra>) {
+    let item_uuid = |reference: &str, id: &str| item_uuid_of(own, reference, id);
     let on_board = eda_model::fp_items_place::placed(items, pose);
     let in_file = transformed(&FootprintItems { text_boxes: items.text_boxes.clone(), tables: items.tables.clone(), ..Default::default() }, &text_box_steps_out(pose.side, turn));
     for img in &on_board.images {
@@ -298,7 +301,7 @@ mod tests {
         for (rot, side, turn) in [(0, Side::Top, false), (90_000, Side::Top, false), (0, Side::Bottom, true), (270_000, Side::Bottom, true)] {
             let at = pose(30.0, 20.0, rot, side);
             let mut out = String::new();
-            write_items(&mut out, &items, &at, turn, &|id| locked.iter().any(|l| l == id));
+            write_items_of(&mut out, &items, &at, turn, &|id| locked.iter().any(|l| l == id), None);
             let layer = if side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let back = read_items(&parse(&footprint("30 20", layer, &out)), 20241229, &at, turn);
             let dim = |d: &Dimension| (d.start, d.end, d.kind.clone(), d.layer.clone());
@@ -326,7 +329,7 @@ mod tests {
         for (rot, side, turn) in [(0, Side::Top, false), (90_000, Side::Top, false), (330_000, Side::Top, false), (0, Side::Bottom, true), (90_000, Side::Bottom, true)] {
             let at = pose(30.0, 20.0, rot, side);
             let mut out = String::new();
-            write_items(&mut out, &model, &at, turn, &|_| false);
+            write_items_of(&mut out, &model, &at, turn, &|_| false, None);
             let layer = if side == Side::Bottom { "B.Cu" } else { "F.Cu" };
             let text = footprint("30 20", layer, &out);
             let ReadItems { items: back, uuids, .. } = read_items(&parse(&text), 20241229, &at, turn);

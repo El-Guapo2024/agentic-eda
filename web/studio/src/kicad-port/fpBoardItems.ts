@@ -15,8 +15,7 @@ import type { BoardBarcode, BoardPoint, BoardRefImage, BoardTextBox } from "../a
 import type { BoardState, BoardTable, Dimension, Part } from "../api/types";
 import { barcodeBounds, barcodeHitDistance } from "./barcodeShapes";
 import { layerIsVisible } from "./layerPresets";
-import { pointHitDistance, refImageBounds } from "./pcbExtraItems";
-import { imageBoxHitDistance } from "./refImage";
+import { pointHitDistance } from "./pcbExtraItems";
 import { textBoxBounds, textBoxHitDistance } from "./pcbTextBox";
 import { objectOn } from "./appearance";
 import { cellHitDistance, isSelectableCell } from "./tables";
@@ -24,6 +23,12 @@ import { cellHitDistance, isSelectableCell } from "./tables";
 type Box = [number, number, number, number];
 
 /** The footprint's items of each kind (none when it has none). */
+/** `parentFP->GetPrivateLayers().test( layer )` (`PCB_PAINTER::Draw`, `FOOTPRINT::GetBoundingBox`, `PCB_GRID_HELPER`): an item of the footprint on one of its private layers
+ *  is neither drawn on the board, nor in its box, nor snapped to (the Footprint Editor shows it). */
+export function onPrivateLayer(p: Pick<Part, "private_layers">, layer: string): boolean {
+  return !!p.private_layers?.length && p.private_layers.includes(layer);
+}
+
 export const fpTextBoxes = (p: Pick<Part, "items">): readonly BoardTextBox[] => p.items?.text_boxes ?? [];
 export const fpImages = (p: Pick<Part, "items">): readonly BoardRefImage[] => p.items?.images ?? [];
 export const fpPoints = (p: Pick<Part, "items">): readonly BoardPoint[] => p.items?.points ?? [];
@@ -73,39 +78,38 @@ export function parseFpItemId(id: string): { ref: string; item: string } | null 
   return /^(tbx|img|pnt|bar|dim|tbl)_/.test(item) ? { ref: id.slice(0, k), item } : null;
 }
 
-/** The reference images of the placed footprints whose side and layer are shown, with the footprint each is on: what the bitmap layer draws besides the board's own. */
-export function shownFootprintImages(board: Pick<BoardState, "parts">, layerVisible: Readonly<Record<string, boolean>>): { image: BoardRefImage; part: Part }[] {
-  const out: { image: BoardRefImage; part: Part }[] = [];
-  for (const part of board.parts) {
-    if (!part.placed || !sideOn(layerVisible, part)) continue;
-    for (const image of fpImages(part)) if (layerIsVisible(layerVisible, image.layer)) out.push({ image, part });
-  }
-  return out;
+/** The reference images of the placed footprints the board draws: none -- `PCB_PAINTER::Draw`: "Never draw footprint reference images on board" (only the Footprint Editor shows
+ *  them; UI-LEFT-3 P3-31). */
+export function shownFootprintImages(_board: Pick<BoardState, "parts">, _layerVisible: Readonly<Record<string, boolean>>): { image: BoardRefImage; part: Part }[] {
+  return [];
 }
 
 /** The distance from `(x, y)` to the nearest of the footprint's shown items (0 inside one), Infinity when it has none: a click there picks the footprint. */
-export function fpItemsHitDistance(part: Pick<Part, "items" | "side">, x: number, y: number, layerVisible: Readonly<Record<string, boolean>>): number {
+export function fpItemsHitDistance(part: Pick<Part, "items" | "side" | "private_layers">, x: number, y: number, layerVisible: Readonly<Record<string, boolean>>): number {
   if (!part.items || !sideOn(layerVisible, part)) return Infinity;
   let best = Infinity;
-  for (const t of fpTextBoxes(part)) if (layerIsVisible(layerVisible, t.layer)) best = Math.min(best, textBoxHitDistance(t, x, y));
-  for (const b of fpBarcodes(part)) if (layerIsVisible(layerVisible, b.layer)) best = Math.min(best, barcodeHitDistance(b, x, y));
-  for (const p of fpPoints(part)) if (layerIsVisible(layerVisible, p.layer) && objectOn(layerVisible, "ly_points")) best = Math.min(best, pointHitDistance(p, x, y));
-  for (const i of fpImages(part)) if (layerIsVisible(layerVisible, i.layer) && objectOn(layerVisible, "bitmaps")) best = Math.min(best, imageBoxHitDistance(refImageBounds(i), x, y));
-  for (const d of fpDimensions(part)) if (layerIsVisible(layerVisible, d.layer)) best = Math.min(best, fpDimensionHitDistance(d, x, y));
-  for (const t of fpTables(part)) if (layerIsVisible(layerVisible, t.layer)) best = Math.min(best, fpTableHitDistance(t, x, y));
+  // (an item the board does not draw -- on a private layer, a reference image -- is not there to click: `onPrivateLayer`, `shownFootprintImages`)
+  const shown = (layer: string) => layerIsVisible(layerVisible, layer) && !onPrivateLayer(part, layer);
+  for (const t of fpTextBoxes(part)) if (shown(t.layer)) best = Math.min(best, textBoxHitDistance(t, x, y));
+  for (const b of fpBarcodes(part)) if (shown(b.layer)) best = Math.min(best, barcodeHitDistance(b, x, y));
+  for (const p of fpPoints(part)) if (shown(p.layer) && objectOn(layerVisible, "ly_points")) best = Math.min(best, pointHitDistance(p, x, y));
+  for (const d of fpDimensions(part)) if (shown(d.layer)) best = Math.min(best, fpDimensionHitDistance(d, x, y));
+  for (const t of fpTables(part)) if (shown(t.layer)) best = Math.min(best, fpTableHitDistance(t, x, y));
   return best;
 }
 
 /** `FOOTPRINT::GetBoundingBox`'s share of the items: the boxes of the text boxes, the barcodes, the dimensions and the tables (a reference image is left out on the board); null when
  * it has none. */
-export function fpItemsBounds(part: Pick<Part, "items">): Box | null {
+export function fpItemsBounds(part: Pick<Part, "items" | "private_layers">): Box | null {
   let out: Box | null = null;
   const merge = (b: Box) => {
     out = out ? [Math.min(out[0], b[0]), Math.min(out[1], b[1]), Math.max(out[2], b[2]), Math.max(out[3], b[3])] : [b[0], b[1], b[2], b[3]];
   };
-  for (const t of fpTextBoxes(part)) merge(textBoxBounds(t));
-  for (const b of fpBarcodes(part)) merge(barcodeBounds(b));
-  for (const d of fpDimensions(part)) merge(dimensionBounds(d));
-  for (const t of fpTables(part)) if (t.bbox) merge([t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]]);
+  // (`if( IsValidLayer( item->GetLayer() ) && m_privateLayers.test( item->GetLayer() ) && !isFPEdit ) continue;`)
+  const own = (layer: string) => !onPrivateLayer(part, layer);
+  for (const t of fpTextBoxes(part)) if (own(t.layer)) merge(textBoxBounds(t));
+  for (const b of fpBarcodes(part)) if (own(b.layer)) merge(barcodeBounds(b));
+  for (const d of fpDimensions(part)) if (own(d.layer)) merge(dimensionBounds(d));
+  for (const t of fpTables(part)) if (t.bbox && own(t.layer)) merge([t.bbox[0], t.bbox[1], t.bbox[2], t.bbox[3]]);
   return out;
 }

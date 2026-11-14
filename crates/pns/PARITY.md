@@ -1785,7 +1785,8 @@ UI-LEFT-3 R3-1, R3-2, R3-5 and R3-7, each read against KiCad 8303b2ad: `pns_shov
   `move_items`, `rotate_items`, `mirror_items` and `swap_items` take a pad id. **Differs:** a route started on a free pad is a route of no net (the studio
   gives a lone pin's pad no net, where KiCad's is `unconnected-(..)`); Flip turns a pad over with its footprint (`PAD::Flip` would take an SMD pad to the other
   side alone, which the studio's pad cannot be); Delete of a pad with Allow free pads does nothing (KiCad removes the pad from its footprint; the studio keeps a
-  footprint's pads in step with their file records by index); D on a free pad drags what is under the cursor (`InlineDrag` does nothing for a pad). Tests:
+  footprint's pads in step with their file records by index) -- both **done since** (`task-v19-pcbfp`, `web/studio/PARITY-pcb.md` section 123: `PadEdit::opposite_side`,
+  `FootprintEdit::removed_pads`); D on a free pad drags what is under the cursor (`InlineDrag` does nothing for a pad). Tests:
   `node` `a_free_pad_has_no_clearance_to_another_net_and_is_picked_from_inside`, `from_ir` `a_free_pad_and_its_hole_have_no_clearance_to_another_net`, gates
   `a_free_pad_takes_the_first_net_that_touches_it`, ops `a_free_pad_moves_turns_mirrors_and_swaps_on_its_own`, slow cli
   `a_route_into_a_free_pad_and_a_free_pad_moved_on_its_own_are_clean_for_kicad_cli` (kicad-cli: no clearance or short; the moved pad written at its new

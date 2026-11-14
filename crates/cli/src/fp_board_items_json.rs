@@ -76,7 +76,7 @@ pub(crate) fn add_items(p: &mut Value, design: &Design, model: &ConstraintModel,
         out.insert("dimensions".into(), Value::Array(dims.collect()));
     }
     if !on_board.tables.is_empty() {
-        let tables = on_board.tables.iter().map(|t| crate::table_json::table_json(&eda_model::table::Table { id: board_id(&part.reference, &t.id), ..t.clone() }, tv.board()));
+        let tables = on_board.tables.iter().map(|t| crate::table_json::fp_table_json(&eda_model::table::Table { id: board_id(&part.reference, &t.id), ..t.clone() }, tv.board(), tv.footprint_vars(&part.reference)));
         out.insert("tables".into(), Value::Array(tables.collect()));
     }
     if !out.is_empty() {

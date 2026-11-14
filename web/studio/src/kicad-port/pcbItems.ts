@@ -154,9 +154,10 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const c = cellById(board, id)?.cell;
       return c ? [c.corners[0][0], c.corners[0][1]] : null;
     }
+    // `PAD::GetPosition()`: the pad's position (its hole), not its copper's centre
     case "pad": {
       const hit = padById(board, id);
-      return hit ? [hit.pad.x, hit.pad.y] : null;
+      return hit ? [hit.pad.px ?? hit.pad.x, hit.pad.py ?? hit.pad.y] : null;
     }
     case "field": {
       const hit = fieldById(board, id);

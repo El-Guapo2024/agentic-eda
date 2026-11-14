@@ -47,6 +47,11 @@ pub(crate) fn table_json(t: &Table, board: &PcbBoard) -> Value {
     table_value(t, &|row, col| pcb_cell_draw(t, row, col, board), false)
 }
 
+/// One table of the board footprint `footprint`: its cells' variables resolved by the footprint, then the board (`PCB_TABLECELL::GetShownText`, UI-LEFT-3 P3-31).
+pub(crate) fn fp_table_json(t: &Table, board: &PcbBoard, footprint: Option<&eda_model::text_vars::PcbFootprint>) -> Value {
+    table_value(t, &|row, col| eda_model::table_text::pcb_cell_draw_in(t, row, col, board, footprint), false)
+}
+
 /// One table of the sheet in view as the studio's state holds it: the same shape as a board's, with what only a sheet's cell has (`fill`, `fill_color`,
 /// `exclude_from_sim`) and a stroke of width 0 sent as the sheet's default width. `sheet` resolves the sheet's variables.
 pub(crate) fn sch_table_json(t: &Table, sheet: &Resolver) -> Value {

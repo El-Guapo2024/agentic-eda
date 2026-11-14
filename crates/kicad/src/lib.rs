@@ -2358,6 +2358,42 @@ pub(crate) fn note_uuid(uuid: &str, our_id: &str) {
     });
 }
 
+/// The uuid the child of footprint `fp_id` at `place` (`art:<i>`, `pad:<n>#<k>`, `field:<name>` .., [`eda_model::ir::FootprintExtra::child_uuids`]) is written with:
+/// the one its record keeps for the place (Update Footprint on Board's `fixUuid`), else one made from `seed` as always. A run of [`footprint_child_uuids`] notes it.
+pub(crate) fn child_uuid(own: Option<&eda_model::ir::FootprintExtra>, fp_id: &str, place: &str, seed: &str) -> String {
+    let u = match own.and_then(|e| e.child_uuids.get(place)) {
+        Some(u) => {
+            note_uuid(u, fp_id);
+            note_item_uuid(fp_id, u);
+            u.clone()
+        }
+        None => duid_for(seed, fp_id),
+    };
+    note_child_place(fp_id, place, &u);
+    u
+}
+
+/// Notes that the child of footprint `fp_id` at `place` is written with `uuid`, while a run of [`footprint_child_uuids`] asks.
+pub(crate) fn note_child_place(fp_id: &str, place: &str, uuid: &str) {
+    CHILD_PLACES.with(|m| {
+        if let Some(map) = m.borrow_mut().as_mut() {
+            map.insert((fp_id.to_string(), place.to_string()), uuid.to_string());
+        }
+    });
+}
+
+/// The uuid each child of the footprint `reference` is written with now, by its place ([`child_uuid`]): what Edit Footprint (Ctrl+E) records of the board items its
+/// copy is cloned from (`LoadFootprintFromBoard`'s `m_boardFootprintUuids`). Empty when the board cannot be written.
+pub fn footprint_child_uuids(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, reference: &str) -> std::collections::BTreeMap<String, String> {
+    CHILD_PLACES.with(|m| *m.borrow_mut() = Some(Default::default()));
+    let written = export_kicad_pcb(design, model, &ExportMeta { date: "2000-01-01", title: "" }).is_ok();
+    let all = CHILD_PLACES.with(|m| m.borrow_mut().take().unwrap_or_default());
+    if !written {
+        return Default::default();
+    }
+    all.into_iter().filter(|((fp, _), _)| fp == reference).map(|((_, place), u)| (place, u)).collect()
+}
+
 pub(crate) fn start_uuid_map() {
     UUID_MAP.with(|m| *m.borrow_mut() = Some(Default::default()));
 }
@@ -2372,6 +2408,11 @@ pub(crate) fn uuid_map_snapshot() -> Option<std::collections::HashMap<String, St
 }
 
 thread_local! {
+    /// The uuid of each footprint child by `(reference, place)`, while [`footprint_child_uuids`] runs.
+    static CHILD_PLACES: std::cell::RefCell<Option<std::collections::BTreeMap<(String, String), String>>> = const { std::cell::RefCell::new(None) };
+}
+
+thread_local! {
     /// Text every uuid of the screen being written is seeded with: empty for the root (its uuids are what they always were), the
     /// file name for a sheet, so two screens never mint the same uuid for items that look alike.
     static SEED_PREFIX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -2380,6 +2421,11 @@ thread_local! {
 fn duid_raw(seed: &str) -> String {
     let prefix = SEED_PREFIX.with(|p| p.borrow().clone());
     duid_plain(&format!("{prefix}{seed}"))
+}
+
+/// A uuid made from `seed` (never prefixed): a new item's when the caller must make one up (`KIID()`), as Update Footprint on Board does for a child its copy added.
+pub fn uuid_from_seed(seed: &str) -> String {
+    duid_plain(seed)
 }
 
 /// A uuid from `seed` alone: for the ids that several screens must agree on (a sheet's uuid, the root's), never prefixed.
