@@ -30,12 +30,15 @@
 // bridged solder mask apertures between pads" (`set_footprint_solder_mask`, any footprint); a user row named like a mandatory field is taken as KiCad's reader takes
 // it (its text and look on that field: `mergeDuplicateFields`), no longer refused.
 //
-// Not ported: jumper pad groups (shown by KiCad, not edited), the user fields carried to the symbol (Update Schematic from PCB's "Other fields" adds and deletes them).
+// UI-LEFT-3 P3-14 (task-v17-backannot): every field of the footprint is carried to the symbol at OK as Update Schematic from PCB's "Other fields" carries it
+// (`carryFieldsCmd`, `carry_symbol_fields`: a changed field set, a new one added hidden, a user field the footprint lacks deleted), and the Pad Properties tab shows the
+// footprint's jumper pad groups and "Duplicate pad numbers are jumpers" as KiCad 25ec2335's dialog lists them (read only there, as in KiCad: the Footprint Editor's
+// Footprint Properties edits them).
 import { DatasheetUrlButton } from "./DatasheetUrlButton";
 import type { EmbeddedOwner } from "../api/embeddedTypes";
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
-import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, backAnnotateEdits, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
+import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, carryFieldsCmd, jumperGroupsText, mergeDuplicateFields, newFieldLayout, newFieldName, parseFieldId, attrsOf, MANDATORY_ROW_COUNT, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { useActionRunner } from "../actions/useActionRunner";
@@ -250,9 +253,10 @@ export function FootprintPropertiesDialog() {
     // The Reference and Value texts, carried to the schematic's symbol as Update Schematic from PCB would (`BACK_ANNOTATE::applyChangelist`: the value, then the
     // reference); the rename last, as every command before it names the footprint by its old reference.
     if (val0 && valueChanged) cmds.push({ op: "edit_symbol_fields", id: part.ref, value: val0.text });
-    // The Datasheet and the Description the dialog changed, carried to the symbol as Update Schematic from PCB's "Other fields" would (UI-LEFT-2 PP18).
-    const symbolEdits = backAnnotateEdits(part, attrs.board_only, new Map([...infos].map(([n, f]) => [n, f.text])), merged);
-    if (symbolEdits.length > 0) cmds.push({ op: "set_symbol_fields", edits: symbolEdits });
+    // Every other field of the footprint, carried to the symbol as Update Schematic from PCB's "Other fields" would: set, added hidden, deleted (UI-LEFT-2 PP18,
+    // UI-LEFT-3 P3-14).
+    const carried = carryFieldsCmd(part, attrs.board_only, merged);
+    if (carried) cmds.push(carried);
     if (Object.keys(variantFields).length > 0) cmds.push({ op: "set_symbol_variant", variant, ids: [part.ref], fields: variantFields });
     if (ref0 && ref0.text.trim() !== part.ref) cmds.push({ op: "rename_symbol", id: part.ref, new_id: ref0.text.trim() });
     if (cmds.length === 0) return close();
@@ -507,6 +511,11 @@ export function FootprintPropertiesDialog() {
                       </option>
                     ))}
                   </select>
+                  {/* the Pad Connections box's "Jumper groups:" (`TransferDataToWindow`: read only, "none" in italics when there are none) */}
+                  <span>Jumper groups:</span>
+                  <span data-testid="fp-jumper-groups" style={jumperGroupsText(part) === null ? { fontStyle: "italic" } : undefined}>
+                    {jumperGroupsText(part) ?? "none"}
+                  </span>
                   <span>Clearance</span>
                   <OverrideInput testid="fp-zone-clearance" valueNm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
                   {/* the Clearance Overrides' "Solder mask expansion:" (empty for the board's) and "Allow bridged solder mask apertures between pads" */}

@@ -15,6 +15,15 @@
 //!   units of the selected pads in selection order, or one unit and the name of the unit to swap it with (the context menu's "Swap with B"). The units need as many pins
 //!   as each other, and every pad of them must exist.
 //!
+//! What KiCad 25ec2335 added is here too (UI-LEFT-3 P3-23): a board graphic on copper with a net that the cluster reaches takes the new net like a track
+//! (`PCB_SHAPE_T`); every item is scheduled for one net (`ScheduleNetSwap`), and an item two pads would give two different nets refuses the swap ("Cannot swap
+//! nets: connected items would receive conflicting nets."); unless Override locks is on (`Cmd::OverrideLocks`), an item whose net would change and that is
+//! locked -- a pad of a locked footprint, a locked track, via or graphic, or one in a locked group -- refuses it ("Cannot swap nets of locked pads or connected
+//! copper unless Override Locks is enabled."; `ValidateNetSwapLocks`, after the question, a pad "Ignore Unselected Pads" leaves alone not counted).
+//!
+//! A pad's net is its own (UI-LEFT-3 P3-35, `PAD::GetNetCode`): the pads of one number on two nets keep each its own (`PadMaskInfo::net`), which the swaps read
+//! and set pad by pad ([`Board::pad_net`], [`Board::set_pad_nets`]); a pad named `REF.NUM#k` is the `k`-th pad of the number.
+//!
 //! The board then disagrees with the schematic, as it does in KiCad, until Update Schematic from PCB carries the swap back (`crate::back_annotate`: the units, the
 //! pins or the labels): kicad-cli's `--schematic-parity` reports the pads (`net_conflict`) until then. One undo step each (`BOARD_COMMIT::Push( "Swap Pad Nets" )`, `"Swap Gate Nets"`).
 
@@ -31,15 +40,15 @@ fn refuse(check: &str, what: &str, message: impl Into<String>) -> Vec<CheckResul
 
 /// One pad of the board: its footprint, its number and which of the pads with that number it is (1-based).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PadKey {
-    reference: String,
-    number: String,
-    nth: u32,
+pub(crate) struct PadKey {
+    pub(crate) reference: String,
+    pub(crate) number: String,
+    pub(crate) nth: u32,
 }
 
 impl PadKey {
     /// `REF.NUM`: the pin of the net list.
-    fn pin(&self) -> String {
+    pub(crate) fn pin(&self) -> String {
         format!("{}.{}", self.reference, self.number)
     }
 
@@ -100,7 +109,8 @@ impl Board<'_> {
             return Err(refuse("ops_bad_swap", "swap_pad_nets", "Select two or more pads to swap their nets."));
         }
         let nets = self.nets_in_force();
-        let from: Vec<String> = pads.iter().map(|p| net_of(&nets, &p.pin())).collect();
+        // `pads[i]->GetNetCode()`: each pad's own net (UI-LEFT-3 P3-35)
+        let from: Vec<String> = pads.iter().map(|p| self.pad_net(&nets, p)).collect();
         // `allSame`: nothing to do.
         if from.iter().all(|n| *n == from[0]) {
             return Err(refuse("ops_nothing_to_change", "swap_pad_nets", "All the selected pads are on the same net: there is nothing to swap."));
@@ -174,7 +184,7 @@ impl Board<'_> {
             }
             unit_pads.push(pads);
         }
-        let unit_nets: Vec<Vec<String>> = unit_pads.iter().map(|pads| pads.iter().map(|p| net_of(&nets, &p.pin())).collect()).collect();
+        let unit_nets: Vec<Vec<String>> = unit_pads.iter().map(|pads| pads.iter().map(|p| self.pad_net(&nets, p)).collect()).collect();
         // `allSame`: every unit has the nets of the first at every position.
         if (0..pin_count).all(|pi| unit_nets.iter().all(|nets| nets[pi] == unit_nets[0][pi])) {
             return Err(refuse("ops_nothing_to_change", "swap_gate_nets", "Gate swapping has no effect: all selected gates have identical nets."));
@@ -193,9 +203,15 @@ impl Board<'_> {
         self.move_nets(&pads, &from, &to, connected_pads)
     }
 
-    /// The part both swaps share: the pad `pads[i]` goes from the net `from[i]` to `to[i]`, with the copper connected to it that is on `from[i]` -- tracks and vias
-    /// always, the other pads of it as `connected_pads` says. See the module doc.
+    /// The part both swaps share (KiCad 25ec2335 `EDIT_TOOL::SwapPadNets` / `SwapGateNets` from "Accumulate changes" on): the pad `pads[i]` goes from the net
+    /// `from[i]` to `to[i]`, with the copper connected to it that is on `from[i]` -- tracks, arcs, vias, the board graphics on copper and the other pads of it
+    /// (`GetConnectedItems( pad, EXCLUDE_ZONES )`, `PCB_TRACE_T`, `PCB_ARC_T`, `PCB_VIA_T`, `PCB_PAD_T`, `PCB_SHAPE_T`). Every item is scheduled once
+    /// (`ScheduleNetSwap`: the selected pads first, then what each one reaches); an item scheduled for two different nets refuses the whole swap ("Cannot swap
+    /// nets: connected items would receive conflicting nets."). Then the pads not asked for (`PromptConnectedPadDecision`, `connected_pads`), then the locks
+    /// (`ValidateNetSwapLocks`: unless Override locks is on, an item whose net would change and is locked -- a pad of a locked footprint, a locked track, via or
+    /// graphic, or one in a locked group -- refuses it, a pad left out by "Ignore Unselected Pads" not counted). See the module doc.
     fn move_nets(&mut self, pads: &[PadKey], from: &[String], to: &[String], connected_pads: Option<bool>) -> Result<(), Vec<CheckResult>> {
+        const CONFLICT: &str = "Cannot swap nets: connected items would receive conflicting nets.";
         let mut nets = self.nets_in_force();
         // The copper clusters are those of a model whose nets are the ones in force.
         let mut model: ConstraintModel = self.model.clone();
@@ -203,34 +219,60 @@ impl Board<'_> {
         let wanted: Vec<(String, String, u32)> = pads.iter().map(|p| (p.reference.clone(), p.number.clone(), p.nth)).collect();
         let clusters: Vec<PadCluster> = eda_connectivity::pad_clusters(&self.design, &model, &wanted);
 
+        // `itemNewNets`: each item and the net it is to get, in the order it was scheduled
+        let mut scheduled: Vec<(SwapItem, String)> = Vec::new();
+        let schedule = |scheduled: &mut Vec<(SwapItem, String)>, item: SwapItem, net: &str| -> Result<(), Vec<CheckResult>> {
+            match scheduled.iter().find(|(i, _)| *i == item) {
+                Some((_, n)) if n != net => Err(refuse("ops_swap_conflict", "swap_nets", CONFLICT)),
+                Some(_) => Ok(()),
+                None => {
+                    scheduled.push((item, net.to_string()));
+                    Ok(())
+                }
+            }
+        };
+        // "Include the direct pad changes so connectivity cannot assign them a conflicting net."
+        for (pad, net) in pads.iter().zip(to) {
+            schedule(&mut scheduled, SwapItem::Pad(pad.clone()), net)?;
+        }
         let selected: BTreeSet<&PadKey> = pads.iter().collect();
-        let mut track_net: BTreeMap<String, String> = BTreeMap::new();
-        let mut via_net: BTreeMap<String, String> = BTreeMap::new();
-        let mut pad_net: BTreeMap<PadKey, String> = BTreeMap::new();
         let mut unselected: BTreeSet<PadKey> = BTreeSet::new();
         let rt = self.design.routing.as_ref();
+        let shape_net = |id: &str| self.design.drawings.as_ref().and_then(|d| d.board_items.net_of(id)).unwrap_or("").to_string();
         for (i, cluster) in clusters.iter().enumerate() {
+            let mut reached: Vec<(SwapItem, String)> = Vec::new();
             for id in &cluster.tracks {
-                if rt.and_then(|r| r.tracks.iter().find(|t| &t.id == id)).is_some_and(|t| t.net == from[i]) {
-                    track_net.insert(id.clone(), to[i].clone());
+                if let Some(t) = rt.and_then(|r| r.tracks.iter().find(|t| &t.id == id)) {
+                    reached.push((SwapItem::Track(id.clone()), t.net.clone()));
                 }
             }
             for id in &cluster.vias {
-                if rt.and_then(|r| r.vias.iter().find(|v| &v.id == id)).is_some_and(|v| v.net == from[i]) {
-                    via_net.insert(id.clone(), to[i].clone());
+                if let Some(v) = rt.and_then(|r| r.vias.iter().find(|v| &v.id == id)) {
+                    reached.push((SwapItem::Via(id.clone()), v.net.clone()));
                 }
+            }
+            for id in &cluster.shapes {
+                reached.push((SwapItem::Shape(id.clone()), shape_net(id)));
             }
             for (reference, number, nth) in &cluster.pads {
                 let key = PadKey { reference: reference.clone(), number: number.clone(), nth: *nth };
-                if net_of(&nets, &key.pin()) != from[i] {
+                // (`GetConnectedItems` leaves out the item asked about)
+                if key == pads[i] {
                     continue;
                 }
-                // The selected pads get their new nets directly (below), whichever cluster they are found in.
-                if selected.contains(&key) {
+                let net = self.pad_net(&nets, &key);
+                reached.push((SwapItem::Pad(key), net));
+            }
+            for (item, net) in reached {
+                if net != from[i] {
                     continue;
                 }
-                unselected.insert(key.clone());
-                pad_net.insert(key, to[i].clone());
+                schedule(&mut scheduled, item.clone(), &to[i])?;
+                if let SwapItem::Pad(key) = item {
+                    if !selected.contains(&key) {
+                        unselected.insert(key);
+                    }
+                }
             }
         }
 
@@ -245,20 +287,58 @@ impl Board<'_> {
             }
         };
 
-        // The selected pads get their new nets directly (`pads[i]->SetNetCode( newNetForIndex( i ) )`), the pads connected to them when the decision includes them.
-        let moves = pads.iter().cloned().zip(to.iter().cloned()).chain(pad_net.into_iter().filter(|_| include_connected));
-        for (key, new_net) in moves {
-            let pin = key.pin();
-            for net in nets.iter_mut() {
-                net.pins.retain(|p| *p != pin);
+        // The net each scheduled item has now.
+        let current = |item: &SwapItem| -> String {
+            match item {
+                SwapItem::Pad(key) => self.pad_net(&nets, key),
+                SwapItem::Track(id) => rt.and_then(|r| r.tracks.iter().find(|t| &t.id == id)).map(|t| t.net.clone()).unwrap_or_default(),
+                SwapItem::Via(id) => rt.and_then(|r| r.vias.iter().find(|v| &v.id == id)).map(|v| v.net.clone()).unwrap_or_default(),
+                SwapItem::Shape(id) => shape_net(id),
             }
-            if !new_net.is_empty() {
-                match nets.iter_mut().find(|n| n.name == new_net) {
-                    Some(net) => insert_pin(&mut net.pins, pin),
-                    None => nets.push(Net { name: new_net, pins: vec![pin] }),
+        };
+        // `ValidateNetSwapLocks`
+        if !self.override_locks {
+            for (item, net) in &scheduled {
+                if current(item) == *net {
+                    continue;
+                }
+                let locked = match item {
+                    SwapItem::Pad(key) if !include_connected && !selected.contains(key) => false,
+                    // `PAD::IsLocked`: the footprint's lock (or its group's)
+                    SwapItem::Pad(key) => self.locked_with_group(&key.reference),
+                    SwapItem::Track(id) | SwapItem::Via(id) | SwapItem::Shape(id) => self.locked_with_group(id),
+                };
+                if locked {
+                    return Err(refuse("ops_locked", "swap_nets", "Cannot swap nets of locked pads or connected copper unless Override Locks is enabled."));
                 }
             }
         }
+
+        // Apply: the selected pads get their new nets directly, the items connected to them theirs, the pads among them as the decision says.
+        let mut pad_moves: Vec<(PadKey, String)> = Vec::new();
+        let (mut track_net, mut via_net, mut shape_nets): (BTreeMap<String, String>, BTreeMap<String, String>, BTreeMap<String, String>) = Default::default();
+        for (item, net) in scheduled {
+            if current(&item) == net {
+                continue;
+            }
+            match item {
+                SwapItem::Pad(key) => {
+                    if selected.contains(&key) || include_connected {
+                        pad_moves.push((key, net));
+                    }
+                }
+                SwapItem::Track(id) => {
+                    track_net.insert(id, net);
+                }
+                SwapItem::Via(id) => {
+                    via_net.insert(id, net);
+                }
+                SwapItem::Shape(id) => {
+                    shape_nets.insert(id, net);
+                }
+            }
+        }
+        self.set_pad_nets(&mut nets, &pad_moves);
         self.design.nets = Some(nets);
         if let Some(rt) = self.design.routing.as_mut() {
             for t in rt.tracks.iter_mut() {
@@ -272,8 +352,151 @@ impl Board<'_> {
                 }
             }
         }
+        if !shape_nets.is_empty() {
+            let items = &mut self.drawings_mut().board_items;
+            for (id, n) in shape_nets {
+                items.set_net(&id, Some(n).filter(|n| !n.is_empty()));
+            }
+        }
         self.sort_routing();
         Ok(())
+    }
+
+    /// The board's footprint of `reference` (`model.footprint_of`, whose pads the footprint's pad records follow; `footprint` when the command has put another one on
+    /// the part, which the model does not know yet) and its record's pads, when the two line up.
+    fn pad_records(&self, reference: &str, footprint: Option<&eda_model::Footprint>) -> Option<(eda_model::Footprint, Option<&[eda_model::ir::PadMaskInfo]>)> {
+        let footprint = match footprint {
+            Some(f) => f.clone(),
+            None => self.model.footprint_of(self.model.part(reference)?)?,
+        };
+        let records = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).map(|e| e.pads.as_slice()).filter(|p| p.len() == footprint.pads.len());
+        Some((footprint, records))
+    }
+
+    /// `PAD::GetNetname` of one pad of the board (UI-LEFT-3 P3-35): its own net where its number is on two (`PadMaskInfo::net`, `""` none), else its number's
+    /// in the net list `nets`. KiCad keeps a net per `PAD`; the model one per `REF.NUMBER`, with the pads of a split number holding their own.
+    pub(crate) fn pad_net(&self, nets: &[Net], key: &PadKey) -> String {
+        self.own_pad_net(key, None).unwrap_or_else(|| net_of(nets, &key.pin()))
+    }
+
+    /// The pad's own net (`PadMaskInfo::net`, `Some("")` for none), `None` where it has its number's; `footprint` as for [`Self::pad_records`].
+    pub(crate) fn own_pad_net(&self, key: &PadKey, footprint: Option<&eda_model::Footprint>) -> Option<String> {
+        let (footprint, records) = self.pad_records(&key.reference, footprint)?;
+        let k = footprint.pads.iter().enumerate().filter(|(_, p)| p.number == key.number).nth(key.nth.saturating_sub(1) as usize)?.0;
+        records?.get(k)?.net.clone()
+    }
+
+    /// `PAD::SetNetCode` for each of `moves` (UI-LEFT-3 P3-35): each pad takes its net, the other pads keep theirs. Where the pads of one number then share one
+    /// net, that is the number's in the net list `nets` and none keeps a net of its own; where they differ, each keeps its own (`PadMaskInfo::net`, the record
+    /// made where the footprint has none, as a renamed pad's is) and the number is on each of their nets, as a board read from a file has it.
+    pub(crate) fn set_pad_nets(&mut self, nets: &mut Vec<Net>, moves: &[(PadKey, String)]) {
+        self.set_pad_nets_on(nets, moves, None);
+    }
+
+    /// [`Self::set_pad_nets`] with the footprint the command has put the part on (`footprint`, for moves of that one part), which the model does not know yet.
+    pub(crate) fn set_pad_nets_on(&mut self, nets: &mut Vec<Net>, moves: &[(PadKey, String)], footprint: Option<&eda_model::Footprint>) {
+        let mut by_footprint: BTreeMap<&str, Vec<&(PadKey, String)>> = BTreeMap::new();
+        for m in moves {
+            by_footprint.entry(m.0.reference.as_str()).or_default().push(m);
+        }
+        for (reference, moves) in by_footprint {
+            let Some((footprint, _)) = self.pad_records(reference, footprint) else {
+                // no geometry: the number's net, as before
+                for (key, net) in moves {
+                    move_pin(nets, &key.pin(), net);
+                }
+                continue;
+            };
+            // every pad's net now, then the moves
+            let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+            let keys: Vec<PadKey> = footprint
+                .pads
+                .iter()
+                .map(|p| {
+                    let n = seen.entry(p.number.as_str()).or_insert(0);
+                    *n += 1;
+                    PadKey { reference: reference.to_string(), number: p.number.clone(), nth: *n }
+                })
+                .collect();
+            let mut now: Vec<String> = keys.iter().map(|k| self.own_pad_net(k, Some(&footprint)).unwrap_or_else(|| net_of(nets, &k.pin()))).collect();
+            let mut numbers: BTreeSet<String> = BTreeSet::new();
+            for (key, net) in moves {
+                if let Some(k) = keys.iter().position(|k| k == key) {
+                    now[k] = net.clone();
+                    numbers.insert(key.number.clone());
+                } else {
+                    move_pin(nets, &key.pin(), net);
+                }
+            }
+            for number in numbers {
+                let idx: Vec<usize> = (0..keys.len()).filter(|&k| keys[k].number == number && footprint.pads[k].kind != eda_model::PadKind::NonPlatedHole).collect();
+                let distinct: BTreeSet<&String> = idx.iter().map(|&k| &now[k]).collect();
+                let pin = format!("{reference}.{number}");
+                for n in nets.iter_mut() {
+                    n.pins.retain(|p| *p != pin);
+                }
+                for net in distinct.iter().filter(|n| !n.is_empty()) {
+                    match nets.iter_mut().find(|n| n.name == **net) {
+                        Some(n) => insert_pin(&mut n.pins, pin.clone()),
+                        None => nets.push(Net { name: (*net).clone(), pins: vec![pin.clone()] }),
+                    }
+                }
+                let split = distinct.len() > 1;
+                let own: Vec<(usize, Option<String>)> = idx.iter().map(|&k| (k, split.then(|| now[k].clone()))).collect();
+                self.set_own_pad_nets(reference, &footprint, &own);
+            }
+        }
+    }
+
+    /// The pad records' own nets (`PadMaskInfo::net`) of `reference`'s pads `own` (index in the footprint, net or `None` for the number's). A record is made for a
+    /// footprint that has none only when a pad needs a net of its own; a footprint made here gets each pad's pin function and type in it, as `pad_renumber` does.
+    fn set_own_pad_nets(&mut self, reference: &str, footprint: &eda_model::Footprint, own: &[(usize, Option<String>)]) {
+        let needed = own.iter().any(|(_, n)| n.is_some());
+        let pad_count = footprint.pads.len();
+        let pins: Vec<(String, String)> = footprint.pads.iter().map(|p| self.model.symbol_links.get(reference).and_then(|l| l.pins.get(&p.number)).cloned().unwrap_or_default()).collect();
+        let has = self.design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference)).is_some_and(|e| e.pads.len() == pad_count);
+        if !has && !needed {
+            return;
+        }
+        let dr = self.drawings_mut();
+        if !dr.footprint_extras.iter().any(|e| e.id == reference) {
+            dr.footprint_extras.push(eda_model::ir::FootprintExtra { id: reference.to_string(), ..Default::default() });
+        }
+        let extra = dr.footprint_extras.iter_mut().find(|e| e.id == reference).expect("just made");
+        if extra.pads.len() != pad_count {
+            let made_here = !extra.from_library;
+            extra.pads = pins
+                .into_iter()
+                .map(|(pin_function, pin_type)| if made_here { eda_model::ir::PadMaskInfo { pin_function, pin_type, ..Default::default() } } else { Default::default() })
+                .collect();
+        }
+        for (k, net) in own {
+            if let Some(p) = extra.pads.get_mut(*k) {
+                p.net = net.clone();
+            }
+        }
+    }
+}
+
+/// An item a swap of nets changes (`BOARD_CONNECTED_ITEM*` of `itemNewNets`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SwapItem {
+    Pad(PadKey),
+    Track(String),
+    Via(String),
+    Shape(String),
+}
+
+/// The pin `pin` taken off every net and put on `net` (none for `""`).
+fn move_pin(nets: &mut Vec<Net>, pin: &str, net: &str) {
+    for n in nets.iter_mut() {
+        n.pins.retain(|p| p != pin);
+    }
+    if !net.is_empty() {
+        match nets.iter_mut().find(|n| n.name == net) {
+            Some(n) => insert_pin(&mut n.pins, pin.to_string()),
+            None => nets.push(Net { name: net.to_string(), pins: vec![pin.to_string()] }),
+        }
     }
 }
 
@@ -389,19 +612,10 @@ impl Board<'_> {
             }
         }
         if !changing.is_empty() {
+            // each pad its own net (`pad->SetNetCode( newNetCode )`, UI-LEFT-3 P3-35)
             let mut nets = nets;
-            for (r, n, _) in &changing {
-                let pin = format!("{r}.{n}");
-                for list in nets.iter_mut() {
-                    list.pins.retain(|p| *p != pin);
-                }
-                if !net.is_empty() {
-                    match nets.iter_mut().find(|l| l.name == net) {
-                        Some(l) => insert_pin(&mut l.pins, pin),
-                        None => nets.push(Net { name: net.to_string(), pins: vec![pin] }),
-                    }
-                }
-            }
+            let moves: Vec<(PadKey, String)> = changing.iter().map(|(r, n, k)| (PadKey { reference: r.clone(), number: n.clone(), nth: *k }, net.to_string())).collect();
+            self.set_pad_nets(&mut nets, &moves);
             self.design.nets = Some(nets);
         }
         self.sort_routing();

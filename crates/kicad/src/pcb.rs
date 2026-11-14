@@ -1661,7 +1661,10 @@ pub(crate) fn write_footprint(
         if pad.kind != PadKind::NonPlatedHole {
             // the pad's own net, where its number is on two (`PadMaskInfo::net`), over the number's
             let own = pad_infos.and_then(|p| p.get(pad_idx)).and_then(|i| i.net.as_deref());
-            if let Some(net_name) = own.filter(|n| !n.is_empty()).or_else(|| if own.is_some() { None } else { pin_net(&pad.number) }) {
+            // (a later pad of a no-connect pin is on its own `<name>_1`, `updateComponentPadConnections`: UI-LEFT-3 P3-30)
+            let nth = footprint.pads[..pad_idx.min(footprint.pads.len())].iter().filter(|p| p.number == pad.number).count() as u32 + 1;
+            let later_nc = unconnected.get(&format!("{}.{}#{nth}", fp.id, pad.number)).map(String::as_str);
+            if let Some(net_name) = own.filter(|n| !n.is_empty()).or_else(|| if own.is_some() { None } else { later_nc.or_else(|| pin_net(&pad.number)) }) {
                 if let Some(&n) = net_num.get(net_name) {
                     write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
                 }
@@ -2214,6 +2217,36 @@ mod tests {
         let (mut design, model) = fixture();
         design.drawings.get_or_insert_with(Default::default).legacy_teardrops = true;
         assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(legacy_teardrops yes)"));
+    }
+
+    /// UI-LEFT-3 P3-30, `BOARD_NETLIST_UPDATER::updateComponentPadConnections`: a no-connect pin's pad is on the `unconnected-(..)` net KiCad's netlist gives the pin
+    /// (`SCH_PIN::GetDefaultNetName( .., true )`), and a second pad of that pin on a net of its own (`IsNoConnectPad()`, `padNetnames`: `<name>_1`); an ordinary
+    /// pin's two pads share its net.
+    #[test]
+    fn a_no_connect_pins_pads_are_each_on_a_net_of_their_own() {
+        let (mut design, mut model) = fixture();
+        let pad = |n: &str, x: f64| eda_model::Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (Nm::from_mm(x), Nm::ZERO), size: (Nm::from_mm(0.8), Nm::from_mm(0.8)), shape: Default::default(), kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        model.footprints.push(eda_model::Footprint { name: "DUP".into(), pads: vec![pad("1", -2.0), pad("2", 0.0), pad("2", 2.0), pad("3", 4.0), pad("3", 6.0)], courtyard: Some((Nm::from_mm(10.0), Nm::from_mm(2.0))), ..Default::default() });
+        let u1 = model.parts.iter_mut().find(|p| p.reference == "U1").unwrap();
+        u1.package = Some("DUP".into());
+        u1.footprint = Some("DUP".into());
+        u1.pins[1].kind = PinKind::Nc;
+        let mut link = eda_model::SymbolLink::default();
+        link.pins.insert("1".into(), (String::new(), "power_in".into()));
+        link.pins.insert("2".into(), ("NC".into(), "no_connect".into()));
+        link.pins.insert("3".into(), (String::new(), "passive".into()));
+        model.symbol_links.insert("U1".into(), link);
+        model.nets.retain(|n| n.name != "GND");
+        model.nets.push(net("GND", &["C1.2", "U1.3"]));
+        design.routing.as_mut().unwrap().tracks.clear();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let nets_of = |number: &str| -> Vec<String> {
+            let u1 = out.split("(footprint ").find(|f| f.contains("\"Reference\" \"U1\"")).unwrap();
+            u1.lines().filter(|l| l.contains(&format!("(pad \"{number}\" smd"))).filter_map(|l| l.split("(net ").nth(1)).map(|t| t.split('"').nth(1).unwrap().to_string()).collect()
+        };
+        assert_eq!(nets_of("2"), ["unconnected-(U1-Pad2)", "unconnected-(U1-Pad2)_1"], "{out}");
+        assert_eq!(nets_of("3"), ["GND", "GND"]);
+        assert!(out.contains("(net 3 \"unconnected-(U1-Pad2)_1\")") || out.lines().any(|l| l.trim_start().starts_with("(net ") && l.contains("unconnected-(U1-Pad2)_1")), "the net is declared");
     }
 
     fn fixture() -> (Design, ConstraintModel) {

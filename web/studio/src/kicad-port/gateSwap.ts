@@ -2,7 +2,7 @@
 // `gateSwapSingleUnitOnOneFootprint`): the selected pads belong to one footprint that has units (`FOOTPRINT::GetUnitInfo`, two at least), and the units they are in are
 // the gates to swap. Two or more such units with as many pins as each other are swapped with each other (the verb rotates the nets of their pads, position by position);
 // one unit is swapped with one of the other units that has as many pins, which the "Swap with <unit>" entries offer. Pure: no store, no DOM.
-import type { BoardState } from "../api/types";
+import type { BoardState, Cmd } from "../api/types";
 import { padById } from "./pcbItems";
 
 export interface GateUnit {
@@ -73,4 +73,14 @@ export function unselectedPadLabel(id: string): string {
   if (dot <= 0) return id;
   const hash = id.lastIndexOf("#");
   return `${id.slice(0, dot)}:${hash > dot ? id.slice(dot + 1, hash) : id.slice(dot + 1)}`;
+}
+
+/**
+ * The swap of nets as the server takes it (UI-LEFT-3 P3-23): `connected_pads` the answer to `PromptConnectedPadDecision` (left out for the preview, which asks), wrapped in
+ * `override_locks` while Override locks is checked -- `ValidateNetSwapLocks` returns at once when `GetOverrideLocks()`, else a locked pad, track, via or graphic whose net
+ * would change refuses the swap ("Cannot swap nets of locked pads or connected copper unless Override Locks is enabled.").
+ */
+export function swapNetsCmd(cmd: Cmd, connectedPads: boolean | undefined, overrideLocks: boolean): Cmd {
+  const sent = (connectedPads === undefined ? cmd : { ...cmd, connected_pads: connectedPads }) as Cmd;
+  return overrideLocks ? { op: "override_locks", cmd: sent } : sent;
 }

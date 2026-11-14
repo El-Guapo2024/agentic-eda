@@ -422,3 +422,28 @@ fn a_footprint_opened_by_its_normalized_name_is_the_editors_under_that_name() {
     let lib = b.design().footprint_library.as_ref().unwrap();
     assert!(lib.by_name("0603").is_some_and(|f| f.pads.len() == 2), "{:?}", lib.footprints.iter().map(|f| &f.name).collect::<Vec<_>>());
 }
+
+/// UI-LEFT-3 P3-22, `ExchangeFootprint`'s `matchItemsBySimilarity<PAD>` and `newPad->SetNetCode( oldPad->GetNetCode() )`: each new pad takes the net of the old pad it
+/// matched, pad by pad. R1 changed to a footprint whose two pads are unnumbered, where R_A's 1 and 2 were: each is matched by its place and keeps that pad's net, the
+/// two unnumbered pads on two nets each with its own (`PadMaskInfo::net`); changed back, pads 1 and 2 take them again and no pad keeps a net of its own.
+#[test]
+fn unnumbered_pads_take_the_net_of_the_pad_they_match_by_place() {
+    let (model, design) = fixture();
+    let mut unnumbered = r_a();
+    unnumbered.name = "Test:R_U".into();
+    unnumbered.pads[0].number = String::new();
+    unnumbered.pads[1].number = String::new();
+    let mut b = Board::new(design, &model, mm(0.1), mm(0.3));
+    b.apply(&exchange(&["R1"], Some("Test:R_U"), ExchangeOptions::change(), &[unnumbered])).unwrap();
+    let own: Vec<Option<String>> = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").map(|e| e.pads.iter().map(|p| p.net.clone()).collect()).unwrap_or_default();
+    assert_eq!(own, [Some("N1".to_string()), Some("N2".to_string())], "each pad its matched pad's net");
+    let nets = b.design().nets.clone().unwrap();
+    assert!(nets.iter().filter(|n| n.pins.contains(&"R1.".to_string())).count() == 2 && nets.iter().all(|n| !n.pins.iter().any(|p| p == "R1.1" || p == "R1.2")), "{nets:?}");
+    // and back: pads 1 and 2 matched by place to the two unnumbered pads, each with its net; one net per number again
+    b.apply(&exchange(&["R1"], Some("Test:R_A"), ExchangeOptions::change(), &[r_a()])).unwrap();
+    let own: Vec<Option<String>> = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").map(|e| e.pads.iter().map(|p| p.net.clone()).collect()).unwrap_or_default();
+    assert!(own.iter().all(Option::is_none), "{own:?}");
+    let nets = b.design().nets.clone().unwrap();
+    let net_of = |pin: &str| nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap_or_default();
+    assert_eq!([net_of("R1.1"), net_of("R1.2")], ["N1", "N2"]);
+}

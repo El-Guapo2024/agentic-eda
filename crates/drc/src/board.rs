@@ -717,12 +717,17 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 };
                 let hole = pad_hole_shape(center, pad, pad_rot);
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
-                let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();
                 let pad_layers = match pad.kind {
                     PadKind::Smd => vec![if pad.on_back(fp.side) { "B.Cu".to_string() } else { "F.Cu".to_string() }],
                     PadKind::ThroughHole | PadKind::NonPlatedHole => layers.clone(),
                 };
                 let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
+                // `PAD::GetNetname` as the writer gives it: the pad's own net where its number is on two (`PadMaskInfo::net`, UI-LEFT-3 P3-35), else its number's,
+                // else the `unconnected-(..)` net the derived board gives a pin on no net (a no-connect pin's, a lone pin's; UI-LEFT-3 P3-30)
+                let net = match pmask.and_then(|m| m.net.clone()) {
+                    Some(own) => Some(own).filter(|n| !n.is_empty()),
+                    None => eda_engine::nets::written_pad_net(|k| pin_net.get(k).map(String::as_str), &unconnected, &fp.id, &pad.number, nth).map(str::to_string),
+                };
                 let free = pad.kind != PadKind::NonPlatedHole && written_pad_is_free(design, model, &pin_net, &unconnected, &fp.id, extra, pmask, &pad.number, nth);
                 let lone_net = if net.is_some() || pad.kind == PadKind::NonPlatedHole {
                     None
@@ -979,5 +984,36 @@ mod tests {
         assert_eq!((x1 - x0, y1 - y0), (mm(0.88), mm(0.5)));
         // above the courtyard (half height 1 mm) by 0.7 mm
         assert_eq!(((x0 + x1) / 2, (y0 + y1) / 2), (mm(10.0), mm(10.0 - 1.0 - 0.7)));
+    }
+
+    /// UI-LEFT-3 P3-35 and P3-30: the checks' (and the router's) board puts each pad on the net the writer gives it -- a pad of a number on two nets on its own
+    /// (`PadMaskInfo::net`), a pad whose pin is on no net on its `unconnected-(..)` net -- not on its number's.
+    #[test]
+    fn each_pad_is_on_the_net_the_board_file_gives_it() {
+        let pad = |n: &str, x: f64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (mm(x), Nm::ZERO), size: (mm(0.8), mm(0.8)), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "3PAD".into(), pads: vec![pad("1", -2.0), pad("1", 0.0), pad("2", 2.0)], courtyard: Some((mm(6.0), mm(1.0))), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
+        let pin = |n: &str| eda_model::Pin { number: n.into(), name: None, kind: eda_model::PinKind::Passive };
+        let part = Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: Some("3PAD".into()), footprint: Some("3PAD".into()), pins: vec![pin("1"), pin("2")], body_nm: None, symbol: None, datasheet: None, edge: None };
+        let model = ConstraintModel { parts: vec![part], footprints: vec![fp], nets: vec![eda_model::Net { name: "A".into(), pins: vec!["U1.1".into()] }], ..Default::default() };
+        let mut design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: eda_model::ir::SCHEMA_VERSION,
+            provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            routing: None,
+            placement: None,
+            drawings: None,
+        };
+        design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "U1".into(), at: Point { x: mm(10.0), y: mm(10.0) }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] });
+        let nets = |design: &Design| build(design, &model).pads.iter().map(|p| p.net.clone()).collect::<Vec<_>>();
+        assert_eq!(nets(&design), [Some("A".into()), Some("A".into()), Some("unconnected-(U1-Pad2)".into())]);
+        let infos = vec![eda_model::ir::PadMaskInfo { net: Some("A".into()), ..Default::default() }, eda_model::ir::PadMaskInfo { net: Some("B".into()), ..Default::default() }, Default::default()];
+        let mut file_read = design.clone();
+        file_read.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![eda_model::ir::FootprintExtra { id: "U1".into(), pads: infos, ..Default::default() }], ..Default::default() });
+        assert_eq!(nets(&file_read), [Some("A".into()), Some("B".into()), None], "the pads' own; a footprint read from a file has no unconnected-(..) net the board makes");
     }
 }

@@ -9,7 +9,7 @@
 // selected, moved, turned and flipped by the same verbs as any other item.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, SymbolFieldEdit, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
+import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Nm, TextGraphicsDefaults, UserFieldCmd } from "../api/types";
 import { objectOn } from "./appearance";
 import { isBackLayer, textStyleOf } from "./layerDefaults";
 
@@ -199,33 +199,51 @@ export function mergeDuplicateFields<T extends { name: string; text: string; lay
   return out;
 }
 
-/** The two mandatory fields Update Schematic from PCB's "Other fields" carries to the symbol (Reference and Value are `BACK_ANNOTATE`'s own options). */
-export const BACK_ANNOTATED_FIELDS = ["Datasheet", "Description"] as const;
+/** The symbol's fields that are never deleted by "Other fields" (`SCH_FIELD::IsMandatory`); Reference and Value are `BACK_ANNOTATE`'s own options and never carried. */
+const MANDATORY_SYMBOL_FIELDS = ["Reference", "Value", "Footprint", "Datasheet", "Description"] as const;
 
 /**
- * The edits of the schematic symbol a Datasheet or Description edited in Footprint Properties makes (UI-LEFT-2 PP18), as `set_symbol_fields` takes them.
+ * Update Schematic from PCB's "Other fields" for the footprint Footprint Properties' OK leaves (UI-LEFT-2 PP18, UI-LEFT-3 P3-14), as `carry_symbol_fields` takes it, or
+ * null when it would change nothing.
  *
- * KiCad's dialog sets the footprint's field (`TransferDataFromWindow`), and Update Schematic from PCB carries it to the symbol: the board's netlist sends every
- * field of the footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[field->GetCanonicalName()] = field->GetText()`, board-only footprints
- * left out), and `BACK_ANNOTATE::applyChangelist` with "Other fields" (on by default, `m_cbUpdateOtherFields`) skips the Reference and the Value, then sets a
- * symbol field that `!HasTextVars()` and whose shown text differs: "Change %s field '%s' value to '%s'.". The studio carries the Reference and the Value at OK, as
- * that update would, and so carries these two the same way -- only the ones the dialog changed (`before`), so that OK on a footprint whose file gave it a Datasheet of
- * its own does not rewrite the symbol unasked. Nothing for a footprint no symbol is for (`symbol_fields` absent: "Footprint '%s' has no assigned symbol.") or one
- * marked Not in schematic (`boardOnly`, the new attributes).
+ * KiCad's dialog sets the footprint's fields (`TransferDataFromWindow`), and Update Schematic from PCB carries them to the symbol: the board's netlist sends every field
+ * of the footprint (`PCB_EDIT_FRAME::KiwayMailIn`'s `MAIL_PCB_GET_NETLIST`: `fields[field->GetCanonicalName()] = field->GetText()`, board-only footprints left out), and
+ * `BACK_ANNOTATE::applyChangelist` with "Other fields" (on by default, `m_cbUpdateOtherFields`) skips the Reference and the Value, sets a symbol field that
+ * `!HasTextVars()` and whose shown text differs ("Change %s field '%s' value to '%s'."), adds a field the symbol has not, hidden at the symbol ("Add %s field '%s' with
+ * value '%s'."), and deletes a field of the symbol that is not mandatory and that the footprint has not ("Delete %s field '%s.'"). The studio carries the Reference and
+ * the Value at OK, as that update would, and so carries the other fields the same way: every field the footprint has once OK is pressed (`rows`, the grid as it is
+ * kept), against what the symbol has (`part.symbol_fields`: its Datasheet, Description and user fields). Nothing for a footprint no symbol is for (`symbol_fields`
+ * absent: "Footprint '%s' has no assigned symbol.") or one marked Not in schematic (`boardOnly`, the new attributes).
  */
-export function backAnnotateEdits(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, before: ReadonlyMap<string, string>, after: readonly { name: string; text: string }[]): SymbolFieldEdit[] {
-  const symbol = part.symbol_fields;
-  if (!symbol || boardOnly) return [];
-  const out: SymbolFieldEdit[] = [];
-  for (const name of BACK_ANNOTATED_FIELDS) {
-    const row = after.find((r) => r.name.trim() === name);
-    if (!row || row.text === before.get(name)) continue;
+export function carryFieldsCmd(part: Pick<Part, "ref" | "symbol_fields">, boardOnly: boolean, rows: readonly { name: string; text: string }[]): Cmd | null {
+  const symbol: Record<string, string> | undefined = part.symbol_fields;
+  if (!symbol || boardOnly) return null;
+  const fields: Record<string, string> = {};
+  for (const r of rows) fields[r.name.trim()] = r.text;
+  let changes = false;
+  for (const [name, text] of Object.entries(fields)) {
+    if (name === "Reference" || name === "Value") continue;
     const now = symbol[name];
-    // `symField->HasTextVars()`: a field that names a variable is left alone
-    if (now.includes("${") || now === row.text) continue;
-    out.push({ id: part.ref, field: name, value: row.text });
+    // 1. a field whose text differs and names no variable; 2. a field the symbol lacks
+    if (now === undefined || (!now.includes("${") && now !== text)) changes = true;
   }
-  return out;
+  // 3. a field of the symbol the footprint lacks
+  for (const name of Object.keys(symbol)) if (!(MANDATORY_SYMBOL_FIELDS as readonly string[]).includes(name) && !(name in fields)) changes = true;
+  return changes ? { op: "carry_symbol_fields", id: part.ref, fields } : null;
+}
+
+/**
+ * Footprint Properties' "Jumper groups:" (`DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow`): "all pads with duplicate numbers" when duplicate pad numbers are
+ * jumpers, then each group as "(1, 2)", joined by ";  "; null for none (the dialog says "none" in italics).
+ */
+export function jumperGroupsText(part: Pick<Part, "jumpers">): string | null {
+  const j = part.jumpers;
+  let text = j?.duplicates ? "all pads with duplicate numbers" : "";
+  for (const group of j?.groups ?? []) {
+    if (text !== "") text += ";  ";
+    text += `(${group.join(", ")})`;
+  }
+  return text === "" ? null : text;
 }
 
 /** `GetUserFieldName( ordinal )`: the name a field starts with when it is added (`Field4`, `Field5` ...). */

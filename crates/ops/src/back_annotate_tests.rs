@@ -280,3 +280,81 @@ fn the_short_name_is_what_follows_the_last_slash() {
     assert_eq!(short_name("/Net-(R1-Pad1)"), "Net-(R1-Pad1)");
     let _ = Nm::ZERO;
 }
+
+/// UI-LEFT-3 P3-34: the units of one footprint on two sheets swap too (`SetUnit` and `SetUnitSelection( sheet, .. )` on each one's own sheet): unit A of U1 on the
+/// root, unit B in the sheet `Sub`, the board's gate swap carried back as one `SetSymbolUnit` on each sheet.
+#[test]
+fn units_on_two_sheets_are_swapped_each_on_its_own_sheet() {
+    let m = model();
+    let mut root = section();
+    root.symbols.push(sym("U1", "Test:DUAL", 1, p(50.8, 50.8)));
+    wire_out(&mut root, &m, "U1.1", Some("P"));
+    wire_out(&mut root, &m, "U1.2", Some("Q"));
+    root.sheets.push(eda_model::ir::SheetInstance { id: "sh1".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: p(150.0, 20.0), size: (mm(30.0), mm(20.0)), pins: vec![], page: "2".into() });
+    let mut sub = section();
+    sub.symbols.push(sym("U1", "Test:DUAL", 2, p(50.8, 76.2)));
+    wire_out(&mut sub, &m, "U1.3", Some("R"));
+    wire_out(&mut sub, &m, "U1.4", Some("S"));
+    sub.assign_missing_ids();
+    let mut d = design_of(root);
+    d.sheet_contents = Some([("sub.kicad_sch".to_string(), sub)].into_iter().collect());
+    // what the drawing traces to (the sheet's local labels under its path)
+    let t = |name: &str, pin: &str| TracedNet { name: name.into(), pins: vec![pin.into()], driven: true };
+    let traced = vec![t("/P", "U1.1"), t("/Q", "U1.2"), t("/Sub/R", "U1.3"), t("/Sub/S", "U1.4")];
+    let board = nets(&[("/Sub/R", &["U1.1"]), ("/Sub/S", &["U1.2"]), ("/P", &["U1.3"]), ("/Q", &["U1.4"])]);
+    let plan = plan_net_back_annotation(&d, &m, &board, &traced, &BackAnnotateOptions::default());
+    assert_eq!(texts(&plan), [("action".to_string(), "Swap U1 unit A with unit B.".to_string())]);
+    assert_eq!(plan.cmds.len(), 2, "one on each sheet: {:?}", plan.cmds);
+    let after = apply(d, &m, &plan);
+    assert_eq!(after.schematic.as_ref().unwrap().symbols[0].unit, 2, "the root's U1 draws B");
+    assert_eq!(after.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].symbols[0].unit, 1, "the sheet's draws A");
+}
+
+/// `GetDriverPriority`: a hidden power input of an ordinary symbol drives its net as a global power pin (`SCH_PIN::IsGlobalPower`'s legacy rule), so the net
+/// is not renamed; "Net %s cannot be changed to %s because it is driven by a power pin."
+#[test]
+fn a_hidden_power_pin_of_an_ordinary_symbol_drives_its_net() {
+    let mut m = model();
+    let mut vdd = lib_pin("3", 0.0, 1, "power_in");
+    vdd.hidden = true;
+    m.symbols.push(lib("Test:REG", 1, vec![lib_pin("1", 2.54, 1, "passive"), lib_pin("2", -2.54, 1, "passive"), vdd], false));
+    let mut s = section();
+    s.symbols.push(sym("U1", "Test:TWO", 1, p(50.8, 50.8)));
+    s.symbols.push(sym("U2", "Test:REG", 1, p(101.6, 50.8)));
+    // U1.1 wired to U2's hidden power pin 3 (at U2's origin)
+    let from = tips(&s, &m)["U1.1"];
+    let to = tips(&s, &m)["U2.3"];
+    s.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![from, Point { x: from.x - mm(5.08), y: from.y }, Point { x: from.x - mm(5.08), y: to.y }, to], bus: false });
+    let d = design_of(s);
+    let traced = vec![TracedNet { name: "VDD".into(), pins: vec!["U1.1".into(), "U2.3".into()], driven: true }];
+    let board = nets(&[("VCC", &["U1.1"])]);
+    let plan = plan_net_back_annotation(&d, &m, &board, &traced, &BackAnnotateOptions::default());
+    assert_eq!(texts(&plan), [("error".to_string(), "Net VDD cannot be changed to VCC because it is driven by a power pin.".to_string())]);
+    assert!(plan.cmds.is_empty());
+}
+
+/// UI-LEFT-3 P3-14, `applyChangelist`'s "Other fields": the footprint's fields carried to its symbol -- a changed one set, one the symbol lacks added hidden, a user
+/// field the footprint lacks deleted, Reference and Value passed over, a field naming a variable left alone.
+#[test]
+fn the_footprints_fields_are_carried_to_its_symbol() {
+    let m = model();
+    let mut s = section();
+    s.symbols.push(sym("U1", "Test:TWO", 1, p(50.8, 50.8)));
+    s.user_fields.insert("U1".into(), [("MPN".to_string(), "X1".to_string()), ("Old".to_string(), "gone".to_string()), ("Rev".to_string(), "${REV}".to_string())].into_iter().collect());
+    let d = design_of(s);
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let fields: BTreeMap<String, String> = [("Reference", "U9"), ("Value", "v"), ("Datasheet", "ds.pdf"), ("Description", "a part"), ("MPN", "X2"), ("Vendor", "ACME"), ("Rev", "B")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+    b.apply(&Cmd::CarrySymbolFields { id: "U1".into(), fields }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let user = &sch.user_fields["U1"];
+    assert_eq!(user.get("MPN").map(String::as_str), Some("X2"), "changed");
+    assert_eq!(user.get("Vendor").map(String::as_str), Some("ACME"), "added");
+    assert_eq!(user.get("Rev").map(String::as_str), Some("${REV}"), "a field naming a variable is left alone");
+    assert!(!user.contains_key("Old"), "deleted: the footprint has no such field");
+    assert_eq!(user.get("Description").map(String::as_str), Some("a part"));
+    assert_eq!(sch.symbols[0].datasheet, "ds.pdf");
+    assert_eq!(sch.symbols[0].id, "U1", "the Reference is not this command's");
+    assert!(!sch.field_layout.contains_key(&eda_model::ir::field_key("U1", 1)), "the added field has no place: hidden at the symbol");
+    let err = b.apply(&Cmd::CarrySymbolFields { id: "U7".into(), fields: BTreeMap::new() }).unwrap_err();
+    assert_eq!(err[0].check, "ops_unknown_item");
+}

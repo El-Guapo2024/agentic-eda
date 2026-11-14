@@ -324,3 +324,27 @@ fn the_component_class_the_units_and_the_jumper_settings_follow_the_component() 
     let said: Vec<String> = texts(&again).into_iter().filter(|l| l.contains("class") || l.contains("unit metadata") || l.contains("jumper")).collect();
     assert!(said.is_empty(), "{said:?}");
 }
+
+/// UI-LEFT-3 P3-35 / P3-30, `updateComponentPadConnections` pad by pad (`for( PAD* pad : pads )`): a footprint with two pads numbered 4, its pin 4 a no-connect pin
+/// (`IsNoConnectPad`), puts each pad on a net of its own -- the netlist's `unconnected-(U1-Pad4)` and `unconnected-(U1-Pad4)_1` (`padNetnames`) -- which the pads keep
+/// as their own (`PadMaskInfo::net`); a netlist that gives pin 4 an ordinary net puts both pads on it, the number's again.
+#[test]
+fn the_pads_of_a_no_connect_pin_each_get_a_net_of_their_own() {
+    let mut m = model();
+    m.footprints.push(pads("Test:DUP", &["1", "2", "3", "4", "4"]));
+    m.parts[0].footprint = Some("Test:DUP".into());
+    let mut b = board(&m);
+    let text = netlist("A", "").replacen(r#"(value "A") (footprint "Test:QUAD")"#, r#"(value "A") (footprint "Test:DUP")"#, 1);
+    b.apply(&Cmd::ImportNetlist(cmd(&text, by_ref(NetlistOptions::default())))).unwrap();
+    let report = take_report().unwrap();
+    let own: Vec<Option<String>> = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").map(|e| e.pads.iter().map(|p| p.net.clone()).collect()).unwrap_or_default();
+    assert_eq!(own, [None, None, None, Some("unconnected-(U1-Pad4)".to_string()), Some("unconnected-(U1-Pad4)_1".to_string())], "{:?}", texts(&report));
+    assert!(has(&report, "Reconnected U1 pin 4 from unconnected-(U1-Pad4) to unconnected-(U1-Pad4)_1."), "{:?}", texts(&report));
+    // pin 4 on /B: both pads on it, no net of their own
+    let on_b = text.replace(r#"(net (code "3") (name "unconnected-(U1-Pad4)") (node (ref "U1") (pin "4") (pintype "passive+no_connect")))"#, r#"(net (code "3") (name "/B2") (node (ref "U1") (pin "4")))"#);
+    b.apply(&Cmd::ImportNetlist(cmd(&on_b, by_ref(NetlistOptions::default())))).unwrap();
+    let _ = take_report();
+    let own: Vec<Option<String>> = b.design().drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").map(|e| e.pads.iter().map(|p| p.net.clone()).collect()).unwrap_or_default();
+    assert!(own.iter().all(Option::is_none), "{own:?}");
+    assert_eq!(net_of(&b, "U1.4"), "/B2");
+}

@@ -241,7 +241,7 @@ impl Board<'_> {
     }
 
     /// `BOARD_ITEM::IsLocked()` of a footprint: its own lock, or the lock of a group it is in (at any depth).
-    fn locked_with_group(&self, id: &str) -> bool {
+    pub(crate) fn locked_with_group(&self, id: &str) -> bool {
         let Some(d) = self.design.drawings.as_ref() else { return false };
         let locked = |x: &str| d.locked_ids.iter().any(|l| l == x);
         if locked(id) {

@@ -1367,6 +1367,9 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
         .map(|ps| ps.iter().filter_map(|p| Some((p["ref"].as_str()?.to_string(), p["block"].as_str().unwrap_or("").to_string()))).collect())
         .unwrap_or_default();
     let net_of: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    // a pad whose pin is on no net is on the `unconnected-(..)` net the board file gives it (a no-connect pin's, a lone pin's: `updateComponentPadConnections`,
+    // UI-LEFT-3 P3-30), as the writer, the checks and the router have it
+    let unconnected_nets = eda_engine::nets::unconnected_pad_nets(&design, &model);
     let pl = design.placement.as_ref();
     // The footprint libraries the parts' bodies are looked up in (the board's library tables), read when the first part needs them.
     let body_libs = crate::body_api::Libs::of_board(dir);
@@ -1411,7 +1414,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 .iter()
                 .enumerate()
                 .map(|(i, q)| {
-                    let mut net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
+                    let nth = engine_pads.get(i).map_or(1, |(_, k)| *k);
+                    let mut net = eda_engine::nets::written_pad_net(|k| net_of.get(k).copied(), &unconnected_nets, &part.reference, &q.number, nth);
                     // the pad's own net where its number is on two (`PadMaskInfo::net`, UI-LEFT-2 PP21): the k-th pad of the number in the footprint's order
                     if let (Some((pad, nth)), Some(f), Some(e)) = (engine_pads.get(i), footprint.as_ref(), design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference))) {
                         let file_idx = f.pads.iter().enumerate().filter(|(_, p)| p.number == pad.number).nth((*nth as usize).saturating_sub(1)).map(|(k, _)| k);
@@ -1564,6 +1568,13 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 if e.allow_soldermask_bridges {
                     p["allow_soldermask_bridges"] = json!(true);
                 }
+                // Footprint Properties' "Jumper groups:" (`GetDuplicatePadNumbersAreJumpers`, `JumperPadGroups`, UI-LEFT-3 P3-14): the record's tokens, absent when none
+                let mut tokens = e.tokens.clone();
+                let mut settings = eda_model::fp_settings::FootprintSettings::default();
+                settings.absorb_kept(&mut tokens);
+                if settings.duplicate_pad_numbers_are_jumpers || !settings.jumper_pad_groups.is_empty() {
+                    p["jumpers"] = json!({ "duplicates": settings.duplicate_pad_numbers_are_jumpers, "groups": settings.jumper_pad_groups });
+                }
             }
             // The schematic symbol's Datasheet and Description, which Footprint Properties carries an edit of the footprint's to (Update Schematic from PCB's
             // "Other fields", UI-LEFT-2 PP18); absent when no symbol is for the footprint.
@@ -1571,7 +1582,15 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
             let shown = if design.schematic.is_some() { Some(&design) } else { derived_sch.get_or_init(|| board::derived_schematic(&design, &model).ok()).as_ref() };
             let symbol_field = |name: &str| shown.and_then(|d| eda_ops::fields_table::symbol_field_text(d, &model, &part.reference, name));
             if let (Some(datasheet), Some(description)) = (symbol_field("Datasheet"), symbol_field("Description")) {
-                p["symbol_fields"] = json!({ "Datasheet": datasheet, "Description": description });
+                // and its user fields (Update Schematic from PCB's "Other fields" adds, sets and deletes them too, UI-LEFT-3 P3-14), as stored (a `${..}` kept)
+                let mut fields: serde_json::Map<String, Value> = shown
+                    .and_then(|d| d.schematic.iter().chain(d.sheet_contents.iter().flat_map(|c| c.values())).find(|sch| sch.symbols.iter().any(|s| s.id == part.reference)))
+                    .and_then(|sch| sch.user_fields.get(&part.reference))
+                    .map(|m| m.iter().map(|(k, v)| (k.clone(), json!(v))).collect())
+                    .unwrap_or_default();
+                fields.insert("Datasheet".into(), json!(datasheet));
+                fields.insert("Description".into(), json!(description));
+                p["symbol_fields"] = Value::Object(fields);
             }
         }
         parts.push(p);
@@ -1873,6 +1892,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
 /// zone (not a rule area) names.
 pub(crate) fn board_net_names(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<String> {
     let mut nets: std::collections::BTreeSet<String> = model.nets.iter().map(|n| n.name.clone()).collect();
+    // and the `unconnected-(..)` nets of the pads whose pins are on none (UI-LEFT-3 P3-30), which the board file numbers too
+    nets.extend(eda_engine::nets::unconnected_pad_nets(design, model).into_values());
     if let Some(rt) = &design.routing {
         nets.extend(rt.tracks.iter().map(|t| t.net.clone()).chain(rt.vias.iter().map(|v| v.net.clone())).chain(rt.zones.iter().filter(|z| !z.is_rule_area).map(|z| z.net.clone())));
     }
@@ -2258,7 +2279,12 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == path_unit))
                         .map(|pin| {
-                            let mut j = json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net_of_pin(&pin_net, &reference, &pin.number) });
+                            // a pin on no net is on its own `unconnected-(..)` net (`SCH_PIN::GetDefaultNetName( .., true )`: a no-connect pin, a pin wired to nothing; UI-LEFT-3 P3-30)
+                            let net = net_of_pin(&pin_net, &reference, &pin.number).map(str::to_string).unwrap_or_else(|| {
+                                let unit = model.symbol_links.get(&reference).and_then(|l| l.units.get(&pin.number)).map(String::as_str);
+                                eda_engine::nets::unconnected_net_name(&format!("{reference}.{}", pin.number), pin.name.as_deref(), unit)
+                            });
+                            let mut j = json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": net });
                             // the alternate the pin keeps (`SCH_PIN::SetAlt`), its shown name (`GetShownName`), for the Net Navigator's line (r7 A7-M1)
                             let alt = sch.extras.pin_alternates.get(&eda_model::ir::field_key(&s.id, s.unit)).and_then(|m| m.get(&pin.number)).map(String::as_str);
                             if let Some(kept) = resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number).and_then(|lp| r.kept_alternate(lp, alt))) {

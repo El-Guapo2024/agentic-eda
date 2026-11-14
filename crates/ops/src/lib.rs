@@ -1926,6 +1926,13 @@ pub enum Cmd {
         remove_fields: Vec<String>,
     },
 
+    /// Update Schematic from PCB's "Other fields" for one footprint (`BACK_ANNOTATE::applyChangelist`'s `m_processOtherFields`, UI-LEFT-3 P3-14), which Footprint
+    /// Properties' OK carries out (the studio's one design): `fields` is every field of the footprint (`PCB_FIELD::GetCanonicalName()` -> text, as the board's netlist
+    /// sends them); the symbol `id`'s field of each name (Reference and Value aside) takes its text where it shows another and names no variable, a name the symbol
+    /// lacks is added hidden at the symbol, and a field of the symbol that is not mandatory and that the footprint lacks is deleted. See
+    /// [`back_annotate::carry_symbol_fields`](crate::back_annotate).
+    CarrySymbolFields { id: String, fields: std::collections::BTreeMap<String, String> },
+
     /// Find and Replace's "Replace" / "Replace All"
     /// (`SCH_FIND_REPLACE_TOOL::ReplaceAndFindNext` / `ReplaceAll`):
     /// replaces `search.find` with `search.replace` in every matching
@@ -2641,6 +2648,7 @@ impl Cmd {
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
             | Cmd::SetSymbolFields { .. }
+            | Cmd::CarrySymbolFields { .. }
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
@@ -3026,6 +3034,7 @@ impl Cmd {
             Cmd::RescueSymbols { .. } => vec!["rescue_symbols"],
             Cmd::IncrementAnnotations { start, .. } => vec![start.as_str()],
             Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
+            Cmd::CarrySymbolFields { id, .. } => vec![id.as_str()],
             Cmd::ReplaceText { .. } => vec!["replace_text"],
             Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
 
@@ -3892,6 +3901,7 @@ impl<'a> Board<'a> {
             Cmd::RescueSymbols { changes, symbols } => self.rescue_symbols(changes, symbols),
             Cmd::IncrementAnnotations { start, increment, all_sheets } => self.increment_annotations(start, *increment, *all_sheets),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
+            Cmd::CarrySymbolFields { id, fields } => self.carry_symbol_fields(id, fields),
             Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
             Cmd::ResetErcPinMap => self.reset_erc_pin_map(),
