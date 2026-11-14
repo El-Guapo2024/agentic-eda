@@ -336,3 +336,48 @@ fn a_footprint_file_the_reader_refuses_is_not_listed_and_its_library_says_why() 
     let why = v["load_error"].as_str().unwrap_or_default();
     assert!(why.starts_with(&format!("Unable to read file '{}'\n", pretty.join("Broken.kicad_mod").display())), "{why}");
 }
+
+/// UI-LEFT-3 L3-6, slow tier (kicad-cli): a footprint file and a symbol file this crate's reader takes but KiCad's parser refuses (an unknown token) are not in
+/// their libraries -- the tree, the chooser's items and its search -- and the libraries say which file (`FP_CACHE::Load`, the folder `Load`); a file library
+/// KiCad's parser refuses lists nothing.
+#[test]
+fn a_file_only_kicads_parser_refuses_is_not_listed_and_its_library_says_so() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() || eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let (dir, pretty) = board_with_footprints("libbuf_fp_kicad_refuses");
+    crate::library_verdict::tests::check_with_kicad_cli(&dir);
+    let strict = CHIP.replace("\"Chip\"", "\"Strict\"").replace("(attr", "(frobnicate 1)\n\t(attr");
+    assert!(eda_kicad::parse_library_footprint(&strict).is_ok(), "this crate's reader takes it");
+    std::fs::write(pretty.join("Strict.kicad_mod"), &strict).unwrap();
+    let v = crate::library_index::items(&dir, Kind::Footprint, "Fp");
+    assert_eq!(strings(&v["names"]), ["Chip", "Other"], "{v}");
+    assert_eq!(v["load_error"].as_str().unwrap_or_default(), format!("Unable to read file '{}'\n{}", pretty.join("Strict.kicad_mod").display(), crate::library_verdict::KICAD_REFUSES));
+    let e = crate::library_search::entries(&dir, Kind::Footprint, "Fp", &crate::library_search::Filter::default());
+    let listed: Vec<String> = e["entries"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(listed, ["Chip", "Other"], "the chooser lists it no more");
+    let found = loop {
+        let r = crate::library_search::search(&dir, Kind::Footprint, "Strict", &crate::library_search::Filter::default(), 50);
+        if r["status"] == "ready" {
+            break r;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(!found.to_string().contains("\"Strict\""), "the search finds it no more: {found}");
+    // a symbol folder library: the refused file's symbols are left out, the others listed
+    let (dir, path) = board_with("libbuf_sym_kicad_refuses", true);
+    crate::library_verdict::tests::check_with_kicad_cli(&dir);
+    let other = std::fs::read_to_string(path.join("Other.kicad_sym")).unwrap().replace("(property \"Reference\" \"R\"", "(frobnicate 1)\n\t\t(property \"Reference\" \"R\"");
+    std::fs::write(path.join("Other.kicad_sym"), other).unwrap();
+    let v = crate::library_index::items(&dir, Kind::Symbol, "Mine");
+    assert_eq!(strings(&v["names"]), ["Alpha", "Zeta"], "{v}");
+    let why = v["load_error"].as_str().unwrap_or_default();
+    assert!(why.starts_with(&format!("Unable to read file '{}'", path.join("Other.kicad_sym").display())) && why.ends_with("fixed manually."), "{why}");
+    // a file library: nothing loads
+    let (dir, path) = board_with("libbuf_symfile_kicad_refuses", false);
+    crate::library_verdict::tests::check_with_kicad_cli(&dir);
+    std::fs::write(&path, LIB.replace("(property \"Reference\" \"R\"", "(frobnicate 1)\n\t\t(property \"Reference\" \"R\"")).unwrap();
+    let v = crate::library_index::items(&dir, Kind::Symbol, "Mine");
+    assert!(strings(&v["names"]).is_empty(), "{v}");
+}

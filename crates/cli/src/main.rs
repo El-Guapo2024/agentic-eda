@@ -60,6 +60,7 @@ mod library_place;
 mod library_save_api;
 mod library_search;
 mod library_tables;
+mod library_verdict;
 mod library_watch;
 mod rescue_api;
 mod legacy_import;

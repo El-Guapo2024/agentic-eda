@@ -531,9 +531,12 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
+    let (text, _) = eda_kicad::read_symbol_library(&path)?;
     let mut summaries = eda_kicad::scan_symbols(&text);
     eda_kicad::inherit_symbol_summaries(&mut summaries);
+    // what KiCad's parser refuses is not in the library (UI-LEFT-3 L3-6, `crate::library_verdict`), and the library says so
+    let (refused, load_error) = crate::library_verdict::symbol_refusals(&path, true);
+    summaries.retain(|s| !refused.contains(&s.name));
     summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
     summaries.dedup_by(|b, a| a.name == b.name);
     let terms = summaries.iter().map(|s| symbol_terms(lib, s)).collect();
@@ -570,10 +573,13 @@ pub(crate) fn footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result
         .filter_map(|p| Some((p.file_stem()?.to_str()?.to_string(), p)))
         .collect();
     files.sort_by(|a, b| natural_cmp(&a.0, &b.0).then_with(|| a.0.cmp(&b.0)));
+    // `FP_CACHE::Load`: a file the reader refuses -- this crate's or KiCad's parser (`crate::library_verdict`, UI-LEFT-3 L3-6) -- is not in the library, so the
+    // choosers neither list nor find it
+    let (refused, _) = crate::library_verdict::footprint_refusals(&dir, true);
+    files.retain(|(name, _)| !refused.contains(name));
     let mut names = Vec::with_capacity(files.len());
     let mut infos = Vec::with_capacity(files.len());
     for (name, path) in files {
-        // A file that cannot be read or is no footprint is still listed (by its name), as KiCad lists it, with nothing to search but the name.
         let info = std::fs::read_to_string(&path).ok().and_then(|t| eda_kicad::scan_footprint(&t)).unwrap_or_default();
         names.push(name);
         infos.push(info);
@@ -914,7 +920,7 @@ pub(crate) fn load_errors_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Valu
         .iter()
         .filter_map(|info| {
             let path = symbol_path(src, &info.name).ok()?;
-            eda_kicad::symbol_library_load_errors(&path).map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
+            crate::library_verdict::symbol_refusals(&path, false).1.map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
         })
         .collect();
     json!({ "kind": "symbol", "errors": errors })

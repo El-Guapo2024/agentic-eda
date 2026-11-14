@@ -624,6 +624,28 @@ impl LibraryKind {
 /// kicad-cli refuses an output that exists ("Output path must not conflict with existing path"), so `output` must not exist; the caller converts into a fresh path and
 /// moves the result. The row's options are not passed (kicad-cli has no flag for them; `ConvertLibrary` takes them as `aOldFileProps`): a CADSTAR library that needs its
 /// `csa` option is converted without it. Returns kicad-cli's own words on failure ("Unrecognized library type", "Unable to convert library").
+/// Whether KiCad's own parser loads the library at `input` whole (UI-LEFT-3 L3-6): `kicad-cli <sym|fp> upgrade INPUT -o <scratch>` loads every item of it
+/// through the library's plugin (`SCH_IO_KICAD_SEXPR_LIB_CACHE::Load`, `FP_CACHE::Load`) and answers "Unable to load library" when any file does not parse
+/// (kicad-cli says no more: the parser's reason is not printed). `None` when there is no kicad-cli or it did not run. What it writes goes into a scratch
+/// folder `scratch` (removed after).
+pub fn library_loads(kind: LibraryKind, input: &Path, scratch: &Path) -> Option<bool> {
+    let cli = super::find_cli()?;
+    let _ = std::fs::remove_dir_all(scratch);
+    std::fs::create_dir_all(scratch).ok()?;
+    let output = scratch.join(match kind {
+        LibraryKind::Symbol if input.is_dir() => "out.kicad_symdir",
+        LibraryKind::Symbol => "out.kicad_sym",
+        LibraryKind::Footprint => "out.pretty",
+    });
+    let mut cmd = cli_command(&cli, None);
+    cmd.arg(kind.scope()).arg("upgrade").arg("--force").arg("-o").arg(&output).arg(input);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT)).ok();
+    let _ = std::fs::remove_dir_all(scratch);
+    let out = out?;
+    let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    Some(out.status.success() && !printed.contains("Unable to load library"))
+}
+
 pub fn convert_library(kind: LibraryKind, input: &Path, output: &Path) -> Result<(), Vec<CheckResult>> {
     let cli = need_cli()?;
     let what = format!("{} upgrade", kind.scope());
