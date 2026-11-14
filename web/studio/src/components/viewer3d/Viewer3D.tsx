@@ -591,6 +591,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       if (target.kind === "copy") return void copyImage().then((ok) => dispatch({ type: "TOAST", message: ok ? "3D image copied to the clipboard." : "The browser did not allow copying the image to the clipboard.", kind: ok ? "info" : "error" }));
       if (target.kind === "export") return openExport3DImage();
       if (target.kind === "layersManager") return setDockColumnCollapsed("right", !getDockLayout().rightCollapsed);
+      if (target.kind === "missingModels") {
+        const prefs = getViewer3DUserSettings().prefs;
+        return setViewer3DPrefs({ ...prefs, showMissingModels: !prefs.showMissingModels });
+      }
       runAction3D(camera3d, target as Action3D, () => {
         if (lastPointerPx) pivotAtPointer(lastPointerPx);
       });
@@ -908,13 +912,15 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const notInPosShown = rows.shown("not_in_pos_models");
   const dnpShown = rows.shown("dnp_models");
   const bboxShown = rows.shown("bounding_boxes");
+  // "Show parts without 3D model" (`render.show_missing_models`, UI-LEFT-3 X3-2)
+  const missingShown = useViewer3DUserSettings().prefs.showMissingModels;
   useEffect(() => {
     // The models stand on the board's own build-up (BOARD_ADAPTER::InitSettings from the stackup, GetFootprintZPos), as the slab does (scene.ts).
     const pm = threeRef.current?.partModels;
-    pm?.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown }, stackOfBoard(board?.board_rules));
+    pm?.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showNotInPos: notInPosShown, showDNP: dnpShown, showBoundingBoxes: bboxShown, showMissingModels: missingShown }, stackOfBoard(board?.board_rules));
     // The parts just built that the board editor has selected are drawn in the selection colour (PartModels.sync paints them).
     if (pm) viewer3dProbe.update({ selected: pm.selectedRefs });
-  }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown]);
+  }, [board, thtShown, smdShown, virtualShown, notInPosShown, dnpShown, bboxShown, missingShown]);
 
   // View > 3D Grid (`render.grid_type`, `RENDER_3D_OPENGL::generate3dGrid`; kicad-port/grid3d.ts): the lines on the board's middle plane and up through its
   // centre, every fifth LIGHTBLUE, at 0.35 alpha; none by default

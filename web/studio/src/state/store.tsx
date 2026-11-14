@@ -80,7 +80,7 @@ import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixe
 import { zonesToRefill } from "../kicad-port/autoRefill";
 import { LOCKED_ITEMS_FILTERED } from "../kicad-port/overrideLocks";
 import { withSchLockOverride } from "../kicad-port/schLock";
-import { isViaDrcMessage, viaDrcInfoBarText, VIA_VIOLATES_DRC } from "../kicad-port/viaDrcInfoBar";
+import { isViaDrcMessage, isViaPlacement, viaDrcInfoBarText, VIA_VIOLATES_DRC } from "../kicad-port/viaDrcInfoBar";
 import { infoBarFor } from "../kicad-port/pcbInfoBar";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
@@ -123,6 +123,8 @@ export type ToolId =
   /** `7` / `8` / `9` (pcbnew.LengthTuner.*, `DRAWING_TOOL::PlaceTuningPattern`): the length tuner -- hover a track, click to start a pattern, click again where it ends; `lengthTuningMode` says which of the three. See kicad-port/tuneTool.ts. */
   | "tune"
   | "via"
+  /** `pcbnew.InteractiveDrawing.viaStack` (Place Microvia Stack, KiCad 25ec2335 `DRAWING_TOOL::PlaceMicroviaStack`): a click places a stacked stack, a click per hop a staggered one -- see state/viaStackTool.ts (UI-LEFT-3 X3-1). */
+  | "via_stack"
   | "zone"
   | "draw_segment"
   | "draw_arc"
@@ -202,6 +204,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   diffpair: "Route differential pair: click to add a point, Enter/double-click to finish, Esc to cancel",
   tune: "Tune length: click a track to start the pattern, click again where it ends (1-4: spacing and amplitude, Ctrl+L: settings, Esc: cancel, then leave)",
   via: "Click to place a via",
+  via_stack: "Microvia stack: click to place it (a staggered stack: a click per hop; Undo or Delete takes back a hop), Esc to leave",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
   draw_segment: "Line: click start, then end",
   draw_arc: "Arc: click the centre, then the start point, then the end point (/ switches the direction)",
@@ -2349,7 +2352,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // `VIA_PLACER::PlaceItem`: "Via location violates DRC." shown even as Allow DRC violations places the via (`ShowInfoBarError( .., DRC_VIOLATION )`), and a
       // clean placement dismisses such a bar (`if( infobar->GetMessageType() == DRC_VIOLATION ) infobar->Dismiss()`)
       if (reply.ok && reply.drc_violation) dispatch({ type: "SHOW_PCB_INFOBAR", message: viaDrcInfoBarText(reply.drc_violation), kind: "error", infoType: "drc", ms: 8000, close: true });
-      else if (reply.ok && cmd.op === "place_via" && stateRef.current.pcbInfoBar?.type === "drc") dispatch({ type: "DISMISS_PCB_INFOBAR" });
+      else if (reply.ok && isViaPlacement(cmd as { op: string }) && stateRef.current.pcbInfoBar?.type === "drc") dispatch({ type: "DISMISS_PCB_INFOBAR" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
         const source = repeatSource(cmd);

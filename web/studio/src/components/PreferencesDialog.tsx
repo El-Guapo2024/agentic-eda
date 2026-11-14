@@ -757,6 +757,12 @@ function Viewer3DGeneralPage({ draft, set }: { draft: Viewer3DPrefs; set: (patch
           <option value="cad">CAD colors</option>
         </select>
       </div>
+      {/* KiCad 25ec2335's 3D viewer has it in its Preferences menu (`toggleShowMissingModels`, a check): the studio's 3D tab has no menu bar, so it is here, and its
+          action takes a key or a toolbar button too (UI-LEFT-3 X3-2) */}
+      <label className="filter-row" title="Display a placeholder for footprints with missing 3D models">
+        <input type="checkbox" aria-label="Show parts without 3D model" checked={draft.showMissingModels} onChange={(e) => set({ showMissingModels: e.target.checked })} />
+        Show parts without 3D model
+      </label>
       {heading3d("Camera Options")}
       <div className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6 }} title="Set increment (in degrees) for the Rotate commands.">
         <span>Rotation increment:</span>

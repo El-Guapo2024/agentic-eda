@@ -409,6 +409,9 @@ pub struct BoardItems {
     /// KiCad 10's via stitching generators (`(generated (type via_stitch) ..)`, `PCB_VIA_STITCH`) -- see [`crate::via_stitch`]. Additive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_stitches: Vec<crate::via_stitch::ViaStitch>,
+    /// KiCad 10's microvia stacks (`(generated (type via_stack) ..)`, `PCB_VIA_STACK`) -- see [`crate::via_stack`]. Additive (UI-LEFT-3 X3-1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_stacks: Vec<crate::via_stack::MicroviaStack>,
     /// KiCad 10's drill charts: what makes a table of the board one (`drill_chart`, `PCB_DRILL_CHART`), keyed by the table's id -- see [`crate::drill_chart`]. Not items of
     /// their own: the table is. Additive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -429,6 +432,7 @@ pub struct BoardItems {
 impl BoardItems {
     pub fn is_empty(&self) -> bool {
         self.text_boxes.is_empty() && self.images.is_empty() && self.points.is_empty() && self.shape_styles.is_empty() && self.grid_items.is_empty() && self.via_stitches.is_empty()
+            && self.via_stacks.is_empty()
             && self.drill_charts.is_empty()
             && self.drill_maps.is_empty()
             && self.drill_profile.is_none()
@@ -437,12 +441,12 @@ impl BoardItems {
 
     /// Every id of the items, for the id sets that name them (a shape's style is the shape's, not an item).
     pub fn ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.points.iter().map(|p| p.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.via_stacks.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
     }
 
     /// The ids of the items the lock (`(locked yes)`) applies to: every kind but the point, whose file form has no lock.
     pub fn lockable_ids(&self) -> impl Iterator<Item = &str> {
-        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
+        self.text_boxes.iter().map(|t| t.id.as_str()).chain(self.images.iter().map(|i| i.id.as_str())).chain(self.grid_items.iter().map(|g| g.id.as_str())).chain(self.via_stitches.iter().map(|v| v.id.as_str())).chain(self.via_stacks.iter().map(|v| v.id.as_str())).chain(self.drill_maps.iter().map(|m| m.id.as_str()))
     }
 
     /// Give each item without an id the deterministic one the others get (`next_item_id`), in an order that does not depend on how they were listed.
@@ -452,6 +456,7 @@ impl BoardItems {
         assign_ids(&mut self.points, "pnt", existing, |p| &mut p.id, PcbPoint::id_seed, |p| (p.layer.clone(), p.at, p.size_nm));
         assign_ids(&mut self.grid_items, "grd", existing, |g| &mut g.id, crate::grid_item::GridItem::id_seed, |g| (g.at, g.extent, g.spacing));
         assign_ids(&mut self.via_stitches, "vst", existing, |v| &mut v.id, crate::via_stitch::ViaStitch::id_seed, |v| (v.outline.clone(), v.net.clone()));
+        assign_ids(&mut self.via_stacks, "vsk", existing, |v| &mut v.id, crate::via_stack::MicroviaStack::id_seed, |v| (v.origin, v.start_layer.clone(), v.end_layer.clone()));
         assign_ids(&mut self.drill_maps, "dmap", existing, |m| &mut m.id, crate::drill_chart::DrillMap::id_seed, |m| (m.layer.clone(), m.offset));
     }
 
@@ -463,6 +468,7 @@ impl BoardItems {
         self.shape_styles.sort_by(|a, b| a.id.cmp(&b.id));
         self.grid_items.sort_by(|a, b| a.id.cmp(&b.id));
         self.via_stitches.sort_by(|a, b| a.id.cmp(&b.id));
+        self.via_stacks.sort_by(|a, b| a.id.cmp(&b.id));
         self.drill_charts.sort_by(|a, b| a.table_id.cmp(&b.table_id));
         self.drill_maps.sort_by(|a, b| a.id.cmp(&b.id));
     }

@@ -22,7 +22,7 @@
 # in the middle of its page; every other kind is made with `--origin 0,0`, the page's corner, which the checks' coordinates were written for), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
 # mcu30-routed (`eda place` then `eda route`), mcu30-zones (routed, with a GND pour on F.Cu and B.Cu), mcu30-sheet (mcu30 with KiCad's QA
 # issue10926_1_subsheet_1 schematics under fixtures/; $KICAD_SRC_DIR), opamp-routed (`eda pipeline
-# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
+# examples/opamp_filter.yaml`), kicad10-stitch (KiCad 10's stitch_fp_rulearea.kicad_pcb through replace_board; $KICAD10_SRC_DIR), kicad10-viastacks (KiCad 10's via_stacks.kicad_pcb the same way), padstacks-3d (KiCad's padstacks_normal.kicad_pcb with an
 # outline, through replace_board; $KICAD_SRC_DIR), usb-pair (diff-pairs.check.js's board), tune-board (length-tuning.check.js's), tuner-arcs (tuner-arcs.check.js's), cutout-board (autoroute-cutout.check.js's), multichannel and
 # simulator, sim-model and sim-left (web/studio/e2e/*-board.yaml), nc-pins-placed (examples/nc_pins.yaml placed: free-pads.check.js), board-io (`eda import-kicad web/studio/e2e/board-io.kicad_pcb`), ldo (examples/ldo.yaml, nothing placed), ldo-j1 (ldo where `eda board new` puts it, J1 placed). A check with no such line runs on mcu30 for 10 minutes. `ui=legacy` serves a copy with KiCad's QA legacy projects in `e2e-legacy/` (legacy-import.check.js). `ui=import-foreign` serves a
 # copy of the UI with the QA files of KiCad's other formats in `e2e-import-foreign/` (needs $KICAD_SRC_DIR). `kicad_config=fresh` serves the check with a KiCad
@@ -159,6 +159,24 @@ make_board() { # make_board <kind> <dir>; the log goes to <dir>.log
             local url=""
             for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
             python3 -c 'import json,sys; print(json.dumps({"cmd": {"op": "replace_board", "text": open(sys.argv[1]).read()}, "strict": False}))' "$f" > "$t/replace.json"
+            local reply
+            reply="$(curl -s -H 'Content-Type: application/json' --data-binary @"$t/replace.json" "${url}api/cmd")"
+            kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+            echo "replace_board: $reply" | cut -c1-300
+            grep -q '"ok":true' <<< "$reply" ;;
+        kicad10-viastacks) # via-stacks.check.js: KiCad 25ec2335's qa/data/pcbnew/via_stacks.kicad_pcb (six copper layers, a stacked and a staggered microvia stack) with an
+            # Edge.Cuts rectangle round them (10, 10)..(80, 50) mm, brought in with `replace_board`
+            local f="${KICAD10_SRC_DIR:-$HOME/src/kicad-src-25ec2335}/qa/data/pcbnew/via_stacks.kicad_pcb" sp
+            [ -f "$f" ] || { echo "no $f (set KICAD10_SRC_DIR to a KiCad 10 source)"; return 1; }
+            "$eda" board new "$yaml_mcu" -o "$d" --origin 0,0 || return 1
+            "$eda" board serve -C "$d" --port "$port" --ui "$repo/web/studio/dist" > "$t/serve.log" 2>&1 &
+            sp=$!
+            local url=""
+            for _ in $(seq 1 100); do url="$(grep -oE 'http://[0-9.]+:[0-9]+/' "$t/serve.log" | head -1)"; [ -n "$url" ] && break; sleep 0.2; done
+            python3 -c 'import json,sys
+t=open(sys.argv[1]).read().rstrip()
+edge="\t(gr_rect\n\t\t(start 10 10)\n\t\t(end 80 50)\n\t\t(stroke\n\t\t\t(width 0.05)\n\t\t\t(type default)\n\t\t)\n\t\t(fill no)\n\t\t(layer \"Edge.Cuts\")\n\t\t(uuid \"aaaaaaaa-1111-2222-3333-555555555555\")\n\t)\n"
+print(json.dumps({"cmd": {"op": "replace_board", "text": t[:-1] + edge + ")\n"}, "strict": False}))' "$f" > "$t/replace.json"
             local reply
             reply="$(curl -s -H 'Content-Type: application/json' --data-binary @"$t/replace.json" "${url}api/cmd")"
             kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null

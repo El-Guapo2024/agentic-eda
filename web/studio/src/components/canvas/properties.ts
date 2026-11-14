@@ -14,12 +14,16 @@ import { openFpTextDialog } from "../../state/fpTextDialog";
 import { fieldById } from "../../kicad-port/fpFields";
 import { tablesOf } from "../../kicad-port/tables";
 import { openTablePropertiesFor } from "../../actions/tableActions";
+import { openViaStackDialog } from "../../state/viaStackTool";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
   // KiCad 10's drill chart: Drill Chart Properties (`ShowPropertiesDialog`'s `PCB_DRILL_CHART_T`: "Not the generic table dialog").
   if (api.getState().board?.drawings?.drill_charts?.some((c) => c.table_id === id)) return openDrillChartDialog(id);
   // `EDIT_TOOL::Properties`: table cells open Table Cell Properties (on every selected cell of the table), a table Table Properties.
   if (openTablePropertiesFor(tablesOf(api.getState().board), [...api.getState().selection], id)) return;
+  // KiCad 10's microvia stack (`PCB_VIA_STACK::ShowPropertiesDialog`): the Microvia Stack dialog, which makes its vias again (UI-LEFT-3 X3-1).
+  const viaStack = api.getState().board?.drawings?.via_stacks?.find((s) => s.id === id);
+  if (viaStack) return openViaStackDialog(id, viaStack);
   // A tuning pattern (`PCB_TUNING_PATTERN::ShowPropertiesDialog`): the Tuning Pattern dialog, which tunes it again.
   if (api.getState().board?.drawings?.tuning_patterns?.some((p) => p.id === id)) {
     dispatch({ type: "PCBX", patch: { tuneDialogPattern: id } });

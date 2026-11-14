@@ -22,7 +22,7 @@ export interface Viewer3dSnapshot {
   allModelsMs: number | null;
   models: ModelCounts;
   /** Placed parts: how many there are, how many are drawn with at least one real model, how many as a placeholder box. */
-  parts: { total: number; asModels: number; asBoxes: number; shown: number };
+  parts: { total: number; asModels: number; asBoxes: number; asNothing?: number; shown: number };
   /** The reference of the part under the pointer (it is drawn highlighted), or null. */
   hovered: string | null;
   /** The camera is animating towards a view (KiCad's `m_camera_is_moving`). */

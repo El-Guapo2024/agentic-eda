@@ -16,6 +16,8 @@ pub(crate) struct ItemRefs {
     pub points: Vec<ItemRef>,
     pub grid_items: Vec<ItemRef>,
     pub via_stitches: Vec<ItemRef>,
+    /// KiCad 10's microvia stacks (`crate::via_stack_io`), in the order they were read.
+    pub via_stacks: Vec<ItemRef>,
     pub drill_maps: Vec<ItemRef>,
 }
 

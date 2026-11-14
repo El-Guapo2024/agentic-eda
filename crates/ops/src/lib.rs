@@ -117,6 +117,7 @@ pub mod embedded;
 pub use embedded::{AddedFile, CollectedModel, EmbeddedCmd, EmbeddedOwner};
 pub mod pcb_items;
 pub mod kicad10_items;
+pub mod via_stack;
 pub mod drill_chart;
 mod pcb_props;
 mod pcb_table_builders;
@@ -3480,6 +3481,8 @@ impl<'a> Board<'a> {
         self.tidy_custom_properties();
         self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
+        // a microvia stack loses a member that is gone, and goes when it has none (UI-LEFT-3 X3-1, `via_stack.rs`)
+        self.tidy_via_stacks();
         outline::refresh_if_changed(&mut self.design, self.model, edge_before);
         Ok(())
     }

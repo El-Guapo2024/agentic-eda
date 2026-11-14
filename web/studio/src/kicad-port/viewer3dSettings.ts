@@ -400,6 +400,9 @@ export interface Viewer3DPrefs {
   holesDisableOnMove: boolean;
   /** `render.grid_type` (View > 3D Grid: `EDA_3D_CONTROLLER::On3DGridSelection`, default NONE): kicad-port/grid3d.ts. */
   gridType: Grid3DType;
+  /** `render.show_missing_models` (Preferences > Show parts without 3D model, `EDA_3D_CONTROLLER::ToggleShowMissingModels`, default off): a placeholder for a footprint
+   *  without its 3D models (kicad-port/placeholder3d.ts, UI-LEFT-3 X3-2). */
+  showMissingModels: boolean;
 }
 
 /** `EDA_3D_VIEWER_SETTINGS::RENDER_SETTINGS::DifferentiatePlatedCopper` (OpenGL engine): never with the board editor's copper colours. */
@@ -425,6 +428,7 @@ export const DEFAULT_VIEWER3D_PREFS: Viewer3DPrefs = {
   microviasDisableOnMove: false,
   holesDisableOnMove: false,
   gridType: "none",
+  showMissingModels: false,
 };
 
 const MATERIAL_MODES: readonly MaterialMode[] = ["realistic", "solid", "cad"];
@@ -450,6 +454,7 @@ export function sanitizeViewer3DPrefs(raw: unknown): Viewer3DPrefs {
     differentiatePlatedCopper: bool(o.differentiatePlatedCopper, d.differentiatePlatedCopper),
     materialMode: MATERIAL_MODES.includes(o.materialMode as MaterialMode) ? (o.materialMode as MaterialMode) : d.materialMode,
     gridType: GRID3D_TYPES.includes(o.gridType as Grid3DType) ? (o.gridType as Grid3DType) : d.gridType,
+    showMissingModels: bool(o.showMissingModels, d.showMissingModels),
     aaDisableOnMove: bool(o.aaDisableOnMove, d.aaDisableOnMove),
     thicknessDisableOnMove: bool(o.thicknessDisableOnMove, d.thicknessDisableOnMove),
     microviasDisableOnMove: bool(o.microviasDisableOnMove, d.microviasDisableOnMove),

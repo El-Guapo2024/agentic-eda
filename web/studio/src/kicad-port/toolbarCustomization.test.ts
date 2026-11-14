@@ -101,7 +101,7 @@ test("isActionSupported and the actions list: the frame's kiface and common, ico
   assert.ok(!list.some((e) => e.name === "common.Control.cursorUp"), "a TOOLBAR_STATE::HIDDEN action is not offered");
   for (let i = 1; i < list.length; i++) assert.ok(list[i - 1]!.label.toLowerCase() <= list[i]!.label.toLowerCase(), `${list[i - 1]!.label} before ${list[i]!.label}`);
   const controls = list.filter((e) => e.kind === "control").map((e) => e.label).sort();
-  assert.deepEqual(controls, ["Current variant", "Grid selector", "IPC/Scripting plugins", "Layer selector", "Override locks", "Track width selector", "Via diameter selector", "Zoom selector"]);
+  assert.deepEqual(controls, ["Current variant", "Grid selector", "IPC/Scripting plugins", "Layer selector", "Microvia stack selector", "Override locks", "Track width selector", "Via diameter selector", "Zoom selector"]);
   assert.deepEqual(controlsFor("symbol").map((c) => c.uiName), ["Grid selector", "Zoom selector", "Symbol unit selector", "Symbol body style selector"]);
   assert.deepEqual(controlsFor("3d").map((c) => c.name), ["control.ZoomSelector"]);
   // the filter: the text and the tooltip, upper-cased
@@ -128,7 +128,7 @@ test("the studio's default toolbars as KiCad's configuration and back draw the s
   }
   // the board's controls by KiCad's names
   const aux = configOfStudioItems("pcb", pcbFile.toolbars.find((t) => t.id === "auxiliary")!.items);
-  assert.deepEqual(aux.filter((i) => i.type === "CONTROL").map((i) => (i as { name: string }).name), ["control.PCBTrackWidth", "control.PCBViaDia", "control.LayerSelector", "control.GridSelector", "control.ZoomSelector", "control.OverrideLocks"]);
+  assert.deepEqual(aux.filter((i) => i.type === "CONTROL").map((i) => (i as { name: string }).name), ["control.PCBTrackWidth", "control.PCBViaDia", "control.PCBViaStack", "control.LayerSelector", "control.GridSelector", "control.ZoomSelector", "control.OverrideLocks"]);
   // what the frame lacks is left out: an unknown tool, a group of unknown tools, another frame's control
   const out = studioItemsOfConfig("footprint", [{ type: "TOOL", name: "nope.x.y" }, { type: "TB_GROUP", groupName: "G", items: ["nope.a.b"] }, { type: "CONTROL", name: "control.PCBTrackWidth" }, { type: "SPACER", size: 9 }], { hasTool: has, iconOf });
   assert.deepEqual(out, [{ type: "spacer", size: 9 }]);

@@ -1,6 +1,7 @@
 // The parts of the board in the 3D scene: each placed part is its KiCad 3D models (modelCache.ts loads them; kicad-port/model3d.ts places them the way KiCad's
-// renderer does), or -- until a part's first model is in, or when its footprint names none -- the box the instant scene always drew (its F.Fab body, scene.ts
-// `buildPartPlaceholder`). The board body, copper, silk and mask stay in scene.ts's group.
+// renderer does). A part whose footprint names no model, or whose models the viewer has not got (not found, or not in yet), is drawn as KiCad 25ec2335's
+// placeholder -- an orange, see-through box on its pads -- only with "Show parts without 3D model" on (`render.show_missing_models`, off by default; kicad-port/
+// placeholder3d.ts, UI-LEFT-3 X3-2), else not at all. The board body, copper, silk and mask stay in scene.ts's group.
 //
 // A part is rebuilt only when what it draws changes (its placement, its models, which of them are in, the bounding-box switch): a board edit that moves one part
 // rebuilds one group, and a model arriving rebuilds the parts that use it. Every instance of a model shares that model's geometry and materials (modelCache.ts), so
@@ -13,7 +14,8 @@ import * as THREE from "three";
 import type { BoardState, Part } from "../../api/types";
 import { DEFAULT_STACK, inferKind, footprintShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
 import type { ModelCache, ModelRecord } from "./modelCache";
-import { buildPartPlaceholder, placeholderMaterials } from "./scene";
+import { placeholderMaterials } from "./scene";
+import { PLACEHOLDER_MATERIAL, placeholderOf, wantsPlaceholder, type ModelState } from "../../kicad-port/placeholder3d";
 import { cloneLit, kicadLit } from "./glLighting";
 import { buildExtrudedBody } from "./extrudedBody";
 
@@ -30,6 +32,8 @@ export interface PartModelOptions {
   showDNP: boolean;
   /** render.opengl_show_model_bbox: an outline of each model's bounding box. */
   showBoundingBoxes: boolean;
+  /** `render.show_missing_models` ("Show parts without 3D model", off by default): the placeholder of a part without its models. */
+  showMissingModels?: boolean;
 }
 
 export interface PartStats {
@@ -38,6 +42,8 @@ export interface PartStats {
   asModels: number;
   /** Parts drawn as their placeholder box. */
   asBoxes: number;
+  /** Parts with nothing drawn: no model in and no placeholder ("Show parts without 3D model" off). */
+  asNothing?: number;
   /** Parts shown right now (the through-hole, SMD and virtual rows let their kind through). */
   shown: number;
 }
@@ -48,11 +54,22 @@ interface PartEntry {
   group: THREE.Group;
   kind: ModelKind;
   withModels: boolean;
+  /** Drawn with the placeholder ("Show parts without 3D model"). */
+  withPlaceholder: boolean;
   /** What the group made and owns: geometry of the placeholder box and the outlines, materials of a model with opacity under 1. */
   owned: Array<{ dispose(): void }>;
 }
 
 const BBOX_MATERIAL = new THREE.LineBasicMaterial({ color: 0xffff00 });
+
+/** `m_placeholderModel`'s mesh: the unit cube about the origin, scaled and placed per part. */
+const PLACEHOLDER_BOX = new THREE.BoxGeometry(1, 1, 1);
+
+function placeholderMaterial3d(): THREE.Material {
+  const m = PLACEHOLDER_MATERIAL;
+  const rgb = (c: readonly number[]) => new THREE.Color().setRGB(c[0]!, c[1]!, c[2]!, THREE.SRGBColorSpace);
+  return kicadLit(new THREE.MeshPhongMaterial({ color: rgb(m.diffuse), specular: rgb(m.specular), shininess: m.shininess * 128, transparent: true, opacity: 1 - m.transparency, depthWrite: false, side: THREE.DoubleSide }), rgb(m.ambient));
+}
 
 function modelSignature(m: Model3dEntry): string {
   return `${m.name}|${m.offset.join(",")}|${m.scale.join(",")}|${m.rotate.join(",")}|${m.opacity}`;
@@ -62,6 +79,8 @@ export class PartModels {
   readonly group = new THREE.Group();
   private readonly parts = new Map<string, PartEntry>();
   private readonly materials = placeholderMaterials();
+  /** `m_placeholderModel`'s material (kicad-port/placeholder3d.ts `PLACEHOLDER_MATERIAL`): orange, 40% transparent. */
+  private readonly placeholderMaterial = placeholderMaterial3d();
   private readonly highlights = new Map<THREE.Material, THREE.Material>();
   private hovered: string | null = null;
   /** The footprints selected in the PCB editor (`fp->IsSelected()`), drawn in the selection colour as well. */
@@ -87,7 +106,7 @@ export class PartModels {
   sync(board: BoardState | null, opts: PartModelOptions, stack: Stack = DEFAULT_STACK): void {
     this.last = { board, opts, stack };
     const seen = new Set<string>();
-    const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
+    const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0, asNothing: 0, shown: 0 };
     // The models the board uses are asked for most-used first: the packages most of the board is made of are the first loaded and drawn.
     for (const name of modelsByUse(board?.parts ?? [])) this.cache.request(name);
     for (const part of board?.parts ?? []) {
@@ -95,16 +114,19 @@ export class PartModels {
       seen.add(part.ref);
       const wanted = (part.models ?? []).filter((m) => m.show);
       const ready: Array<{ model: Model3dEntry; record: ModelRecord }> = [];
+      const states: Array<{ show: boolean; name: string; state: ModelState }> = (part.models ?? []).map((m) => ({ show: m.show, name: m.name, state: "loading" as ModelState }));
       for (const model of wanted) {
         const record = this.cache.request(model.name);
         if (record.status === "ready" && record.proto) ready.push({ model, record });
+        for (const st of states) if (st.name === model.name) st.state = record.status === "ready" && record.proto ? "ready" : record.status === "ready" ? "failed" : record.status;
       }
+      const placeholder = wantsPlaceholder(states, opts.showMissingModels ?? false, !!part.extruded_body);
       const kind: ModelKind = part.kind3d ?? inferKind(part.pads);
-      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, stack.copperBackMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), ready.length === 0 ? JSON.stringify([part.body, part.courtyard, part.pads?.length]) : "", part.extruded_body ? JSON.stringify(part.extruded_body) : ""].join("#");
+      const signature = [part.at.join(","), part.rot ?? 0, part.side, stack.boardThicknessMm, stack.copperMm, stack.copperBackMm, opts.showBoundingBoxes, ready.map((r) => modelSignature(r.model)).join(";"), placeholder ? JSON.stringify([part.body, part.courtyard, (part.pads ?? []).map((q) => [q.px ?? q.x, q.py ?? q.y, q.size ?? [q.w, q.h]])]) : "", part.extruded_body ? JSON.stringify(part.extruded_body) : ""].join("#");
       let entry = this.parts.get(part.ref);
       if (!entry || entry.signature !== signature) {
         if (entry) this.disposeEntry(entry);
-        entry = this.build(part, ready, signature, kind, opts, stack);
+        entry = this.build(part, ready, placeholder, signature, kind, opts, stack);
         this.parts.set(part.ref, entry);
         this.group.add(entry.group);
         if (this.lit(part.ref)) this.paint(entry, true);
@@ -113,7 +135,8 @@ export class PartModels {
       stats.total++;
       if (entry.group.visible) stats.shown++;
       if (entry.withModels) stats.asModels++;
-      else stats.asBoxes++;
+      else if (entry.withPlaceholder) stats.asBoxes++;
+      else stats.asNothing!++;
     }
     for (const [ref, entry] of [...this.parts]) {
       if (seen.has(ref)) continue;
@@ -167,7 +190,7 @@ export class PartModels {
     if (this.last) this.sync(this.last.board, this.last.opts, this.last.stack);
   }
 
-  private build(part: Part, ready: Array<{ model: Model3dEntry; record: ModelRecord }>, signature: string, kind: ModelKind, opts: PartModelOptions, stack: Stack): PartEntry {
+  private build(part: Part, ready: Array<{ model: Model3dEntry; record: ModelRecord }>, placeholder: boolean, signature: string, kind: ModelKind, opts: PartModelOptions, stack: Stack): PartEntry {
     const group = new THREE.Group();
     group.name = "part";
     group.userData.ref = part.ref;
@@ -178,16 +201,19 @@ export class PartModels {
       group.add(body.object);
       owned.push(...body.owned);
     }
-    if (ready.length === 0 && !body) {
-      const box = buildPartPlaceholder(part, this.materials);
-      if (box) {
-        group.add(box);
-        owned.push(box.geometry);
-        box.traverse((o) => {
-          if (o instanceof THREE.LineSegments) owned.push(o.geometry);
-        });
-      }
-    } else {
+    // `renderPlaceholderForFootprint`: one for the footprint, beside the models that are in (kicad-port/placeholder3d.ts)
+    let withPlaceholder = false;
+    const ph = placeholder ? placeholderOf(part) : null;
+    if (ph) {
+      const mesh = new THREE.Mesh(PLACEHOLDER_BOX, this.placeholderMaterial);
+      mesh.name = "part-placeholder";
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.fromArray(modelWorldMatrix({ xMm: ph.centerNm[0] / 1e6, yMm: ph.centerNm[1] / 1e6, rotDeg: ph.rotDeg, bottom: ph.bottom }, { offset: [0, 0, ph.sizeMm[2] * 0.5], scale: ph.sizeMm, rotate: [0, 0, 0] }, stack));
+      mesh.matrixWorldNeedsUpdate = true;
+      group.add(mesh);
+      withPlaceholder = true;
+    }
+    {
       const placement = { xMm: part.at![0] / 1e6, yMm: part.at![1] / 1e6, rotDeg: part.rot ?? 0, bottom: part.side === "bottom" };
       for (const { model, record } of ready) {
         const instance = new THREE.Group();
@@ -228,7 +254,7 @@ export class PartModels {
     group.traverse((o) => {
       if (o instanceof THREE.Mesh && !o.userData.baseMaterial) o.userData.baseMaterial = o.material;
     });
-    return { ref: part.ref, signature, group, kind, withModels: ready.length > 0, owned };
+    return { ref: part.ref, signature, group, kind, withModels: ready.length > 0, withPlaceholder, owned };
   }
 
   private disposeEntry(entry: PartEntry): void {
@@ -327,6 +353,7 @@ export class PartModels {
     this.modeMaterials.clear();
     this.materials.ic.dispose();
     this.materials.passive.dispose();
+    this.placeholderMaterial.dispose();
     this.hovered = null;
     this.last = null;
   }

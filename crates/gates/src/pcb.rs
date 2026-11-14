@@ -19,6 +19,10 @@ use std::collections::{BTreeMap, HashMap};
 fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     let mut inside = false;
     let n = poly.len();
+    // a board with no outline (KiCad's via_stacks.kicad_pcb has no Edge.Cuts) holds nothing
+    if n == 0 {
+        return false;
+    }
     let mut j = n - 1;
     for i in 0..n {
         let (xi, yi) = (poly[i].x, poly[i].y);

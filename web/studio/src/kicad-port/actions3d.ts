@@ -69,7 +69,8 @@ export type KeyTarget3D =
   | { kind: "row"; row: "navigator" | "bounding_boxes" }
   | { kind: "copy" }
   | { kind: "export" }
-  | { kind: "layersManager" };
+  | { kind: "layersManager" }
+  | { kind: "missingModels" };
 
 /**
  * `EDA_3D_CONTROLLER::setTransitions`: the actions a key reaches in the 3D view, by name -- the viewer's own (`EDA_3D_ACTIONS`, src/kicad/actions3d.json) first, then the
@@ -77,8 +78,8 @@ export type KeyTarget3D =
  * keys generate a zoomIn/zoomOut event, these events must be captured to use these hot keys"), as `ACTION_MANAGER::RunHotKey` prefers the active tool's actions to the
  * global ones (Home is both Home View and Zoom to Fit, the same view). Every other 3D action with a handler is here too, so a key a person gives it acts
  * (UI-LEFT-3 C3-4): the 3D grids, the materials, the navigator and the bounding boxes, Copy 3D Image to Clipboard, Export Image..., Show Appearance Manager.
- * Not here, as they do nothing in the studio: Use raytracing (one render engine) and Show parts without 3D model (KiCad's `render.show_missing_models`, not
- * ported).
+ * Show parts without 3D model (`ToggleShowMissingModels`, `render.show_missing_models`) too (UI-LEFT-3 X3-2). Not here, as it does nothing in the studio: Use
+ * raytracing (one render engine).
  */
 export const KEYED_ACTIONS_3D: ReadonlyArray<readonly [string, KeyTarget3D]> = [
   ["3DViewer.Control.pivotCenter", { kind: "pivot" }],
@@ -116,6 +117,8 @@ export const KEYED_ACTIONS_3D: ReadonlyArray<readonly [string, KeyTarget3D]> = [
   ["3DViewer.Control.copyToClipboard", { kind: "copy" }],
   ["3DViewer.Control.exportImage", { kind: "export" }],
   ["3DViewer.Control.showLayersManager", { kind: "layersManager" }],
+  // `EDA_3D_CONTROLLER::ToggleShowMissingModels` (UI-LEFT-3 X3-2)
+  ["3DViewer.Control.toggleShowMissingModels", { kind: "missingModels" }],
   ["common.Control.panUp", { kind: "pan", direction: "up" }],
   ["common.Control.panDown", { kind: "pan", direction: "down" }],
   ["common.Control.panLeft", { kind: "pan", direction: "left" }],

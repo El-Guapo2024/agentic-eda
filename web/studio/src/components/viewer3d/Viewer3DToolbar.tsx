@@ -29,6 +29,7 @@ import { HOTKEY_TABLE_3D } from "../../actions/hotkeyActions";
 import { useUserHotkeysVersion } from "../../state/userHotkeys";
 import { openExport3DImage } from "../../state/viewer3dExport";
 import { Export3DImageDialog } from "./Export3DImageDialog";
+import { setViewer3DPrefs, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
 
 const file = toolbarData as unknown as Viewer3dToolbarsFile;
 const own = new Map<string, Viewer3dAction>([...file.actions, ...(file.otherActions ?? [])].map((a) => [a.name, a]));
@@ -83,6 +84,7 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
   const items = resolvedToolbar("3d", "main")?.items ?? file.toolbars[0]!.items;
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; items: string[] } | null>(null);
 
+  const prefs3d = useViewer3DUserSettings().prefs;
   const handlers: Record<string, Handler> = {
     "3DViewer.Control.reloadBoard": { run: () => api?.reload(), enabled: ready },
     "3DViewer.Control.copyToClipboard": {
@@ -101,6 +103,8 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
     "3DViewer.Control.flipView": { run: () => set({ flipped: !opts.flipped }), enabled: ready, checked: opts.flipped },
     "3DViewer.Control.toggleOrtho": { run: () => set({ orthographic: !opts.orthographic }), enabled: true, checked: opts.orthographic },
     "3DViewer.Control.showLayersManager": { run: () => setDockColumnCollapsed("right", !dock.rightCollapsed), enabled: true, checked: !dock.rightCollapsed },
+    // `ToggleShowMissingModels` (a customised toolbar may hold it; UI-LEFT-3 X3-2)
+    "3DViewer.Control.toggleShowMissingModels": { run: () => setViewer3DPrefs({ ...prefs3d, showMissingModels: !prefs3d.showMissingModels }), enabled: true, checked: prefs3d.showMissingModels },
   };
   for (const [name, { axis, dir }] of Object.entries(ROTATE)) handlers[name] = { run: () => api?.dispatchAction({ kind: "rotate", axis, dir }), enabled: ready };
   for (const [name, direction] of Object.entries(MOVE)) handlers[name] = { run: () => api?.dispatchAction({ kind: "pan", direction }), enabled: ready };

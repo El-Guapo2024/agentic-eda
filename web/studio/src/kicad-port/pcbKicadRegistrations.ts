@@ -170,6 +170,12 @@ export const KICAD_PCB_REGISTRATIONS: Decl[] = [
   ...inherits("PCB_VIA_STITCH", "BOARD_ITEM"),
   ...add("PCB_VIA_STITCH", "", "Size", "Drill", "Pitch", "Layout", "Mode", "Seed", "Net", "Guarded Net"),
   ...mask("PCB_VIA_STITCH", "BOARD_ITEM", "Layer"),
+  // KiCad 25ec2335 pcbnew/generators/pcb_via_stack.cpp PCB_VIA_STACK_DESC (UI-LEFT-3 X3-1)
+  ...inherits("PCB_VIA_STACK", "BOARD_ITEM"),
+  ...mask("PCB_VIA_STACK", "BOARD_ITEM", "Layer"),
+  ...add("PCB_VIA_STACK", "Microvia Stack Properties", "Start Layer", "End Layer", "Style"),
+  ...add("PCB_VIA_STACK", "", "Net"),
+  ...add("PCB_VIA_STACK", "Microvia Stack Properties", "Use Netclass Values", "Via Diameter", "Via Hole", "Pitch", "Copper-filled", "Capped"),
 ];
 
 /** The table replayed through the manager. */

@@ -12,7 +12,7 @@
       "common/hotkey_store.cpp"
     ],
     "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; control labels (CONTROL_LABELS in this script) are this app's own names, not source strings -- AppendControl() only names an enumerator",
-    "kicad10Additions": "drawing toolbar: the Via tools group (Draw Via Stitch area) and Place Sub-grid, from pcbnew/toolbars_pcb_editor.cpp of KiCad 25ec2335"
+    "kicad10Additions": "drawing toolbar: the Via tools group (Draw Via Stitch area) and Place Sub-grid, from pcbnew/toolbars_pcb_editor.cpp of KiCad 25ec2335; the Via tools group's Place Microvia Stack and the auxiliary toolbar's microvia stack selector (control.PCBViaStack), from pcbnew/toolbars_pcb_editor.cpp of KiCad 25ec2335"
   },
   "toolbars": [
     {
@@ -353,6 +353,7 @@
           "icon": "add_via",
           "items": [
             "pcbnew.InteractiveDrawing.via",
+            "pcbnew.InteractiveDrawing.viaStack",
             "pcbnew.InteractiveDrawing.drawViaStitchArea"
           ]
         },
@@ -473,6 +474,14 @@
           "type": "control",
           "control": "viaDiameter",
           "label": "Via Size"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "viaStack",
+          "label": "Microvia Stack"
         },
         {
           "type": "separator"

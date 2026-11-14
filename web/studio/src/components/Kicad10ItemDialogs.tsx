@@ -21,6 +21,7 @@ import { useOriginTransforms } from "../state/originTransforms";
 import { fromDisplay, toDisplay, type CoordType, type OriginTransforms } from "../kicad-port/originTransforms";
 import { layerColor as layerColorOf } from "./canvas/layers";
 import { DrillChartPropertiesDialog, DrillGroupsDialog } from "./DrillChartDialogs";
+import { ViaStackDialog } from "./ViaStackDialog";
 import { TrackViaPropertiesDialog } from "./TrackViaPropertiesDialog";
 import { TEMPLATE_VIA_ID, templateAsVia, templateBoard, templateFromDialog, templateLocked } from "../kicad-port/viaTemplate";
 
@@ -29,6 +30,7 @@ export function Kicad10ItemDialogs() {
     <>
       <GridItemDialog />
       <ViaStitchDialog />
+      <ViaStackDialog />
       <DrillChartPropertiesDialog />
       <DrillGroupsDialog />
     </>

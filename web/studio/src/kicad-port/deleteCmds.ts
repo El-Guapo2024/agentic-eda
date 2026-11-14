@@ -33,12 +33,21 @@ export function tuningPatternIds(board: BoardState | null | undefined, ids: read
  */
 export function boardDeleteCmds(
   board: BoardState,
-  ids: readonly string[],
+  given: readonly string[],
   opts: { cursor?: { x: number; y: number } | null; isCut?: boolean } = {}
 ): { cmds: Cmd[]; skippedLocked: number; message?: string; keepSelection?: string[] } {
   const groups = board.drawings?.groups ?? [];
   let skippedLocked = 0;
   const free: string[] = [];
+  // KiCad 10's microvia stack: `PCB_VIA_STACK::Remove` takes its vias and traces with it (one verb, UI-LEFT-3 X3-1)
+  const viaStacks = new Set((board.drawings?.via_stacks ?? []).map((s) => s.id));
+  const stackCmds: Cmd[] = [];
+  for (const id of given) {
+    if (!viaStacks.has(id)) continue;
+    if (lockedForTools(board, id)) skippedLocked++;
+    else stackCmds.push({ op: "pcb_item", verb: "delete_via_stack", id });
+  }
+  const ids = given.filter((id) => !viaStacks.has(id));
   const patterns = new Set(tuningPatternIds(board, ids));
   for (const id of ids) {
     // a tuning pattern is not deleted with its tracks: it is removed (`PCB_TUNING_PATTERN::Remove`, the track put back) -- see [`tuningPatternIds`]
@@ -132,6 +141,6 @@ export function boardDeleteCmds(
     else cmds.push({ op: "rip", part: id });
     deleted++;
   }
-  const message = deleted === 0 && cleared.size === 0 && cmds.length === 0 && alreadyHidden > 0 ? "Use the Footprint Properties dialog to remove fields." : undefined;
-  return { cmds, skippedLocked, ...(message ? { message } : {}) };
+  const message = deleted === 0 && cleared.size === 0 && cmds.length === 0 && stackCmds.length === 0 && alreadyHidden > 0 ? "Use the Footprint Properties dialog to remove fields." : undefined;
+  return { cmds: [...stackCmds, ...cmds], skippedLocked, ...(message ? { message } : {}) };
 }

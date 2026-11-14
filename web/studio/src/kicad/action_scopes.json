@@ -632,6 +632,8 @@
     "pcbnew.InteractiveDrawing.deleteLastPoint": "AS_CONTEXT",
     "pcbnew.InteractiveDrawing.drawTable": "AS_GLOBAL",
     "pcbnew.InteractiveDrawing.drawViaStitchArea": "AS_GLOBAL",
+    "pcbnew.InteractiveDrawing.viaStack": "AS_GLOBAL",
+    "pcbnew.Generator.makeViaStack": "AS_GLOBAL",
     "pcbnew.InteractiveDrawing.graphicPolygon": "AS_GLOBAL",
     "pcbnew.InteractiveDrawing.incWidth": "AS_CONTEXT",
     "pcbnew.InteractiveDrawing.leader": "AS_GLOBAL",

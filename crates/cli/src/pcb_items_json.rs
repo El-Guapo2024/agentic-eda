@@ -130,6 +130,19 @@ pub(crate) fn extend(drawings: &mut Value, design: &eda_model::ir::Design, model
             })
             .collect(),
     );
+    // KiCad 10's microvia stacks as the model has them (what `set_via_stack` takes back), with `net` their members' (`GetNetCode`) -- UI-LEFT-3 X3-1.
+    drawings["via_stacks"] = Value::Array(
+        d.board_items
+            .via_stacks
+            .iter()
+            .map(|s| {
+                let mut j = serde_json::to_value(s).unwrap_or(Value::Null);
+                let rt = design.routing.as_ref();
+                j["net"] = json!(s.net_of(|m| rt.and_then(|rt| rt.vias.iter().find(|v| v.id == m).map(|v| v.net.clone()).or_else(|| rt.tracks.iter().find(|t| t.id == m).map(|t| t.net.clone())))));
+                j
+            })
+            .collect(),
+    );
     // KiCad 10's drill charts (what makes a table one), drill maps and drill symbol profile, as the model has them; and, when the board has a map, the mark of every hole
     // (`ResolveDrillSymbolsByItem`) and the spans a map can show (`EnumerateDrillSpans`), which the canvas draws and the Properties panel offers.
     drawings["drill_charts"] = serde_json::to_value(&d.board_items.drill_charts).unwrap_or(Value::Null);

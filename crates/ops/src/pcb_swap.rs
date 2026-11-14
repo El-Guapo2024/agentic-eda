@@ -306,6 +306,9 @@ impl SwapHost for Board<'_> {
             if dr.is_group(id) {
                 return Ok(SwapType::Group);
             }
+            if bi.via_stacks.iter().any(|v| v.id == id) {
+                return Err(fail("ops_swap", id, "a microvia stack is not swapped yet (PCB_VIA_STACK, a generator: its origin moves alone)"));
+            }
             if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) {
                 return Ok(SwapType::Generator);
             }
