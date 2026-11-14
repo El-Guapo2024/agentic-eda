@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Dimension, LibraryPad, PadKind } from "../../api/types";
 import { FP_ITEM_TOOLS, useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
+import { flipLocalX, flipPan } from "../../kicad-port/boardControl";
 import { paintFootprint } from "./footprintPainter";
 import { useFootprintChecker } from "../../state/footprintChecker";
 import { handleWheel, leftDragOutcome } from "../../kicad-port/viewControls";
@@ -257,6 +258,7 @@ export function FootprintCanvas() {
     onUserMoved: () => {
       userMovedRef.current = true;
     },
+    flipped: state.boardFlipped,
   });
 
   const fp = state.footprint;
@@ -395,6 +397,11 @@ export function FootprintCanvas() {
     ctx.fillStyle = layerColor("background");
     ctx.fillRect(0, 0, width, height);
     ctx.save();
+    // View > Flip Board View (`view->SetMirror( m_FlipBoardView, .. )`, UI-LEFT-3 F3-9): the footprint seen from its other side, mirrored about the canvas middle
+    if (state.boardFlipped) {
+      ctx.translate(width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     // The Renumber Pads tool shows the numbers it has handed out (and highlights those pads, `pad->SetSelected()`) before anything is committed.
@@ -435,6 +442,7 @@ export function FootprintCanvas() {
       sketchText: state.sketchText,
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
+      viewFlipped: state.boardFlipped,
     });
     // The group being worked in (`m_enteredGroupOverlay`, `PCB_PAINTER::draw( const PCB_GROUP* )` of an entered group): its box, solid, in the anchor colour (UI-LEFT-2 FF8)
     const enteredBox = fp && state.enteredGroupId ? fpItemBounds(fp, state.enteredGroupId) : null;
@@ -464,14 +472,14 @@ export function FootprintCanvas() {
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, zonePreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp, menuHighlight]);
+  }), [gridDisplay, gridYNm, fp, state.view, state.selection, state.gridNm, state.gridVisible, gridOrigin, state.drawState, state.cursorNm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick, state.activeTool, state.carriedPad, state.carriedText, state.defaultPad, state.lastPadNumber, state.sketchPads, state.sketchGraphics, state.sketchText, state.layerVisible, state.layerOpacity, state.lineMode, state.itemDraw, state.contrastHidden, pointPreview, zonePreview, themeStamp, dimPreview, state.enteredGroupId, barcodeStamp, imageStamp, menuHighlight, state.boardFlipped]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
       const rect = containerRef.current!.getBoundingClientRect();
-      return screenToWorld(state.view, e.clientX - rect.left, e.clientY - rect.top);
+      return screenToWorld(state.view, flipLocalX(state.boardFlipped, rect.width, e.clientX - rect.left), e.clientY - rect.top);
     },
-    [state.view]
+    [state.view, state.boardFlipped]
   );
 
   /**
@@ -822,7 +830,9 @@ export function FootprintCanvas() {
       const [wx, wy] = worldAt(e);
       // `SelectMultiple` takes what `itemPassesFilter( item, true )` lets through: the Selection Filter's rows, a locked item (a pad too) only with Locked items on
       const filter = studioPrefs.fpSelectionFilter;
-      const boxed = fp ? rectSelectionHits(footprintItemBoxes(fp), drag.startWorld, [wx, wy]).filter((id) => {
+      // left to right is a window, right to left crossing -- on the screen: `greedySelection` toggled when `view->IsMirroredX()` (UI-LEFT-3 F3-9)
+      const [ax, bx] = state.boardFlipped ? [wx, drag.startWorld[0]] : [drag.startWorld[0], wx];
+      const boxed = fp ? rectSelectionHits(footprintItemBoxes(fp), [ax, drag.startWorld[1]], [bx, wy]).filter((id) => {
         const kind = fpItemKind(fp, id);
         return !kind || kind === "group" || fpPassesFilter(filter, kind, fpItemLocked(fp, id), kind === "zone" && !!(fp.items?.zones ?? []).find((z) => z.id === id)?.is_rule_area, true);
       }) : [];
@@ -867,8 +877,10 @@ export function FootprintCanvas() {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
-    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, wheelInputOf(e, rect), wheelPrefs.settings, wheelPrefs.controller);
-    if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
+    // (a mirrored view: the zoom about the unmirrored point under the pointer, a pan's x the other way, as the board's)
+    const raw = wheelInputOf(e, rect);
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, { ...raw, x: flipLocalX(state.boardFlipped, rect.width, raw.x) }, wheelPrefs.settings, wheelPrefs.controller);
+    if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.kind === "zoom" ? result.view : flipPan(state.boardFlipped, state.view, result.view) });
   };
   useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
 

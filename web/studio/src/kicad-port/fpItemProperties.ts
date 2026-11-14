@@ -344,8 +344,9 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
     const [dx, dy] = axis === 0 ? [delta, 0] : [0, delta];
     return [{ op: "fp_item", verb: "move", footprint: c.name, ids: [i.id], dx, dy }];
   };
-  add({ owner: "BOARD_ITEM", name: "Position X", kind: "int", display: "coord", get: (i) => positionOf(i)[0], set: setPosition(0), available: (i) => i.type !== "FOOTPRINT" });
-  add({ owner: "BOARD_ITEM", name: "Position Y", kind: "int", display: "coord", get: (i) => positionOf(i)[1], set: setPosition(1), available: (i) => i.type !== "FOOTPRINT" });
+  // (`PROPERTY_DISPLAY::PT_COORD, ORIGIN_TRANSFORMS::ABS_X_COORD`: board_item.cpp's `BOARD_ITEM_DESC`, UI-LEFT-3 F3-8)
+  add({ owner: "BOARD_ITEM", name: "Position X", kind: "int", display: "coord", coordType: "abs_x", get: (i) => positionOf(i)[0], set: setPosition(0), available: (i) => i.type !== "FOOTPRINT" });
+  add({ owner: "BOARD_ITEM", name: "Position Y", kind: "int", display: "coord", coordType: "abs_y", get: (i) => positionOf(i)[1], set: setPosition(1), available: (i) => i.type !== "FOOTPRINT" });
   add({
     owner: "BOARD_ITEM",
     name: "Layer",
@@ -898,6 +899,8 @@ function build(): PropertyManager<FpPropItem, FpPropCtx, Cmd> {
         name,
         kind: "int",
         display: name === "Radius" || name === "Width" || name === "Height" ? "size" : "coord",
+        // `_EDA_SHAPE_DESC`'s Start X .. Center Y: `ABS_X_COORD` / `ABS_Y_COORD` (UI-LEFT-3 F3-8)
+        ...(name.endsWith(" X") ? { coordType: "abs_x" as const } : name.endsWith(" Y") ? { coordType: "abs_y" as const } : {}),
         available,
         get: (i) => (i.shape ? get(cmdShapeToShape(i.shape)) : 0),
         set: (i, v, c) => {

@@ -450,22 +450,23 @@ export function fpItemSelectable(vis: FpVisibility, kind: string, layer: string)
 /**
  * The Appearance manager's Presets in the Footprint Editor (`APPEARANCE_CONTROLS` with `m_isFpEditor`; the person's presets are `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets`,
  * UI-LEFT-2 FF5): the board's list and rules (kicad-port/layerPresets.ts) on the editor's layers and its Objects rows. What is on screen as a `PresetView`: the panel's layers,
- * the shown ones, the objects of `s_allowedInFpEditor` that are on (the grid the frame's switch), the active layer; the canvas does not flip.
+ * the shown ones, the objects of `s_allowedInFpEditor` that are on (the grid the frame's switch), the active layer, and Flip Board View (`m_FlipBoardView`: a preset
+ * records it and puts it back, `doApplyLayerPreset`'s `options.m_FlipBoardView = aPreset.flipBoard`, UI-LEFT-3 F3-9).
  */
-export function fpPresetView(universe: readonly string[], s: { layerVisible: Readonly<Record<string, boolean>>; gridVisible: boolean; activeLayer: string }, activePreset = "", lastBuiltinObjects: readonly ObjectId[] | null = null): PresetView {
+export function fpPresetView(universe: readonly string[], s: { layerVisible: Readonly<Record<string, boolean>>; gridVisible: boolean; activeLayer: string; boardFlipped?: boolean }, activePreset = "", lastBuiltinObjects: readonly ObjectId[] | null = null): PresetView {
   return {
     universe,
     visibleLayers: new Set(universe.filter((l) => layerIsVisible(s.layerVisible, l))),
     objects: FP_EDITOR_OBJECTS.filter((id) => fpObjectChecked(s, id)),
     activeLayer: s.activeLayer,
-    flipBoard: false,
+    flipBoard: !!s.boardFlipped,
     activePreset,
     lastBuiltinObjects,
     boardLayers: new Set(universe),
   };
 }
 
-/** `syncLayerPresetSelection` in this editor: the first preset whose layers and objects (the Footprint Editor's rows of them) are what is on screen, else "". */
+/** `syncLayerPresetSelection` in this editor: the first preset whose layers, objects (the Footprint Editor's rows of them) and flip are what is on screen, else "". */
 export function fpMatchingPreset(presets: readonly LayerPreset[], v: PresetView): string {
   const universe = new Set(v.universe);
   const same = (a: Iterable<string>, b: Iterable<string>) => {
@@ -474,12 +475,12 @@ export function fpMatchingPreset(presets: readonly LayerPreset[], v: PresetView)
     return x.size === y.length && y.every((k) => x.has(k));
   };
   const fpObjects = (ids: readonly ObjectId[]) => ids.filter((id) => FP_EDITOR_OBJECTS.includes(id));
-  return presets.find((p) => same(p.layers.filter((l) => universe.has(l)), [...v.visibleLayers]) && same(fpObjects(p.renderLayers), fpObjects(v.objects)))?.name ?? "";
+  return presets.find((p) => same(p.layers.filter((l) => universe.has(l)), [...v.visibleLayers]) && same(fpObjects(p.renderLayers), fpObjects(v.objects)) && !!p.flipBoard === v.flipBoard)?.name ?? "";
 }
 
-/** A preset applied (`selectPreset`'s view) as the editor's switches: the layers' and the objects' `layerVisible` entries, the grid switch, the active layer. */
-export function fpApplyPresetView(universe: readonly string[], layerVisible: Readonly<Record<string, boolean>>, next: PresetView): { visible: Record<string, boolean>; grid: boolean; activeLayer: string | null } {
+/** A preset applied (`selectPreset`'s view) as the editor's switches: the layers' and the objects' `layerVisible` entries, the grid switch, the active layer, the flip. */
+export function fpApplyPresetView(universe: readonly string[], layerVisible: Readonly<Record<string, boolean>>, next: PresetView): { visible: Record<string, boolean>; grid: boolean; activeLayer: string | null; flipped: boolean } {
   let visible: Record<string, boolean> = { ...layerVisible, ...fpVisibleLayersPatch(universe, new Set(next.visibleLayers)) };
   for (const id of FP_EDITOR_OBJECTS) if (id !== "grid") visible = { ...visible, ...fpObjectPatch(visible, id, next.objects.includes(id)) };
-  return { visible, grid: next.objects.includes("grid"), activeLayer: next.activeLayer };
+  return { visible, grid: next.objects.includes("grid"), activeLayer: next.activeLayer, flipped: next.flipBoard };
 }

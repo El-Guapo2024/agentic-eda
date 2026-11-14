@@ -105,6 +105,9 @@ test("the Footprint Editor's line mode, display modes and Appearance pane show a
   assert.deepEqual(["pcbnew.EditorControl.lineModeFree", "pcbnew.EditorControl.lineModeOrthonal", "pcbnew.EditorControl.lineMode45"].map((n) => actionChecked(n, fp)), [false, false, true]);
   assert.deepEqual(["pcbnew.Control.padDisplayMode", "pcbnew.Control.graphicOutlines", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"].map((n) => actionChecked(n, fp)), [true, false, true, false]);
   assert.equal(actionChecked("pcbnew.EditorControl.lineModeFree", { ...fp, fpView: { ...fpView, lineMode: "direct" } }), true);
+  // UI-LEFT-3 F3-9: `CHECK( boardFlippedCond )`
+  assert.equal(actionChecked("pcbnew.Control.flipBoard", fp), false);
+  assert.equal(actionChecked("pcbnew.Control.flipBoard", { ...fp, fpView: { ...fpView, boardFlipped: true } }), true);
 });
 
 test("the Symbol Editor's Draw Arc mode in force is pressed while its arc tool runs (KiCad 25ec2335's `TOOLBAR_STATE::TOGGLE`, UI-LEFT-3 Y3-8)", () => {

@@ -6,7 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
 import { useLibraryWatch } from "../../state/libraryWatch";
-import { fetchWritableLibraries } from "../../api/librarySaveClient";
+import { clearModify, fetchWritableLibraries } from "../../api/librarySaveClient";
+import { notifyLibraryChanged } from "../library/useLibraryNames";
 import { isTableLibrary, readOnlyFootprintBanner, SAVE_AS_EDITABLE_COPY } from "../../kicad-port/librarySave";
 import { splitLibName } from "../../kicad-port/libraryNames";
 import { setSaveFootprintAs } from "../../state/commonDialogs";
@@ -102,6 +103,10 @@ export function FootprintEditorView() {
   const studio = useStudioState();
   const prefs = studio.prefs;
   useEffect(() => setFpPrefs(prefs), [prefs]);
+  // the kept display modes (`m_ViewersDisplay`: Sketch Pads / Graphic Items / Text Items, UI-LEFT-3 F3-7) as the editor's
+  useEffect(() => {
+    dispatch({ type: "SET_DISPLAY", patch: { sketchPads: !prefs.fpPadFill, sketchGraphics: !prefs.fpGraphicsFill, sketchText: !prefs.fpTextFill } });
+  }, [prefs.fpPadFill, prefs.fpGraphicsFill, prefs.fpTextFill, dispatch]);
 
   // `setFPWatcher( aFootprint )`: the loaded footprint's file is watched while the editor is shown, and offered for reloading when it changes (UI-LEFT-2 LL3)
   useLibraryWatch(
@@ -146,6 +151,20 @@ export function FootprintEditorView() {
     wasEditing.current = editing;
   }, [editing, editedPad, dispatch]);
 
+  // The read-only info bar's "Save as editable copy" (`FOOTPRINT_EDIT_FRAME::AddFootprintToBoard`'s `saveAsEditableCopy`): `SaveFootprintAs` of the loaded footprint,
+  // then -- whatever it did, a cancel too -- `ClearModify()` of the footprint the editor then holds, the dismissable info bar dismissed and `SyncLibraryTree( true )`
+  // (UI-LEFT-3 F3-5; it was Save As alone).
+  const saveAsEditableCopy = () => {
+    const loaded = state.name;
+    if (!loaded) return;
+    setReadOnlyLib(null);
+    setSaveFootprintAs({
+      name: loaded,
+      loaded: true,
+      onEnd: (saved) => void clearModify("footprint", saved ?? loaded).catch(() => undefined).finally(notifyLibraryChanged),
+    });
+  };
+
   return (
     <div className="editor-frame footprint-editor-view">
       <div className="main-toolbar-row">
@@ -163,7 +182,7 @@ export function FootprintEditorView() {
       {readOnlyLib && state.name && (
         <div role="status" data-testid="fp-read-only-banner" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, display: "flex", gap: 12 }}>
           <span>{readOnlyFootprintBanner(readOnlyLib)}</span>
-          <a href="#" data-testid="fp-read-only-save-as" onClick={(e) => (e.preventDefault(), setReadOnlyLib(null), setSaveFootprintAs({ name: state.name!, loaded: true }))}>
+          <a href="#" data-testid="fp-read-only-save-as" onClick={(e) => (e.preventDefault(), saveAsEditableCopy())}>
             {SAVE_AS_EDITABLE_COPY}
           </a>
           <span style={{ flex: 1 }} />
@@ -177,11 +196,7 @@ export function FootprintEditorView() {
           {PAD_EDIT_MODE_MESSAGE}
         </div>
       )}
-      {state.enumerate && (
-        <div role="status" style={{ padding: "4px 12px", background: "var(--chrome-bg-raised)", borderBottom: "1px solid var(--chrome-border)", fontSize: 12, whiteSpace: "pre-line" }}>
-          {enumeratePopupText(state.enumerate)}
-        </div>
-      )}
+      {state.enumerate && <CursorStatusPopup text={enumeratePopupText(state.enumerate)} />}
       <div className="editor-frame-body">
         {/* FOOTPRINT_TREE_PANE: the project's own footprints and KiCad's installed libraries; folds to a handle (Show Library Tree). */}
         <DockColumn side="left" column="tree" label="Libraries">
@@ -244,6 +259,53 @@ export function FootprintEditorView() {
           {state.toast.message}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Where the pointer last was, for a popup that opens before the pointer moves again. */
+let lastPointer = { x: 0, y: 0 };
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "pointermove",
+    (e) => {
+      lastPointer = { x: e.clientX, y: e.clientY };
+    },
+    { passive: true }
+  );
+}
+
+/**
+ * `STATUS_TEXT_POPUP` at the cursor: `PAD_TOOL::EnumeratePads`' `statusPopup.Popup(); statusPopup.Move( KIPLATFORM::UI::GetMousePosition() + wxPoint( 20, 20 ) )`,
+ * moved with the pointer on each event of the loop (UI-LEFT-3 F3-7; it was a banner over the canvas). Clicks go through it.
+ */
+function CursorStatusPopup({ text }: { text: string }) {
+  const [pos, setPos] = useState(lastPointer);
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => setPos({ x: e.clientX, y: e.clientY });
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => window.removeEventListener("pointermove", onMove);
+  }, []);
+  return (
+    <div
+      role="status"
+      data-testid="fp-enumerate-popup"
+      style={{
+        position: "fixed",
+        left: pos.x + 20,
+        top: pos.y + 20,
+        zIndex: 60,
+        pointerEvents: "none",
+        padding: "4px 8px",
+        background: "var(--chrome-bg-raised)",
+        border: "1px solid var(--chrome-border)",
+        borderRadius: 3,
+        fontSize: 12,
+        whiteSpace: "pre-line",
+        boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+      }}
+    >
+      {text}
     </div>
   );
 }

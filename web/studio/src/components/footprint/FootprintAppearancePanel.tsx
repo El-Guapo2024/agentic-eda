@@ -13,8 +13,8 @@
 // `ObjectRowView`), on the footprint editor's own store. Under the pages, KiCad's Presets and Viewports lists (the board's, components/panels/appearance/PresetBar.tsx,
 // on this editor: the person's presets kept in its preferences, `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets`; the viewports for the session, which KiCad's Footprint Editor
 // does not save). Below the manager the Selection Filter pane (`m_selectionFilterPanel`, the "SelectionFilter" pane under "LayersManager"), its filter kept in the
-// preferences (`m_SelectionFilter`). A swatch edits the Footprint Editor's own colour theme (`useThemeSwatchEdit`, as the board's does its own). Not here: Flip board view
-// (the footprint editor's canvas does not flip). UI-LEFT-2 FF5.
+// preferences (`m_SelectionFilter`). A swatch edits the Footprint Editor's own colour theme (`useThemeSwatchEdit`, as the board's does its own). UI-LEFT-2 FF5. Layer
+// Display Options' "Flip board view" (`m_cbFlipBoard`: `RunAction( PCB_ACTIONS::flipBoard )`) and the presets' flip, UI-LEFT-3 F3-9.
 import { useMemo, useState } from "react";
 import { useStudioDispatch } from "../../state/store";
 import { MessageDialog, NameDialog, PickDialog } from "../panels/appearance/shared";
@@ -101,6 +101,11 @@ function FpLayersPage() {
       {swatch.dialog}
       <Pane title="Layer Display Options">
         <ContrastModeRadios mode={mode} onChange={(m: ContrastMode) => dispatch({ type: "SET_CONTRAST_MODE", mode: m })} />
+        {/* `m_cbFlipBoard`: the same switch as View > Flip Board View (`RunAction( PCB_ACTIONS::flipBoard )`) */}
+        <label className="ap-check">
+          <input type="checkbox" data-testid="fp-flip-board" checked={state.boardFlipped} onChange={(e) => dispatch({ type: "SET_DISPLAY", patch: { boardFlipped: e.target.checked } })} />
+          Flip board view
+        </label>
       </Pane>
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={layerMenuEntries(FP_SHOWS_INNER_LAYERS_ENTRY, run)} onClose={() => setMenu(null)} />}
     </div>
@@ -184,6 +189,8 @@ function FpPresetBar() {
     dispatch({ type: "SET_LAYERS_VISIBLE", visible: out.visible });
     if (out.grid !== state.gridVisible) dispatch({ type: "TOGGLE_GRID_VISIBLE" });
     if (out.activeLayer && out.activeLayer !== state.activeLayer) dispatch({ type: "SET_ACTIVE_LAYER", layer: out.activeLayer });
+    // `options.m_FlipBoardView = aPreset.flipBoard; m_frame->SetDisplayOptions( options, false )`
+    if (out.flipped !== state.boardFlipped) dispatch({ type: "SET_DISPLAY", patch: { boardFlipped: out.flipped } });
     dispatch({ type: "SET_LAST_BUILTIN_OBJECTS", objects: next.lastBuiltinObjects ? [...next.lastBuiltinObjects] : null });
   };
   const setMine = (fpLayerPresets: typeof mine) => studioDispatch({ type: "PATCH_PREFERENCES", patch: { fpLayerPresets } });

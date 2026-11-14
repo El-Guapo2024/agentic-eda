@@ -38,12 +38,15 @@ export interface FpItemsPaintOptions {
   movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
   /** The footprint's name in the library (`GET /api/footprint?name=`): the image and barcode routes find its items by it. */
   footprint?: string;
+  /** Flip Board View is on: a text, field, text box or dimension not on one side's layer is drawn to read as it did (`IsFlippedX() && !IsSideSpecific()`, UI-LEFT-3 F3-9). */
+  viewFlipped?: boolean;
 }
 
 /** The slice of the board painter's options these painters read, from the footprint editor's own. */
 function boardOptions(o: FpItemsPaintOptions): PaintOptions {
   return {
     textRecordTag: "fp",
+    viewFlipped: !!o.viewFlipped,
     selection: o.selection,
     hot: new Set(),
     netHighlight: null,

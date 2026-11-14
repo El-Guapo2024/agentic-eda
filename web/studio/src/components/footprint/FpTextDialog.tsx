@@ -13,6 +13,8 @@ import { fpTextSizeMessage, noPrintableChars } from "../../kicad-port/fpTextTool
 import { useFpTextLayerChoices } from "./useFpLayerChoices";
 import type { TextJustify } from "../../api/types";
 import { fieldLayoutOf, fpFieldById } from "../../kicad-port/fpItems";
+import { fromDisplay, toDisplay } from "../../kicad-port/originTransforms";
+import { useOriginTransforms } from "../../state/originTransforms";
 
 
 const mm = (nm: number) => String(Math.round(nm) / 1e6);
@@ -34,6 +36,8 @@ function useInitialFocus(): (el: HTMLInputElement | null) => void {
 }
 
 export function FpTextDialog() {
+  // the offset is `REL_*_COORD` (`DIALOG_TEXT_PROPERTIES`: `m_item->GetParentFootprint()`), through the Footprint Editor's Origins & Axes (UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
@@ -60,8 +64,8 @@ export function FpTextDialog() {
     setOpenLayer(text.layer);
     setSize(mm(text.size_nm));
     setThickness(mm(text.stroke_width));
-    setX(mm(text.at.x));
-    setY(mm(text.at.y));
+    setX(mm(toDisplay(xf, text.at.x, "rel_x")));
+    setY(mm(toDisplay(xf, text.at.y, "rel_y")));
     setAngle(String(text.angle / 1000));
     setJustify(text.justify);
     setMirror(text.mirror);
@@ -85,7 +89,7 @@ export function FpTextDialog() {
     close();
     // `cancelled || NoPrintableChars( text->GetText() )`: the text is dropped
     if (noPrintableChars(content)) return;
-    const at = { x: nm(x) || 0, y: nm(y) || 0 };
+    const at = { x: fromDisplay(xf, nm(x) || 0, "rel_x"), y: fromDisplay(xf, nm(y) || 0, "rel_y") };
     const done = { ...text, content, layer, size_nm: sizeNm, stroke_width: pen, angle: Math.round((Number(angle) || 0) * 1000), justify, mirror, at };
     if (at.x !== text.at.x || at.y !== text.at.y) {
       // the offset was edited: placed there now, "Draw Text", and the tool stays; the commit is followed by `RunAction( ACTIONS::selectItem, text )`, as the
@@ -176,6 +180,8 @@ function sizeMessage(label: string, sizeNm: number): string | null {
  * words, a pen too thick is clamped with KiCad's message. OK is one undo step ("Edit Text Properties").
  */
 export function FpTextEditDialog() {
+  // the offset is `REL_*_COORD` (a footprint's text or field, `GetFPRelativePosition()`), through the Footprint Editor's Origins & Axes (UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
@@ -216,8 +222,8 @@ export function FpTextEditDialog() {
       setWidth(mm(field.w));
       setHeight(mm(field.h));
       setThickness(mm(field.thickness));
-      setX(mm(field.x));
-      setY(mm(field.y));
+      setX(mm(toDisplay(xf, field.x, "rel_x")));
+      setY(mm(toDisplay(xf, field.y, "rel_y")));
       setAngle(String(field.angle / 1000));
       setHalign(field.halign);
       setValign(field.valign);
@@ -242,8 +248,8 @@ export function FpTextEditDialog() {
       setKnockout(look.knockout);
       setUpright(look.keep_upright);
       setThickness(mm(text.stroke_width));
-      setX(mm(text.at.x));
-      setY(mm(text.at.y));
+      setX(mm(toDisplay(xf, text.at.x, "rel_x")));
+      setY(mm(toDisplay(xf, text.at.y, "rel_y")));
       setAngle(String(text.angle / 1000));
       setHalign(text.justify === "left" ? -1 : text.justify === "right" ? 1 : 0);
       setMirror(text.mirror);
@@ -269,7 +275,7 @@ export function FpTextEditDialog() {
       dispatch({ type: "TOAST", message: "The text thickness is too large for the text size.\nIt will be clamped.", kind: "error" });
       pen = maxPen;
     }
-    const at = { x: nm(x) || 0, y: nm(y) || 0 };
+    const at = { x: fromDisplay(xf, nm(x) || 0, "rel_x"), y: fromDisplay(xf, nm(y) || 0, "rel_y") };
     const angleMdeg = (((Math.round((Number(angle) || 0) * 1000) % 360_000) + 360_000) % 360_000);
     let done: boolean;
     if (field) {

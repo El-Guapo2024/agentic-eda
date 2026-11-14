@@ -24,9 +24,9 @@ export function GridOriginDialog() {
 
   // the schematic editors' grid origin is (0, 0) (`SCH_BASE_FRAME::GetGridOrigin`)
   const origin = state.tab === "footprint" ? footprintOrigin : state.tab === "pcb" ? originOf(state.board?.grid_origin) : { x: 0, y: 0 };
-  // the board editor's `GetOriginTransforms()`; the other frames' change nothing here
-  const boardXf = useOriginTransforms();
-  const xf = state.tab === "pcb" ? boardXf : IDENTITY_TRANSFORMS;
+  // the board editor's and the Footprint Editor's `GetOriginTransforms()` (UI-LEFT-3 F3-8); the schematic frames' change nothing here
+  const frameXf = useOriginTransforms();
+  const xf = state.tab === "pcb" || state.tab === "footprint" ? frameXf : IDENTITY_TRANSFORMS;
 
   // Seed the entries when the dialog opens: where the origin is now.
   useEffect(() => {

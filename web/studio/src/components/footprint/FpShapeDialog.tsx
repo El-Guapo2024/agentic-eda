@@ -10,6 +10,8 @@ import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditor
 import { useFpLayerChoices } from "./useFpLayerChoices";
 import { canFill, fillWidthError } from "../../kicad-port/shapeFill";
 import { FILL_CHOICES, LINE_STYLE_CHOICES, fillChoiceOf, fillOfChoice, shapeLookOf } from "../../kicad-port/fpKeep";
+import { fromDisplay, toDisplay } from "../../kicad-port/originTransforms";
+import { useOriginTransforms } from "../../state/originTransforms";
 
 type FillChoice = (typeof FILL_CHOICES)[number]["value"];
 
@@ -90,13 +92,15 @@ export function FpShapeDialog() {
   // the editor board's enabled layers by their names (`SetNotAllowedLayerSet( AllLayersMask() & ~GetEnabledLayers() )`, `SetBoardFrame`; UI-LEFT-3 F3-1)
   const layerChoices = useFpLayerChoices();
   const [errors, setErrors] = useState<string[]>([]);
+  // the points are `ABS_*_COORD` (`AddXYPointToSizer( .., aRelative = false )`), through the Footprint Editor's Origins & Axes (UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
 
   useEffect(() => {
     if (!shape) return;
     const rec: Record<string, [string, string]> = {};
     for (const { key } of pointRows(shape)) {
       const p = (shape as unknown as Record<string, { x: number; y: number }>)[key]!;
-      rec[key] = [mm(p.x), mm(p.y)];
+      rec[key] = [mm(toDisplay(xf, p.x, "abs_x")), mm(toDisplay(xf, p.y, "abs_y"))];
     }
     setPts(rec);
     if (shape.kind === "circle") setRadius(mm(Math.hypot(shape.end.x - shape.center.x, shape.end.y - shape.center.y)));
@@ -112,7 +116,7 @@ export function FpShapeDialog() {
 
   if (!id || !shape) return null;
   const close = () => dispatch({ type: "SET_SHAPE_DIALOG_ID", id: null });
-  const point = (key: string) => ({ x: nm(pts[key]?.[0] ?? "0"), y: nm(pts[key]?.[1] ?? "0") });
+  const point = (key: string) => ({ x: Math.round(fromDisplay(xf, nm(pts[key]?.[0] ?? "0"), "abs_x")), y: Math.round(fromDisplay(xf, nm(pts[key]?.[1] ?? "0"), "abs_y")) });
   const ok = async () => {
     const stroke = nm(width);
     const { filled, hatch } = canFill(shape.kind) ? fillOfChoice(fill) : { filled: false, hatch: null };

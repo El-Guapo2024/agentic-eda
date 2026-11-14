@@ -16,6 +16,7 @@ import { TextBoxForm, RefImagePropertiesForm, type TextBoxHost, type RefImageHos
 import { BarcodeForm, type BarcodeHost } from "../BarcodeDialog";
 import { TablePropertiesForm, type TableHost } from "../TableDialogs";
 import { useFpLayerChoices } from "./useFpLayerChoices";
+import { useOriginTransforms } from "../../state/originTransforms";
 import { FP_COPPER_LAYERS, fpAllLayers, fpLayerLabel } from "../../kicad-port/fpAppearance";
 import { fpNewTable, fpPatchTable, fpZoneWithSettings, type FpTable } from "../../kicad-port/fpDrawTools";
 import { tablePatchOf } from "../../kicad-port/tables";
@@ -250,6 +251,8 @@ export function FpRefImageDialog() {
   const { layers, layerName } = useDialogLayers();
   const commit = useCommit();
   const close = useClose("image");
+  // the position and size are `ABS_*_COORD` (`DIALOG_REFERENCE_IMAGE_PROPERTIES`), through the Footprint Editor's Origins & Axes (UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   const id = editingId(st, "image");
   const image = id ? display(st)?.images.find((i) => i.id === id) : undefined;
   const ir: CmdRefImage | undefined = id ? (items(st).images ?? []).find((i) => i.id === id) : undefined;
@@ -261,6 +264,7 @@ export function FpRefImageDialog() {
     locked: null,
     layers,
     layerName,
+    xf,
     submit: async ({ layer, at, scalePpm, grey }) => ((await commit(id, { image: { ...ir, layer, at, scale_ppm: scalePpm, data: grey ?? ir.data } })) ? null : "The footprint refused the image."),
     close,
   };

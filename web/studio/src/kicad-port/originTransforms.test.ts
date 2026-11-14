@@ -105,3 +105,17 @@ test("pcb_display.origin_mode: the name or the enum's number; anything else is t
   assert.equal(sanitizeDisplayOrigin("drill"), "page");
   assert.equal(sanitizeDisplayOrigin(undefined), "page");
 });
+
+test("UI-LEFT-3 F3-8: the Footprint Editor's transforms -- the board editor's Display Origin over the editor's own grid origin (its aux origin is (0, 0)), its own axes", async () => {
+  const { fpOriginTransforms, toDisplay, fromDisplay } = await import("./originTransforms");
+  const grid = { x: 1_000_000, y: 2_000_000 };
+  const page = fpOriginTransforms("page", false, false, grid);
+  assert.equal(toDisplay(page, 3_000_000, "abs_x"), 3_000_000, "the page: the footprint's own coordinates");
+  const aux = fpOriginTransforms("aux", false, false, grid);
+  assert.equal(toDisplay(aux, 3_000_000, "abs_x"), 3_000_000, "the drill/place file origin of the editor's board: (0, 0)");
+  const g = fpOriginTransforms("grid", true, true, grid);
+  assert.equal(toDisplay(g, 3_000_000, "abs_x"), -2_000_000, "from the grid origin, X increasing left");
+  assert.equal(toDisplay(g, 1_000_000, "abs_y"), 1_000_000, "Y increasing up");
+  assert.equal(fromDisplay(g, -2_000_000, "abs_x"), 3_000_000);
+  assert.equal(toDisplay(g, 500_000, "rel_x"), -500_000, "an offset is only negated");
+});

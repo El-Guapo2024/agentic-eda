@@ -38,7 +38,8 @@ import type { BoardTextBox, CmdBarcode } from "../api/pcbItemTypes";
 import type { CmdZone } from "../api/types";
 import { snapGridNm } from "../components/canvas/gridHelper";
 import { getFpDefaultTextItems, getFpGraphicsDefaults } from "./fpPrefs";
-import { isFactoryNewFootprint, newFootprintTexts } from "../kicad-port/fpFieldDefaults";
+import { showError } from "../components/library/libraryDialogs";
+import { isFactoryNewFootprint, newFootprintTexts, PLAIN_TEXT_LOOK } from "../kicad-port/fpFieldDefaults";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { fpCopyOrigin } from "../components/footprint/footprintSnap";
 import type { FpCornerEdit } from "../kicad-port/fpPointEdit";
@@ -202,6 +203,11 @@ export interface FootprintEditorState {
   sketchPads: boolean;
   sketchGraphics: boolean;
   sketchText: boolean;
+  /** The screen's local origin (`BASE_SCREEN::m_LocalOrigin`, Space: `COMMON_TOOLS::ResetLocalCoords`): the status bar's dx / dy are from it (UI-LEFT-3 F3-8). */
+  localOriginNm: PointXY;
+  /** Flip Board View (`PCB_DISPLAY_OPTIONS::m_FlipBoardView`, View > Flip Board View, `pcbnew.Control.flipBoard`): the footprint seen from its other side, mirrored about the
+   *  canvas middle (UI-LEFT-3 F3-9). Kept while the editor is open (`cfg->m_Display` in memory), not saved. */
+  boardFlipped: boolean;
   /**
    * The Appearance manager's switches (`APPEARANCE_CONTROLS` of the footprint editor, `pcbnew.Control.showLayersManager`): a layer, or an object row under `obj:<id>`, that is off,
    * as the board's `layerVisible` keys them. Absent = shown.
@@ -270,6 +276,8 @@ const initialState: FootprintEditorState = {
   sketchPads: false,
   sketchGraphics: false,
   sketchText: false,
+  localOriginNm: { x: 0, y: 0 },
+  boardFlipped: false,
   layerVisible: {},
   layerOpacity: {},
   appearanceShown: true,
@@ -328,7 +336,8 @@ export type FpAction =
   | { type: "SET_ITEM_DRAW"; draw: FpItemDraw | null }
   | { type: "SET_PENDING_ITEM"; item: FpPendingItem | null }
   | { type: "SET_LINE_MODE"; mode: AngleSnapMode }
-  | { type: "SET_DISPLAY"; patch: Partial<Pick<FootprintEditorState, "sketchPads" | "sketchGraphics" | "sketchText">> }
+  | { type: "SET_DISPLAY"; patch: Partial<Pick<FootprintEditorState, "sketchPads" | "sketchGraphics" | "sketchText" | "boardFlipped">> }
+  | { type: "SET_LOCAL_ORIGIN"; at: PointXY }
   | { type: "SET_LAYER_VISIBLE"; key: string; visible: boolean }
   | { type: "SET_LAYERS_VISIBLE"; visible: Record<string, boolean> }
   | { type: "SET_LAYER_OPACITY"; key: string; opacity: number }
@@ -372,6 +381,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         sketchPads: state.sketchPads,
         sketchGraphics: state.sketchGraphics,
         sketchText: state.sketchText,
+        localOriginNm: state.localOriginNm,
+        boardFlipped: state.boardFlipped,
         layerVisible: state.layerVisible,
         layerOpacity: state.layerOpacity,
         appearanceShown: state.appearanceShown,
@@ -486,6 +497,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, pendingItem: action.item };
     case "SET_LINE_MODE":
       return { ...state, lineMode: action.mode };
+    case "SET_LOCAL_ORIGIN":
+      return { ...state, localOriginNm: { x: action.at.x, y: action.at.y } };
     case "SET_DISPLAY":
       return { ...state, ...action.patch };
     case "SET_LAYER_VISIBLE":
@@ -644,6 +657,19 @@ const FpStateContext = createContext<FootprintEditorState | null>(null);
 const FpDispatchContext = createContext<React.Dispatch<FpAction> | null>(null);
 const FpApiContext = createContext<FootprintEditorApi | null>(null);
 
+
+/**
+ * A point has no `Mirror` of its own (KiCad 8303b2ad `PCB_POINT` overrides `Flip` only): `EDIT_TOOL::Mirror`'s `case PCB_POINT_T` (and a group's, member by member)
+ * lands in `BOARD_ITEM::Mirror`, which says so in a message box titled with the item's class (`wxMessageBox( wxT( "virtual BOARD_ITEM::Mirror used, should not
+ * occur" ), GetClass() )`), once per point, and the point stays where it is (UI-LEFT-2 FF8; UI-LEFT-3 F3-7: it was a toast).
+ */
+async function sayPointsNotMirrored(fp: LibraryFootprint, ids: readonly string[]): Promise<void> {
+  const points = new Set((fp.items?.points ?? []).map((p) => p.id));
+  for (const id of fpLeaves(fp, [...ids])) {
+    if (points.has(id)) await showError("virtual BOARD_ITEM::Mirror used, should not occur", undefined, "PCB_POINT");
+  }
+}
+
 export function FootprintEditorProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(state);
@@ -781,11 +807,29 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
           ...(made?.texts ?? []).filter((x) => x.id).map((x): Cmd => ({ op: "delete_footprint_text", footprint: name, id: x.id! })),
           ...t.texts.map((text): Cmd => ({ op: "add_footprint_text", footprint: name, text })),
         ];
+        let failed = false;
         for (const cmd of cmds) {
           const r = await postCmd(cmd, false, "hold");
           if (!r.ok) {
             dispatch({ type: "TOAST", message: r.message, kind: "error" });
+            failed = true;
             break;
+          }
+        }
+        // each text's width, italic and keep-upright (`RunOnChildren`: `SetTextSize`, `SetItalic`, `SetKeepUpright`), on the texts just added, in their order (UI-LEFT-3 F3-6)
+        if (!failed && t.looks.some((l) => JSON.stringify(l) !== JSON.stringify(PLAIN_TEXT_LOOK))) {
+          // (the footprint's texts are now the ones just added -- the made ones were deleted, and an added one may take a deleted one's id: ids come from the text)
+          const now = (await fetchFootprint(name).catch(() => null))?.texts ?? [];
+          for (let i = 0; i < t.texts.length; i++) {
+            const look = t.looks[i]!;
+            const want = t.texts[i]!;
+            const added = now.find((x) => x.id && x.content === want.content && x.layer === want.layer && x.at.x === want.at.x && x.at.y === want.at.y);
+            if (!added || JSON.stringify(look) === JSON.stringify(PLAIN_TEXT_LOOK)) continue;
+            const r = await postCmd({ op: "fp_item", verb: "set_text", footprint: name, id: added.id!, text: added, look }, false, "hold");
+            if (!r.ok) {
+              dispatch({ type: "TOAST", message: r.message, kind: "error" });
+              break;
+            }
           }
         }
         await postCarry("commit");
@@ -947,6 +991,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       carryRef.current = true;
       const ok = await runCmd({ op: "fp_item", verb: "mirror", footprint: name, ids: refs, pivot: { x: pivot.x, y: pivot.y }, direction }, step);
       if (!ok && step === "begin") carryRef.current = false;
+      if (ok) await sayPointsNotMirrored(fp, refs);
     },
     cancelPickUp: async () => {
       // a drag's Mirror began a carry (no pick-up pending): Escape reverts it with the move (`commit.Revert()`)
@@ -1171,11 +1216,8 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       const st = stateRef.current;
       if (!st.name || !st.footprint) return;
       const cmd = fpMirrorCmd(st.footprint, st.name, [...st.selection], direction, snap);
-      if (!cmd) return;
-      await runCmd(cmd);
-      // A point has no `Mirror` of its own: `BOARD_ITEM::Mirror` says so (`wxMessageBox( .., GetClass() )`) and the point stays where it is (UI-LEFT-2 FF8).
-      const points = new Set((st.footprint.items?.points ?? []).map((p) => p.id));
-      if ([...st.selection].some((id) => points.has(id))) dispatch({ type: "TOAST", message: "virtual BOARD_ITEM::Mirror used, should not occur", kind: "error" });
+      if (cmd) await runCmd(cmd);
+      await sayPointsNotMirrored(st.footprint, [...st.selection]);
     },
     swapSelection: async () => {
       const st = stateRef.current;

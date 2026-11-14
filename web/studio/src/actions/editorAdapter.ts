@@ -279,7 +279,8 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         tab,
         view: fp.view,
         setView: (view) => snap.fpDispatch({ type: "SET_VIEW", view }),
-        flipped: false,
+        // the Footprint Editor's own Flip Board View (UI-LEFT-3 F3-9)
+        flipped: fp.boardFlipped,
         cursor: fp.cursorNm,
         setCursor: (at) => snap.fpDispatch({ type: "SET_CURSOR", at }),
         gridNm: fp.gridNm,

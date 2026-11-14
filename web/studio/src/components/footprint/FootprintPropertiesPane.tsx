@@ -9,6 +9,7 @@ import { fpEdit, fpGrid, type FpPropCtx } from "../../kicad-port/fpItemPropertie
 import type { PropValue } from "../../kicad-port/propertyManager";
 import { PropertyGrid } from "../panels/PropertyGrid";
 import { useFpLayerChoices } from "./useFpLayerChoices";
+import { useOriginTransforms } from "../../state/originTransforms";
 
 export function FootprintPropertiesPane() {
   const state = useFpState();
@@ -18,6 +19,8 @@ export function FootprintPropertiesPane() {
   const ids = useMemo(() => [...state.selection], [state.selection]);
   // the Layer row lists the editor board's enabled layers by their names (`PCB_PROPERTIES_PANEL::updateLists`, UI-LEFT-3 F3-1)
   const layers = useFpLayerChoices();
+  // a coordinate row through the Footprint Editor's Origins & Axes (`PGPROPERTY_COORD`: `m_frame->GetOriginTransforms()`, UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   const ctx = useMemo<FpPropCtx | null>(() => (fp && state.name ? { fp, name: state.name, units, layers } : null), [fp, state.name, units, layers]);
   const model = useMemo(() => (ctx ? fpGrid(ctx, ids) : null), [ctx, ids]);
   if (!ctx || !model) {
@@ -36,7 +39,7 @@ export function FootprintPropertiesPane() {
   };
   return (
     <div data-testid="fp-properties">
-      <PropertyGrid model={model} units={units} onCommit={commit} selectionKey={ids.join("\n")} />
+      <PropertyGrid model={model} units={units} xf={xf} onCommit={commit} selectionKey={ids.join("\n")} />
     </div>
   );
 }

@@ -36,8 +36,9 @@ export function StatusBar() {
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
   const raw = onPcb ? state.cursorNm : lib ? lib.cursorNm : null;
-  // The Footprint Editor's Origins & Axes (`m_DisplayInvertXAxis` / `m_DisplayInvertYAxis`, Preferences > Footprint Editor, UI-LEFT F8): "Increases left" / "Increases up".
-  const cursor = raw && state.tab === "footprint" ? { x: state.prefs.fpInvertXAxis ? -raw.x : raw.x, y: state.prefs.fpInvertYAxis ? -raw.y : raw.y } : raw;
+  // (the Footprint Editor's Origins & Axes are its `PCB_ORIGIN_TRANSFORMS`, below with the board's: UI-LEFT-3 F3-8)
+  const cursor = raw;
+  const onFp = state.tab === "footprint";
   // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`), each its own (`editing.polar_coords`); eeschema has none.
   const polarOn = windowOptionsOf(useCommonOptions(), state.tab).polarCoords;
   const polar = polarOn && state.tab !== "symbol" && state.tab !== "schematic";
@@ -46,14 +47,16 @@ export function StatusBar() {
   // own drag anchor (state.moveOriginNm) -- KiCad's move tool never
   // touches the local origin, so this is a different number even while a
   // move preview happens to also be active.
-  const origin = onPcb ? state.localOriginNm : null;
+  // the Footprint Editor's screen has its own (`m_LocalOrigin`, Space there too: UI-LEFT-3 F3-8)
+  const origin = onPcb ? state.localOriginNm : onFp ? fp.localOriginNm : null;
   const dx = cursor && origin ? cursor.x - origin.x : null;
   const dy = cursor && origin ? cursor.y - origin.y : null;
   // The board editor's Origins & Axes (Preferences > PCB Editor, UI-LEFT-2 PP9): `PCB_BASE_FRAME::UpdateStatusBar` -- field 2 is always the cursor's X and Y through
   // `ToDisplayAbsX` / `ToDisplayAbsY` (from the page, the drill/place file origin or the grid origin, each axis either way), field 3 dx and dy from the local origin
   // through `ToDisplayRelX` / `ToDisplayRelY` and their `hypot`, or with polar coordinates on "r %s  theta %.3f" of the cursor from the local origin, untransformed.
   const xf = useOriginTransforms();
-  const pcbStatus = onPcb && cursor && origin ? statusBarCoords(xf, cursor, origin, polar) : null;
+  // the same `PCB_BASE_FRAME::UpdateStatusBar` in the Footprint Editor, through its own transforms (`useOriginTransforms` on its tab)
+  const pcbStatus = (onPcb || onFp) && cursor && origin ? statusBarCoords(xf, cursor, origin, polar) : null;
   // Schematic has its own independent pan/zoom (SchematicView.tsx's
   // state.schematicView) -- showing the PCB view's scale while looking
   // at the schematic would report a number that has nothing to do with

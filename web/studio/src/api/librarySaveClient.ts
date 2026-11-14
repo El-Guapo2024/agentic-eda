@@ -81,6 +81,11 @@ export async function revertInLibrary(req: { kind: "symbol"; id: string } | { ki
   return post<RevertAnswer>("/api/library/revert", req);
 }
 
+/** `ClearModify()` of the editor that holds `id` (`POST /api/library/clear_modify`): its modified flag goes, the copy as it is (UI-LEFT-3 F3-5). */
+export async function clearModify(kind: SaveKind, id: string): Promise<{ ok?: boolean; error?: string }> {
+  return post<{ ok?: boolean; error?: string }>("/api/library/clear_modify", { kind, id });
+}
+
 /** `GetDerivedSymbolNames` over the library's buffer: the bare names of the symbols Delete takes with `id` (the design's and the library file's). */
 export async function fetchDerivedNames(id: string): Promise<string[]> {
   return (await get<{ names: string[]; error?: string }>(`/api/library/derived?id=${encodeURIComponent(id)}`)).names;

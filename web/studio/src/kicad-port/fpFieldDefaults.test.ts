@@ -13,6 +13,7 @@ import {
   loadFieldDefaults,
   loadLayerNames,
   newFootprintTexts,
+  PLAIN_TEXT_LOOK,
   nextAvailableLayer,
   resetFieldDefaults,
   sanitizeFpTextItems,
@@ -72,6 +73,16 @@ test("CreateNewFootprint: the Reference half a text height above the origin, eac
   const big = { ...FACTORY_TEXT_GRAPHICS, silk: { ...FACTORY_TEXT_GRAPHICS.silk, text_height_nm: 2_000_000, text_width_nm: 2_000_000 } };
   assert.equal(newFootprintTexts(DEFAULT_FP_TEXT_ITEMS, big, "X").reference.layout.at.y, -1_000_000);
   assert.ok(!isFactoryNewFootprint(DEFAULT_FP_TEXT_ITEMS, big, "X"));
+});
+
+test("UI-LEFT-3 F3-6: CreateNewFootprint's other texts take their layer class's width, italic and keep-upright (`RunOnChildren`: SetTextSize, SetItalic, SetKeepUpright)", () => {
+  const plain = newFootprintTexts(DEFAULT_FP_TEXT_ITEMS, null, "X");
+  assert.deepEqual(plain.looks, [PLAIN_TEXT_LOOK], "KiCad's defaults: the text the backend makes as it is");
+  const fab = { ...FACTORY_TEXT_GRAPHICS.fab, italic: true, upright: false, text_width_nm: 800_000 };
+  const t = newFootprintTexts(DEFAULT_FP_TEXT_ITEMS, { ...FACTORY_TEXT_GRAPHICS, fab }, "X");
+  assert.deepEqual([t.looks[0]!.italic, t.looks[0]!.keep_upright, t.looks[0]!.width_nm], [true, false, 800_000]);
+  assert.deepEqual([t.value.layout.italic, t.value.layout.keep_upright], [true, false], "the fields as before");
+  assert.ok(!isFactoryNewFootprint(DEFAULT_FP_TEXT_ITEMS, { ...FACTORY_TEXT_GRAPHICS, fab }, "X"));
 });
 
 test("User Layer Names: rows in the map's order, Add on the first free User.n, a layer taken twice moved to the next free one, a name taken twice an error", () => {
