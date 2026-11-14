@@ -14,6 +14,8 @@
 import type { Dispatch } from "react";
 import { fetchSchematic } from "../api/client";
 import { postSchCopy, postSchParse } from "../api/schClipboardClient";
+import { readClipboardImage } from "../api/libraryClient";
+import { pasteImage } from "./schImageActions";
 import { clipboardTextOrNull, newIdsAfter, pasteOffset, selectionAfterPaste, type SchPasteMode } from "../kicad-port/schClipboard";
 import { clipboardHasTable, hasTableCells } from "../kicad-port/tableCells";
 import { deleteCmds } from "../kicad-port/schDelete";
@@ -39,13 +41,16 @@ async function writeSystemClipboard(text: string): Promise<void> {
 }
 
 async function readSystemClipboard(): Promise<string | null> {
+  return (await readSystemText()) ?? clipboardTextOrNull(lastCopied);
+}
+
+/** The text on the system clipboard (`GetClipboardUTF8`), or null for none or where the browser refuses it. */
+async function readSystemText(): Promise<string | null> {
   try {
-    const text = clipboardTextOrNull(await navigator.clipboard.readText());
-    if (text) return text;
+    return clipboardTextOrNull(await navigator.clipboard.readText());
   } catch {
-    // Refused: fall through to the last copy made here.
+    return null;
   }
-  return clipboardTextOrNull(lastCopied);
 }
 
 const toast = (dispatch: Dispatch<Action>, message: string, kind: "error" | "info" = "info") => dispatch({ type: "TOAST", message, kind });
@@ -56,6 +61,8 @@ export interface SchPasteContext {
   dispatch: Dispatch<Action>;
   /** Sends Paste Cells; without it a paste with cells selected pastes the clipboard as it is. */
   api?: Pick<StudioApi, "cmd">;
+  /** Place Image in immediate mode with a bitmap the clipboard holds (`RunAction( SCH_ACTIONS::placeImage, bitmap )`). */
+  placeImage?: (image: { name: string; data: string }) => void;
 }
 
 /**
@@ -64,7 +71,20 @@ export interface SchPasteContext {
  */
 export async function startPaste(ctx: SchPasteContext, opts: { mode: SchPasteMode; duplicate: boolean; text?: string | null; hover?: boolean }): Promise<void> {
   const { state, dispatch } = ctx;
-  const text = clipboardTextOrNull(opts.text) ?? (opts.duplicate ? clipboardTextOrNull(duplicateBuffer) : await readSystemClipboard());
+  let text = clipboardTextOrNull(opts.text) ?? (opts.duplicate ? clipboardTextOrNull(duplicateBuffer) : null);
+  if (!text && !opts.duplicate && opts.text === undefined) {
+    // "Only fall back to image data if there's no text content": a bitmap on the clipboard is an image on the sheet (`GetImageFromClipboard`, a `SCH_BITMAP`
+    // handed to Place Image, which drops it at the next click; UI-LEFT-3 P3-19), else the last copy made here where the browser hands nothing over
+    text = await readSystemText();
+    if (!text && ctx.placeImage) {
+      const image = await readClipboardImage();
+      if (image) {
+        ctx.placeImage({ name: "clipboard", data: image });
+        return;
+      }
+    }
+    text ??= clipboardTextOrNull(lastCopied);
+  }
   if (!text) {
     toast(dispatch, "The clipboard is empty.");
     return;
@@ -156,7 +176,7 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
   });
 
   // Ctrl+V -- SCH_EDITOR_CONTROL::Paste: the unique-reference mode (`annotation.automatic` is on by default).
-  m.set("common.Interactive.paste", () => void startPaste(ctx, { mode: "unique", duplicate: false }));
+  m.set("common.Interactive.paste", () => void startPaste({ ...ctx, placeImage: (image) => pasteImage(ctx, image) }, { mode: "unique", duplicate: false }));
 
   // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL. The board editor's Paste Special (clear the nets of pasted copper) has no counterpart here: say so.
   // With table cells selected and a table on the clipboard, the cells are pasted into before the dialog would ask (`Paste`'s `hasTableCells` branch comes first).

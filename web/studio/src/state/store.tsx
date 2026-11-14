@@ -38,7 +38,7 @@ import { escapeKeepsDrawingTool } from "../kicad-port/drawingCancel";
 import { LONG_TEXT_QUESTION, plainTextPaste } from "../kicad-port/plainTextPaste";
 import { dragOriginFor, modificationSnapFor } from "./modificationSnap";
 import { rememberedImperial } from "../kicad-port/unitToggle";
-import { readClipboardText, writeClipboardText } from "../api/libraryClient";
+import { readClipboardImage, readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, loadAngleSnapMode, saveAngleSnapMode, type PcbParityState } from "../kicad-port/pcbParityState";
 import { startWithViaAfterToolChange } from "../kicad-port/routerVia";
 import { strokeStepKept } from "../kicad-port/layerDefaults";
@@ -2872,8 +2872,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       let cmd: Cmd;
+      // "When the clipboard doesn't parse": a bitmap on it is a reference image first (`GetImageFromClipboard`: a `PCB_REFERENCE_IMAGE` on F.Cu at the origin,
+      // which the paste puts on the cursor; UI-LEFT-3 P3-19), else the text
+      const image = system != null && !isKicadPcbText(system) ? await readClipboardImage() : null;
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
+      } else if (image) {
+        cmd = { op: "pcb_item", verb: "add_ref_image", image: { layer: "F.Cu", at, data: image } };
       } else if (system != null && system !== "") {
         // the text as it is, KiCad's text defaults, on the active layer (kicad-port/plainTextPaste.ts), blanks too (`clipText.empty()` is the only text KiCad
         // does not paste; an empty clipboard here falls back to the session's copy, as a browser that hands nothing over does); a long one asks first
