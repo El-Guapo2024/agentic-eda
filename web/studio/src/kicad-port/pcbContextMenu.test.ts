@@ -383,6 +383,7 @@ test("the router's menu: Cancel first, the tool and route commands, vias and pos
     "pcbnew.InteractiveRouter.PlaceVia",
     "pcbnew.InteractiveRouter.PlaceBlindVia",
     "pcbnew.InteractiveRouter.PlaceMicroVia",
+    "pcbnew.InteractiveRouter.PlaceViaStack",
     "pcbnew.InteractiveRouter.SelLayerAndPlaceVia",
     "pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia",
     "pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia",

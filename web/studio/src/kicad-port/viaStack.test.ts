@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardViaStack } from "../api/pcbItemTypes";
 import type { ViaStackPreset } from "../api/types";
-import { buildMembers, hopPos, isSpanValid, layerRange, newViaStack, placementPitch, placementPreset, presetOf, steeredHop, viaStackBoxLabels, viaStackBoxPick, viaStackCmd, withPreset } from "./viaStack";
+import { buildMembers, viaStackTargetLayer, hopPos, isSpanValid, layerRange, newViaStack, placementPitch, placementPreset, presetOf, steeredHop, viaStackBoxLabels, viaStackBoxPick, viaStackCmd, withPreset } from "./viaStack";
 import { isViaDrcMessage, isViaPlacement, viaDrcInfoBarText } from "./viaDrcInfoBar";
 
 const copper = ["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"];
@@ -76,4 +76,11 @@ test("UI-LEFT-3 X3-1: set_via_stack leaves the members and the id to the server;
   assert.equal(viaDrcInfoBarText("ops_via_drc: Microvia stack location violates DRC."), "Microvia stack location violates DRC.");
   assert.equal(isViaPlacement(cmd as { op: string; verb?: string }), true);
   assert.equal(isViaPlacement({ op: "pcb_item", verb: "set_via_stack", id: "vsk_1" }), false);
+});
+
+test("UI-LEFT-3 X3-1: ViaStackTargetLayer -- from the start layer the end, from the end layer the start, else none", () => {
+  assert.equal(viaStackTargetLayer("F.Cu", "In2.Cu", "F.Cu"), "In2.Cu");
+  assert.equal(viaStackTargetLayer("F.Cu", "In2.Cu", "In2.Cu"), "F.Cu");
+  assert.equal(viaStackTargetLayer("F.Cu", "In2.Cu", "In1.Cu"), null);
+  assert.equal(viaStackTargetLayer("F.Cu", "F.Cu", "F.Cu"), null);
 });

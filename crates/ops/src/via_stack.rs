@@ -14,7 +14,8 @@
 //!   (`PCB_GROUP::Move` ..: the members move with it) and the stack's own (the hops "must follow every transform", Flip flips the span): [`transform_via_stack`].
 //!
 //! Where it differs: the net a placed stack takes from what its first hop lands on (`FindNetAtPosition`) is worked out by the studio, which has the zone fills (the
-//! design does not); the placement's DRC check judges the vias (`crate::via_place::via_violates_drc`, the Draw Via tool's), not a staggered stack's traces.
+//! design does not). The placement's DRC check judges each via as Draw Via's does (`crate::via_place::via_violates_drc`) and each of a staggered stack's traces with
+//! [`trace_violates_drc`] (`CheckItemDRCViolation` on a `PCB_TRACK`).
 
 use super::Board;
 use eda_model::ir::{Nm, Point, Track, Via};
@@ -45,6 +46,15 @@ pub struct CurrentSizes {
     pub via_size_nm: Nm,
     #[serde(default)]
     pub via_drill_nm: Nm,
+}
+
+/// A drop of the router's Place Microvia Stack at Track End with a stacked preset (`PENDING_STACK_EXPANSION`): where its via went, the layers it spans and the preset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StackDrop {
+    pub at: Point,
+    pub start: String,
+    pub end: String,
+    pub preset: eda_model::setup_pages::ViaStackPreset,
 }
 
 /// One member `BuildMembers` makes.
@@ -165,6 +175,70 @@ fn member_extra(id: &str, old: Option<&ViaExtra>, filled: bool, capped: bool) ->
     p.capping = Some(capped);
     e.set_props(&p);
     e
+}
+
+/// `CheckItemDRCViolation` of a trace that is not on the board yet (a staggered stack's, before `placeStack` commits it): `ItemHasDRCViolation` against every
+/// track segment, via and pad of another net on the trace's layer (zones skipped: "the pour is not refilled yet"), at the clearance the rules give the pair on that
+/// layer (`EvalRules( CLEARANCE_CONSTRAINT, .. )` less the DRC epsilon), and a rule area that keeps tracks out (`DISALLOW_CONSTRAINT`). Items on a hidden layer are not
+/// judged (`view->Query`).
+pub fn trace_violates_drc(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, trace: &Track, hidden_layers: &[String]) -> bool {
+    use eda_drc::constraints::CType;
+    use eda_drc::kimath::Shape;
+    if hidden_layers.iter().any(|h| h == &trace.layer) {
+        return false;
+    }
+    const PROBE: &str = "trk_via_stack_probe";
+    let mut d = design.clone();
+    let rt = d.routing.get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], diff_pair_presets: vec![], teardrop_settings: Default::default() });
+    rt.tracks.push(Track { id: PROBE.into(), ..trace.clone() });
+    let board = eda_drc::board::build(&d, model);
+    let rb = eda_drc::rule_board::RuleBoard::new(&d, model, &board, eda_drc::constraints::Units::Mm, model.board.custom_rules_text.as_deref());
+    let Ok(probe) = rb.item(PROBE, None) else { return false };
+    let layer = trace.layer.as_str();
+    let mine = Shape::Stadium { a: trace.pts[0], b: *trace.pts.last().unwrap(), r: trace.width / 2 };
+    let other_net = |n: &Option<String>| n.as_deref().is_some_and(|n| !n.is_empty() && n != trace.net);
+    let hits = |other: &Shape, item: &std::rc::Rc<eda_drc::rule_item::RuleItem>| {
+        let c = rb.engine().eval_rules(CType::Clearance, Some(&probe), Some(item), Some(layer), None).value.min.unwrap_or(0);
+        c >= 0 && mine.collides(other, Nm::new((c - 500).max(0))).is_some()
+    };
+    for (i, s) in board.tracks.iter().enumerate() {
+        if s.id == PROBE || s.id.starts_with(&format!("{PROBE}#")) || s.layer != layer || !other_net(&s.net) {
+            continue;
+        }
+        if hits(&s.shape(), &rb.segment_item_at(i)) {
+            return true;
+        }
+    }
+    let copper: Vec<&String> = model.board.layers.iter().filter(|l| l.ends_with(".Cu")).collect();
+    let at = |l: &str| copper.iter().position(|c| c.as_str() == l);
+    for (i, v) in board.vias.iter().enumerate() {
+        if !other_net(&v.net) {
+            continue;
+        }
+        let (a, b, x) = (at(&v.from_layer), at(&v.to_layer), at(layer));
+        let on = matches!((a, b, x), (Some(a), Some(b), Some(x)) if x >= a.min(b) && x <= a.max(b));
+        let shape = Shape::Circle { c: v.at, r: if on { v.diameter / 2 } else { v.drill / 2 } };
+        if hits(&shape, &rb.via_item_at(i)) {
+            return true;
+        }
+    }
+    for (i, pad) in board.pads.iter().enumerate() {
+        if !other_net(&pad.net) {
+            continue;
+        }
+        let (Some(shape), Some(item)) = (pad.copper_on(layer), rb.pad_item_at(i)) else { continue };
+        if hits(shape, &item) {
+            return true;
+        }
+    }
+    // a rule area that keeps tracks out, on the trace's layer
+    let segs = [trace.pts[0], *trace.pts.last().unwrap()];
+    design.routing.iter().flat_map(|rt| rt.zones.iter()).any(|z| {
+        z.is_rule_area && z.keepout_tracks && (z.layer == layer || z.layers.iter().any(|l| l == layer)) && z.outline.len() >= 3 && {
+            let poly = Shape::Polygon { pts: z.outline.clone() };
+            mine.collides(&poly, Nm::ZERO).is_some() || segs.iter().any(|p| poly.collides(&Shape::Circle { c: *p, r: Nm::ZERO }, Nm::ZERO).is_some())
+        }
+    })
 }
 
 /// `MINOPTMAX::PinnedOpt( aDefault )`: the opt (or the default) held between the min and the max.
@@ -422,7 +496,10 @@ impl Board<'_> {
                         let v = Via { id: String::new(), net: stack.net.clone(), at: *at, drill: *drill, diameter: *size, from_layer: top.clone(), to_layer: bottom.clone() };
                         crate::via_place::via_violates_drc(&self.design, self.model, &v, hidden_layers, &check)
                     }
-                    Member::Trace { .. } => false,
+                    Member::Trace { a, b, layer, width } => {
+                        let t = Track { id: String::new(), net: stack.net.clone(), pins: Vec::new(), layer: layer.clone(), width: *width, pts: vec![*a, *b], arc_mid_offset: None };
+                        trace_violates_drc(&self.design, self.model, &t, hidden_layers)
+                    }
                 });
                 if violates {
                     if !allow_drc_violations {
@@ -547,6 +624,61 @@ impl Board<'_> {
         dr.groups.retain(|g| !g.member_ids.is_empty());
         dr.board_items.via_stacks.push(s);
         dr.assign_missing_ids();
+        Ok(())
+    }
+
+    /// `ExpandMultiHopMicrovias` with the router's matcher (`MatchPendingStackExpansion`, `finishInteractive`): each microvia of the board at one of `drops`' places,
+    /// spanning that drop's start and end layer (either way round), crossing more than one layer step and in no group or generator (`isExpandableMicrovia`), is
+    /// replaced by a stack of the drop's preset over its span: stacked, filled, of the via's size and net, at its place, made at once (`Regenerate`). A drop
+    /// no via matches does nothing. "Expand Microvia Stacks", appended to the route's undo step by the caller.
+    pub(crate) fn expand_microvia_stacks(&mut self, drops: &[StackDrop], current: CurrentSizes) -> Result<(), Vec<CheckResult>> {
+        let copper = self.copper();
+        let ord = |l: &str| copper.iter().position(|c| c == l);
+        let in_group = |id: &str| {
+            self.design.drawings.as_ref().is_some_and(|d| {
+                d.groups.iter().any(|g| g.member_ids.iter().any(|m| m == id))
+                    || d.board_items.via_stacks.iter().any(|s| s.member_ids.iter().any(|m| m == id))
+                    || d.board_items.via_stitches.iter().any(|s| s.member_ids.iter().any(|m| m == id))
+                    || d.tuning_patterns.iter().any(|p| p.member_ids.iter().any(|m| m == id))
+            })
+        };
+        let micro = |id: &str| self.design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|x| x.id == id)).is_some_and(|x| x.kind == ViaKind::Micro);
+        let mut found: Vec<(Via, &StackDrop)> = Vec::new();
+        for v in self.design.routing.iter().flat_map(|rt| rt.vias.iter()) {
+            let (Some(a), Some(b)) = (ord(&v.from_layer), ord(&v.to_layer)) else { continue };
+            if !micro(&v.id) || in_group(&v.id) || a.abs_diff(b) <= 1 {
+                continue;
+            }
+            let drop = drops.iter().find(|d| d.at == v.at && ((d.start == v.from_layer && d.end == v.to_layer) || (d.start == v.to_layer && d.end == v.from_layer)));
+            if let Some(d) = drop {
+                found.push((v.clone(), d));
+            }
+        }
+        for (v, d) in found {
+            // `via->LayerPair( &top, &bottom )`: the upper layer first
+            let (top, bottom) = if ord(&v.from_layer) <= ord(&v.to_layer) { (v.from_layer.clone(), v.to_layer.clone()) } else { (v.to_layer.clone(), v.from_layer.clone()) };
+            let mut s = MicroviaStack::new(v.at);
+            s.apply_preset(&d.preset);
+            s.start_layer = top;
+            s.end_layer = bottom;
+            s.style = ViaStackStyle::Stacked;
+            s.hops = None;
+            s.via_size_nm = v.diameter;
+            s.via_drill_nm = v.drill;
+            s.net = v.net.clone();
+            s.filled = true;
+            if let Some(rt) = self.design.routing.as_mut() {
+                rt.vias.retain(|x| x.id != v.id);
+            }
+            let dr = self.drawings_mut();
+            dr.via_extras.retain(|x| x.id != v.id);
+            dr.locked_ids.retain(|x| *x != v.id);
+            let before: BTreeSet<String> = dr.board_items.via_stacks.iter().map(|x| x.id.clone()).collect();
+            dr.board_items.via_stacks.push(s);
+            dr.assign_missing_ids();
+            let id = dr.board_items.via_stacks.iter().find(|x| !before.contains(&x.id)).map(|x| x.id.clone()).expect("just added");
+            self.regenerate_via_stack(&id, current)?;
+        }
         Ok(())
     }
 

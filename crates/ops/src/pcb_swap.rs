@@ -51,7 +51,8 @@
 //! The generators and KiCad 10's items (UI-LEFT-3 P3-33) as KiCad has them: a tuning pattern and a via stitching are both `PCB_GENERATOR_T` -- `GetPosition` is
 //! `m_origin` (25ec2335 `PCB_VIA_STITCH::GetPosition`: its outline's first corner), `SetPosition` sets `m_origin` alone (the pattern's tracks, the stitching's outline
 //! and vias stay; nothing regenerates them in the swap's commit), two of them swap layers (`PCB_TUNING_PATTERN::GetLayer` is its first track's, `SetLayer` sets its
-//! tracks' too). 25ec2335's grid item: `m_pos`, no layer ("Grids don't have layers"); drill map: `m_offset` and its layer; drill chart: a table
+//! tracks' too). A microvia stack (KiCad 25ec2335 `PCB_VIA_STACK`) is one as well: its origin moves alone, and its layer is its start layer, which the swap leaves (its
+//! `m_layer` alone would change, and the file's next load would put the start layer back). 25ec2335's grid item: `m_pos`, no layer ("Grids don't have layers"); drill map: `m_offset` and its layer; drill chart: a table
 //! (`PCB_GENERATED_TABLE`) of its own type, so a chart and a plain table do not swap layers.
 
 use super::Board;
@@ -306,10 +307,7 @@ impl SwapHost for Board<'_> {
             if dr.is_group(id) {
                 return Ok(SwapType::Group);
             }
-            if bi.via_stacks.iter().any(|v| v.id == id) {
-                return Err(fail("ops_swap", id, "a microvia stack is not swapped yet (PCB_VIA_STACK, a generator: its origin moves alone)"));
-            }
-            if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) {
+            if dr.tuning_patterns.iter().any(|p| p.id == id) || bi.via_stitches.iter().any(|v| v.id == id) || bi.via_stacks.iter().any(|v| v.id == id) {
                 return Ok(SwapType::Generator);
             }
             if bi.grid_items.iter().any(|g| g.id == id) {
@@ -352,7 +350,7 @@ impl SwapHost for Board<'_> {
             SwapType::Table | SwapType::DrillChart => dr.and_then(|d| d.tables.iter().find(|x| x.id == id)).map(|t| t.at),
             // `PCB_GENERATOR::GetPosition`: `m_origin`; a via stitching's (25ec2335 `PCB_VIA_STITCH::GetPosition`) is its outline's first corner, the origin when it has none
             SwapType::Generator => dr.and_then(|d| {
-                d.tuning_patterns.iter().find(|p| p.id == id).map(|p| p.origin).or_else(|| d.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.outline.first().copied().unwrap_or(v.origin)))
+                d.tuning_patterns.iter().find(|p| p.id == id).map(|p| p.origin).or_else(|| d.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.outline.first().copied().unwrap_or(v.origin))).or_else(|| d.board_items.via_stacks.iter().find(|v| v.id == id).map(|v| v.origin))
             }),
             // 25ec2335 `PCB_GRID_ITEM::GetPosition`: `m_pos`; `PCB_DRILL_MAP::GetPosition`: `m_offset`
             SwapType::Grid => dr.and_then(|d| d.board_items.grid_items.iter().find(|g| g.id == id)).map(|g| g.at),
@@ -386,6 +384,9 @@ impl SwapHost for Board<'_> {
                 if let Some(p) = dr.tuning_patterns.iter_mut().find(|p| p.id == id) {
                     p.origin = at;
                 } else if let Some(v) = dr.board_items.via_stitches.iter_mut().find(|v| v.id == id) {
+                    v.origin = at;
+                } else if let Some(v) = dr.board_items.via_stacks.iter_mut().find(|v| v.id == id) {
+                    // a microvia stack's too (`PCB_VIA_STACK` has no `SetPosition` of its own): its vias, traces and hops stay until it is next rebuilt
                     v.origin = at;
                 }
                 Ok(())
@@ -453,7 +454,8 @@ impl SwapHost for Board<'_> {
                     let tracks = rt.map(|rt| rt.tracks.as_slice()).unwrap_or_default();
                     return Some(p.member_ids.iter().find_map(|m| tracks.iter().find(|t| &t.id == m)).map_or_else(|| p.layer.clone(), |t| t.layer.clone()));
                 }
-                dr?.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.layer.clone())
+                // a microvia stack's own is its start layer (`SetStartLayer` sets it)
+                dr?.board_items.via_stitches.iter().find(|v| v.id == id).map(|v| v.layer.clone()).or_else(|| dr?.board_items.via_stacks.iter().find(|v| v.id == id).map(|v| v.start_layer.clone()))
             }
             SwapType::DrillMap => dr?.board_items.drill_maps.iter().find(|m| m.id == id).map(|m| m.layer.clone()),
             // 25ec2335 `PCB_GRID_ITEM::GetLayer`: "Grids don't have layers": `UNDEFINED_LAYER`
@@ -548,6 +550,8 @@ impl SwapHost for Board<'_> {
                 } else if let Some(v) = dr.board_items.via_stitches.iter_mut().find(|v| v.id == id) {
                     v.layer = layer.to_string();
                 }
+                // A microvia stack: `PCB_GENERATOR::SetLayer` sets `m_layer` alone, not `m_startLayer`; the span, the vias and the view stay, and the file's next load
+                // gives it back its start layer (`SetProperties`' `SetStartLayer`). The studio keeps no layer apart from the start layer, so nothing changes (UI-LEFT-3 X3-1).
                 if let (Some(members), Some(rt)) = (members, self.design.routing.as_mut()) {
                     for t in rt.tracks.iter_mut().filter(|t| members.contains(&t.id)) {
                         t.layer = layer.to_string();

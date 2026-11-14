@@ -127,6 +127,13 @@ pub enum PcbItemCmd {
     /// Create Stack from Selection (`GENERATOR_TOOL::MakeViaStackFromSelection`, "Create Microvia Stack"): the selected microvias and connecting traces made the
     /// members of a new stack, refused with KiCad's message when they are not one.
     MakeViaStack { ids: Vec<String> },
+    /// The router's microvia stack drops (`ROUTER_TOOL::finishInteractive`'s `ExpandMultiHopMicrovias`, "Expand Microvia Stacks"): each multi-hop microvia the route
+    /// left at a drop's place made a stack of its preset -- see [`crate::via_stack::StackDrop`].
+    ExpandMicroviaStacks {
+        drops: Vec<crate::via_stack::StackDrop>,
+        #[serde(default)]
+        current: crate::via_stack::CurrentSizes,
+    },
     /// `PCB_CONTROL::PlaceDrillChart` ("Place Drill Chart"): KiCad 10's drill chart of the default template on `layer` (a documentation layer), built from the board, its first
     /// corner at `at`. See [`crate::drill_chart`].
     PlaceDrillChart { layer: String, at: Point },
@@ -176,6 +183,7 @@ impl PcbItemCmd {
             PcbItemCmd::SetViaStack { id, stack, .. } => vec![id.as_deref().unwrap_or(stack.start_layer.as_str())],
             PcbItemCmd::DeleteViaStack { id } => vec![id.as_str()],
             PcbItemCmd::MakeViaStack { ids } => ids.iter().map(String::as_str).collect(),
+            PcbItemCmd::ExpandMicroviaStacks { .. } => vec!["via_stack"],
             PcbItemCmd::PlaceDrillChart { layer, .. } | PcbItemCmd::PlaceDrillMap { layer } => vec![layer.as_str()],
             PcbItemCmd::SetDrillChart { id, .. } | PcbItemCmd::EditDrillChart { id, .. } | PcbItemCmd::EditDrillMap { id, .. } | PcbItemCmd::DeleteDrillMap { id } => vec![id.as_str()],
             PcbItemCmd::SetDrillProfile { .. } => vec!["drill_profile"],
@@ -240,6 +248,7 @@ impl PcbItemCmd {
             ),
             PcbItemCmd::DeleteViaStack { id } => format!("via-stack delete {id}"),
             PcbItemCmd::MakeViaStack { ids } => format!("via-stack make {}", ids.join(",")),
+            PcbItemCmd::ExpandMicroviaStacks { drops, .. } => format!("via-stack expand ({} drops)", drops.len()),
             PcbItemCmd::PlaceDrillChart { layer, at } => format!("drill-chart place --layer {layer} --at {},{}", mm(at.x), mm(at.y)),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, .. } => format!("drill-chart edit {id} --units {} --precision {precision} --totals {show_totals}", units.token()),
             PcbItemCmd::EditDrillChart { id, chart: c } => format!(
@@ -291,7 +300,7 @@ impl PcbItemCmd {
             PcbItemCmd::AddBarcode { .. } | PcbItemCmd::EditBarcode { .. } | PcbItemCmd::DeleteBarcode { .. } => "barcode",
             PcbItemCmd::AddGridItem { .. } | PcbItemCmd::EditGridItem { .. } | PcbItemCmd::DeleteGridItem { .. } => "grid-item",
             PcbItemCmd::SetViaStitch { .. } | PcbItemCmd::DeleteViaStitch { .. } => "via-stitch",
-            PcbItemCmd::SetViaStack { .. } | PcbItemCmd::DeleteViaStack { .. } | PcbItemCmd::MakeViaStack { .. } => "via-stack",
+            PcbItemCmd::SetViaStack { .. } | PcbItemCmd::DeleteViaStack { .. } | PcbItemCmd::MakeViaStack { .. } | PcbItemCmd::ExpandMicroviaStacks { .. } => "via-stack",
             PcbItemCmd::PlaceDrillChart { .. } | PcbItemCmd::SetDrillChart { .. } | PcbItemCmd::EditDrillChart { .. } => "drill-chart",
             PcbItemCmd::SetDrillProfile { .. } => "drill-profile",
             PcbItemCmd::PlaceDrillMap { .. } | PcbItemCmd::EditDrillMap { .. } | PcbItemCmd::DeleteDrillMap { .. } => "drill-map",
@@ -326,6 +335,7 @@ impl<'a> Board<'a> {
             PcbItemCmd::SetViaStack { id, stack, current, allow_drc_violations, hidden_layers } => self.set_via_stack(id.as_deref(), stack.clone(), *current, *allow_drc_violations, hidden_layers, &Default::default()),
             PcbItemCmd::DeleteViaStack { id } => self.delete_via_stack(id),
             PcbItemCmd::MakeViaStack { ids } => self.make_via_stack(ids),
+            PcbItemCmd::ExpandMicroviaStacks { drops, current } => self.expand_microvia_stacks(drops, *current),
             PcbItemCmd::PlaceDrillChart { layer, at } => self.place_drill_chart(layer, *at),
             PcbItemCmd::SetDrillChart { id, units, precision, show_totals, filter } => self.set_drill_chart(id, *units, *precision, *show_totals, *filter),
             PcbItemCmd::EditDrillChart { id, chart } => self.edit_drill_chart(id, chart),

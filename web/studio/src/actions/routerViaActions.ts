@@ -26,6 +26,14 @@ import { openSweepDialog } from "./pcbSweepDialogs";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
 import type { SweepCtx } from "./pcbSweepKit";
+import { copperOf, newViaStack, placementPreset, viaStackTargetLayer, withPreset } from "../kicad-port/viaStack";
+import { getViaStackTool } from "../state/viaStackTool";
+import { startViaStackPlacement } from "./viaStackActions";
+import { layerDisplayName } from "../kicad-port/boardLayers";
+import { currentViaSize } from "../kicad-port/routerVia";
+import { finishInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
+import { chosenTrackWidthOf } from "../kicad-port/routerSizes";
+import { withTrackSnapping } from "../kicad-port/routerSettings";
 
 /** The studio's via size choice (kicad-port/routerVia.ts `ViaChoice`): every via command of the router sizes its via from it (R6-R1). */
 export function viaChoiceOf(state: SweepCtx["state"]): ViaChoice {
@@ -194,6 +202,65 @@ export function registerRouterViaActions(m: Map<string, () => void>, ctx: SweepC
     m.set("pcbnew.Control.layerToggle", startWithVia);
     m.set("pcbnew.InteractiveRouter.PlaceVia", startWithVia);
   }
+
+  // ------------------------------------------------------------------------------ Place Microvia Stack at Track End
+  // KiCad 25ec2335 `ROUTER_TOOL::onViaStackCommand` (`ACT_PlaceViaStack`, Ctrl+Shift+V, AS_CONTEXT; UI-LEFT-3 X3-1): the toolbar's preset, from the layer being routed
+  // to the preset's other end (`ViaStackTargetLayer`). A stacked preset arms a microvia over the whole span, and the route's commit makes it a stack of the preset
+  // (`m_pendingStackedExpansions`, `ExpandMultiHopMicrovias`: the server's `commit_route`); a staggered one ends the route at its head and hands over to Place
+  // Microvia Stack with the first hop there, which goes back to routing from the last via on the end layer.
+  m.set(
+    "pcbnew.InteractiveRouter.PlaceViaStack",
+    pcbOnly(() => {
+      if (!board || draw?.kind !== "route") return;
+      const bar = (message: string, kind: "error" | "info") => dispatch({ type: "SHOW_PCB_INFOBAR", message, kind, ms: 3000, close: true });
+      const presets = board.drawings?.via_stack_presets ?? [];
+      const preset = placementPreset(presets, getViaStackTool().index);
+      if (!preset) return bar("No microvia stack presets defined. Add one in Board Setup, Microvia Stacks.", "info");
+      const copper = copperOf(board);
+      if (!copper.includes(preset.start_layer) || !copper.includes(preset.end_layer)) return bar("The microvia stack preset layers are not present on this board.", "error");
+      const current = draw.layer;
+      const target = viaStackTargetLayer(preset.start_layer, preset.end_layer, current);
+      const name = (l: string) => layerDisplayName(board.board_rules?.layer_setup, l);
+      if (!target) return bar(`The microvia stack runs between ${name(preset.start_layer)} and ${name(preset.end_layer)}. Route on one of those layers to place it.`, "error");
+      const via = currentViaSize(board, state.currentViaIndex, state.pcbx.useCustomTrackVia, state.pcbx.customTrackVia);
+      const last = draw.pts[draw.pts.length - 1];
+      if (preset.staggered) {
+        // "The router cannot route through a staggered stack": the track fixed at the head, the stack built after routing tears down
+        if (!last) return;
+        const head: [number, number] = [last[0], last[1]];
+        void (async () => {
+          if (draw.placingVia) await routeToggleVia(false);
+          await finishInteractiveRoute(head[0], head[1], dispatch, ctx.api);
+          const settings = { ...withPreset(newViaStack({ x: head[0], y: head[1] }), preset), start_layer: current, end_layer: target, style: "staggered" as const };
+          startViaStackPlacement(settings, ctx.api.getState().board ?? board, via.diameter, dispatch, {
+            head,
+            // `resumeRouting`: the end layer active, the route started at the last via (`PrimeTool( resumePos )`)
+            resume: (at, layer) => {
+              const st = ctx.api.getState();
+              const b = st.board ?? board;
+              dispatch({ type: "SET_ACTIVE_LAYER", layer });
+              dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
+              const width = chosenTrackWidthOf(b.routing?.track_width_presets ?? [], st.currentTrackWidthIndex, st.pcbx.useCustomTrackVia, st.pcbx.customTrackVia.trackNm);
+              void startInteractiveRoute(at[0], at[1], layer, width, withTrackSnapping(st.routerSettings, st.prefs.magneticTracks), dispatch, undefined, st.bcx.autoTrackWidth, undefined, undefined, layerPairsOf(b, st.pcbx.layerPairs).current);
+            },
+          });
+        })();
+        return;
+      }
+      // the preset's size, else the current via's; "Use netclass values": none sent, the server's class microvia size for the route's net
+      const size = preset.use_netclass ? undefined : { diameter: preset.via_size_nm > 0 ? preset.via_size_nm : via.diameter, drill: preset.via_drill_nm > 0 ? preset.via_drill_nm : via.drill };
+      void routeToggleVia(true, size?.diameter, size?.drill, target, { viaType: "micro", span: [current, target], stack: { start: current, end: target, preset } }).then((reply) => {
+        if (!reply.ok) {
+          if (reply.message) toast(reply.message, "error");
+          return;
+        }
+        const next = { ...draw, placingVia: true, pendingViaLayer: target };
+        dispatch({ type: "SET_DRAW_STATE", draw: next });
+        const cursor = state.cursorNm;
+        if (cursor) void routeMove(cursor.x, cursor.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(next, preview) }));
+      });
+    })
+  );
 
   // ------------------------------------------------------------------------------ Switch Track Posture
   // performRouting: `else if( evt->IsAction( &ACT_SwitchPosture ) ) { m_router->FlipPosture(); updateEndItem( *evt ); m_router->Move( m_endSnapPoint, m_endItem ); }`

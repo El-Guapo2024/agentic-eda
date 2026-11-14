@@ -865,6 +865,7 @@ const R = {
   placeVia: "pcbnew.InteractiveRouter.PlaceVia",
   placeBlindVia: "pcbnew.InteractiveRouter.PlaceBlindVia",
   placeMicroVia: "pcbnew.InteractiveRouter.PlaceMicroVia",
+  placeViaStack: "pcbnew.InteractiveRouter.PlaceViaStack",
   selLayerVia: "pcbnew.InteractiveRouter.SelLayerAndPlaceVia",
   selLayerBlindVia: "pcbnew.InteractiveRouter.SelLayerAndPlaceBlindVia",
   selLayerMicroVia: "pcbnew.InteractiveRouter.SelLayerAndPlaceMicroVia",
@@ -889,6 +890,7 @@ export const ROUTER_ACTION_LABELS: Readonly<Record<string, string>> = {
   [R.placeVia]: "Place Through Via",
   [R.placeBlindVia]: "Place Blind/Buried Via",
   [R.placeMicroVia]: "Place Microvia",
+  [R.placeViaStack]: "Place Microvia Stack at Track End",
   [R.selLayerVia]: "Select Layer and Place Through Via...",
   [R.selLayerBlindVia]: "Select Layer and Place Blind/Buried Via...",
   [R.selLayerMicroVia]: "Select Layer and Place Micro Via...",
@@ -925,7 +927,7 @@ export function routerMenu(r: RouterMenuContext): MenuNode[] {
   menu.addItem(A.breakTrack, notRouting);
   menu.addItem(A.drag45, notRouting);
   menu.addItem(A.dragFree, notRouting);
-  for (const via of [R.placeVia, R.placeBlindVia, R.placeMicroVia, R.selLayerVia, R.selLayerBlindVia, R.selLayerMicroVia, R.switchPosture]) menu.addItem(via, always, ANY_ORDER, withLabel(via));
+  for (const via of [R.placeVia, R.placeBlindVia, R.placeMicroVia, R.placeViaStack, R.selLayerVia, R.selLayerBlindVia, R.selLayerMicroVia, R.switchPosture]) menu.addItem(via, always, ANY_ORDER, withLabel(via));
   // "Track Corner Mode": Switch, a line, then one check item per mode.
   const corner = new ConditionalMenu();
   corner.addItem(R.cornerNext, always, ANY_ORDER, withLabel(R.cornerNext));
