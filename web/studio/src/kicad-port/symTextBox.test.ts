@@ -118,3 +118,16 @@ test("the tool starts a box the way the last one was, with the corners the click
   const second = newTextBox([0, 0], [1_270_000, -1_270_000], 2, 2, lastOf(edited));
   assert.deepEqual([second.unit, second.body_style, second.bold, second.italic, second.angle_deg, second.h_align, second.v_align, second.fill, second.stroke_mm], [2, 2, true, true, 90, "right", "top", "background", 0.5]);
 });
+
+test("the tool's last stroke is one for text boxes and shapes: a text box's line style, width, colours and fill start the next text box and the next shape (UI-LEFT-3 Y3-4)", async () => {
+  const { lastOf, lastShapeStyle, newTextBox, INITIAL_LAST_TEXT_BOX } = await import("./symTextBox");
+  assert.deepEqual(lastShapeStyle(INITIAL_LAST_TEXT_BOX), { strokeMm: 0, fill: "none", looks: {}, lineStyle: null }, "`m_lastStroke( 0, LINE_STYLE::DEFAULT, COLOR4D::UNSPECIFIED )`, `NO_FILL`");
+  const red = { r: 200, g: 0, b: 0, a: 255 };
+  const box = { ...newTextBox([0, 0], [1_270_000, -1_270_000], 1, 1, INITIAL_LAST_TEXT_BOX), stroke_mm: 0.3, stroke_color: red, fill: "color" as const, fill_color: red };
+  const last = lastOf(box, "dash");
+  assert.equal(last.lineStyle, "dash");
+  assert.deepEqual(lastShapeStyle(last), { strokeMm: 0.3, fill: "color", looks: { stroke_color: red, fill_color: red }, lineStyle: "dash" });
+  const next = newTextBox([0, 0], [2_540_000, -2_540_000], 1, 1, last);
+  assert.equal(next.stroke_mm, 0.3);
+  assert.equal(lastOf(next).lineStyle, undefined, "no style given, none kept");
+});

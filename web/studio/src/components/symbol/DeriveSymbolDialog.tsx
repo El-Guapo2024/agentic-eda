@@ -85,6 +85,8 @@ export function DeriveSymbolDialog() {
       notifyLibraryChanged();
       if (!done) return; // the verb's refusal is the editor's toast
       close();
+      // Bulk Edit's Create Derived Symbol (`CreateDerivedSymbolImmediate`): the new symbol is a row of the table, not loaded
+      if (request.fromTable) return void dispatch({ type: "SET_FIELDS_TABLE_DERIVED", libId });
       await api.openSymbol(libId);
       dispatch({ type: "SET_TREE_SELECTION", names: [libId] });
       notifyLibraryChanged();

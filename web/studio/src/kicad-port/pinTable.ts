@@ -118,16 +118,81 @@ export function pinTableCommands(libId: string, before: readonly LibrarySymbolPi
   return cmds;
 }
 
+/** A rectangle of the screen (px, the canvas's own corner at 0, 0): a dialog over the canvas. */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /**
- * `EDA_DRAW_FRAME::FocusOnLocation( aPos, aAllowScroll = true )` (common/eda_draw_frame.cpp at KiCad 25ec2335): the view centred on `atNm` when it is off the
- * view or within 10% of its edge (`r.Inflate( -r.GetWidth() / 10.0 )`), else left as it is (`null`). `view` maps world nm to screen px (`screen = world * scale
- * + (x, y)`); the canvas is `widthPx` by `heightPx`. KiCad also centres it when a dialog covers the point; the browser's dialogs float over the page, so not here.
+ * `EDA_DRAW_FRAME::FocusOnLocation( aPos, aAllowScroll = true )` (common/eda_draw_frame.cpp at KiCad 8303b2ad): the view moved to `atNm` when it is off the view or within 10% of
+ * its edge (`r.Inflate( -r.GetWidth() / 10.0 )`), or behind a dialog over the canvas or within a tenth of the dialog's width of it (`rect.Inflate( rect.GetWidth() / 10 )` of
+ * each of `findDialogs()`; UI-LEFT-3 Y3-5) -- else left as it is (`null`). Moved, the point goes to the middle of the largest part of the canvas the dialogs leave free
+ * (`VIEW::SetCenter( aPos, dialogScreenRects )`). `view` maps world nm to screen px (`screen = world * scale + (x, y)`); the canvas is `widthPx` by `heightPx`; `dialogs` are
+ * the dialogs' rectangles on the canvas.
  */
-export function focusOnLocation(view: { scale: number; x: number; y: number }, atNm: readonly [number, number], widthPx: number, heightPx: number): { scale: number; x: number; y: number } | null {
+export function focusOnLocation(view: { scale: number; x: number; y: number }, atNm: readonly [number, number], widthPx: number, heightPx: number, dialogs: readonly ScreenRect[] = []): { scale: number; x: number; y: number } | null {
   const sx = atNm[0] * view.scale + view.x;
   const sy = atNm[1] * view.scale + view.y;
   // the viewport less a tenth of its width on every side (BOX2D::Inflate by the same amount in x and y)
   const m = widthPx / 10;
-  if (sx >= m && sx <= widthPx - m && sy >= m && sy <= heightPx - m) return null;
-  return { scale: view.scale, x: widthPx / 2 - atNm[0] * view.scale, y: heightPx / 2 - atNm[1] * view.scale };
+  let centre = !(sx >= m && sx <= widthPx - m && sy >= m && sy <= heightPx - m);
+  for (const d of dialogs) {
+    const g = d.w / 10;
+    if (sx >= d.x - g && sx <= d.x + d.w + g && sy >= d.y - g && sy <= d.y + d.h + g) centre = true;
+  }
+  if (!centre) return null;
+  const [cx, cy] = unobscuredCentre(widthPx, heightPx, dialogs);
+  return { scale: view.scale, x: cx - atNm[0] * view.scale, y: cy - atNm[1] * view.scale };
+}
+
+/**
+ * `VIEW::SetCenter( aCenter, obscuringScreenRects )` (common/view/view.cpp): the screen less the dialogs, deflated step by step (`step` a tenth of the free area's box's smaller side,
+ * 20 px at least) until nothing is left; the centre of the free area's box before the last step is where the point goes -- the middle of the screen when nothing covers it. The
+ * polygon of KiCad is sampled here on a grid of a quarter step, and a deflate with sharp corners (`ALLOW_ACUTE_CORNERS`) of these rectilinear areas is a square's erosion.
+ */
+export function unobscuredCentre(widthPx: number, heightPx: number, rects: readonly ScreenRect[]): [number, number] {
+  if (rects.length === 0 || widthPx <= 0 || heightPx <= 0) return [widthPx / 2, heightPx / 2];
+  const covered = (x: number, y: number) => rects.some((r) => x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h);
+  // the free area's box, for the step
+  const coarse = Math.max(1, Math.min(widthPx, heightPx) / 200);
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (let y = coarse / 2; y < heightPx; y += coarse) {
+    for (let x = coarse / 2; x < widthPx; x += coarse) {
+      if (covered(x, y)) continue;
+      bx0 = Math.min(bx0, x - coarse / 2);
+      by0 = Math.min(by0, y - coarse / 2);
+      bx1 = Math.max(bx1, x + coarse / 2);
+      by1 = Math.max(by1, y + coarse / 2);
+    }
+  }
+  if (bx0 > bx1) return [widthPx / 2, heightPx / 2];
+  const step = Math.max(20, Math.min(bx1 - bx0, by1 - by0) / 10);
+  const cell = Math.max(1, step / 4);
+  const nx = Math.ceil(widthPx / cell);
+  const ny = Math.ceil(heightPx / cell);
+  // Chebyshev distance (in cells) of each free cell to the nearest covered cell or the screen's edge
+  const d = new Float64Array(nx * ny);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) d[j * nx + i] = covered((i + 0.5) * cell, (j + 0.5) * cell) ? 0 : Infinity;
+  const at = (i: number, j: number) => (i < 0 || j < 0 || i >= nx || j >= ny ? 0 : d[j * nx + i]!);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (d[j * nx + i]! > 0) d[j * nx + i] = Math.min(d[j * nx + i]!, at(i - 1, j) + 1, at(i, j - 1) + 1, at(i - 1, j - 1) + 1, at(i + 1, j - 1) + 1);
+  for (let j = ny - 1; j >= 0; j--) for (let i = nx - 1; i >= 0; i--) if (d[j * nx + i]! > 0) d[j * nx + i] = Math.min(d[j * nx + i]!, at(i + 1, j) + 1, at(i, j + 1) + 1, at(i + 1, j + 1) + 1, at(i - 1, j + 1) + 1);
+  let centre: [number, number] = [widthPx / 2, heightPx / 2];
+  for (let k = 0; ; k++) {
+    // the area deflated k steps: the cells farther than k steps from what bounds it
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        if ((d[j * nx + i]! - 0.5) * cell <= k * step) continue;
+        x0 = Math.min(x0, i * cell);
+        y0 = Math.min(y0, j * cell);
+        x1 = Math.max(x1, Math.min(widthPx, (i + 1) * cell));
+        y1 = Math.max(y1, Math.min(heightPx, (j + 1) * cell));
+      }
+    }
+    if (x0 > x1) return centre;
+    centre = [(x0 + x1) / 2, (y0 + y1) / 2];
+  }
 }

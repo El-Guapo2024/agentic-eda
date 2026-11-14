@@ -91,7 +91,8 @@ export function SymbolTextBoxDialog() {
       setForm(null);
       return;
     }
-    setForm(formOf(req.box, symbol, req.id ? graphicStateOf(symbol, req.id).lineStyle : null));
+    // a new box starts with the tool's last line style (`item->SetStroke( m_lastStroke )`, UI-LEFT-3 Y3-4)
+    setForm(formOf(req.box, symbol, req.id ? graphicStateOf(symbol, req.id).lineStyle : (state.lastTextBox.lineStyle ?? null)));
     setError(null);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,7 +137,7 @@ export function SymbolTextBoxDialog() {
     const before = req.id ? graphicStateOf(symbol, req.id) : { looks: {}, lineStyle: null, thicknessMm: null };
     const looks = graphicLooksCmd(state.libId!, req.id ?? "", { looks: { ...before.looks, hatch: null }, lineStyle: form.style, thicknessMm: before.thicknessMm }, req.id ? before : undefined);
     const cmds: Cmd[] = req.id ? [{ op: "replace_symbol_graphic", lib_id: state.libId!, id: req.id, graphic: box }, ...looks] : [{ op: "add_symbol_graphic", lib_id: state.libId!, graphic: box }, ...looks];
-    if (!req.id) dispatch({ type: "SET_LAST_TEXT_BOX", last: lastOf(box) });
+    if (!req.id) dispatch({ type: "SET_LAST_TEXT_BOX", last: lastOf(box, form.style) });
     if (!(await api.runCmds(cmds)) && req.id) return;
     close();
   };

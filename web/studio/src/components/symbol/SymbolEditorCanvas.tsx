@@ -52,8 +52,12 @@ import { pinShown } from "../../kicad-port/symPinText";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { stackedPinMenuState } from "../../kicad-port/stackedPins";
-import { newTextBox } from "../../kicad-port/symTextBox";
-import { fieldLooksOf, graphicStateOf } from "../../kicad-port/symLooks";
+import { lastShapeStyle, newTextBox } from "../../kicad-port/symTextBox";
+import { arcSessionClick, arcSessionFinish } from "../../kicad-port/arcDrawSession";
+import { arcMotion, type ThreePointArc } from "../../kicad-port/arcGeom";
+import { symTangentSeedAt } from "../../kicad-port/symArcDraw";
+import { fetchSymbolForEditor } from "../../api/client";
+import { fieldLooksOf, graphicLooksCmd, graphicStateOf } from "../../kicad-port/symLooks";
 import { useSymFind } from "../../actions/symFindOps";
 import { carriedItems } from "../../kicad-port/symCarry";
 import { bezierFromClicks, bezierGraphic } from "../../kicad-port/symBezier";
@@ -113,9 +117,10 @@ type DragState =
   /** The point editor's drag of one handle (`SCH_POINT_EDITOR::Main`): which shape and which point or side. */
   | { kind: "point"; id: string; handle: EeHandle };
 
-function symbolGraphicFromDraw(kind: SymShapeKind, ptsNm: [number, number][], unit: number, bodyStyle: number, cursorNm: readonly [number, number] | null = null): LibrarySymbolGraphic | null {
+function symbolGraphicFromDraw(kind: SymShapeKind, ptsNm: [number, number][], unit: number, bodyStyle: number, cursorNm: readonly [number, number] | null, style: { strokeMm: number; fill: LibraryFill }): LibrarySymbolGraphic | null {
   const p = (i: number) => nmPointToMm(ptsNm[i]![0], ptsNm[i]![1]);
-  const base = { unit, body_style: bodyStyle, stroke_mm: 0.254, fill: "none" as LibraryFill };
+  // `doDrawShape`: `new SCH_SHAPE( shapeType, LAYER_DEVICE, lineWidth, m_lastFillStyle )`, `item->SetStroke( m_lastStroke )` -- the tool's last width and fill (UI-LEFT-3 Y3-4)
+  const base = { unit, body_style: bodyStyle, stroke_mm: style.strokeMm, fill: style.fill };
   switch (kind) {
     case "segment":
       return ptsNm.length >= 2 ? { kind: "polyline", ...base, pts: [p(0), p(1)] } : null;
@@ -127,14 +132,14 @@ function symbolGraphicFromDraw(kind: SymShapeKind, ptsNm: [number, number][], un
       return ptsNm.length >= 3 ? { kind: "arc", ...base, start: p(0), mid: p(1), end: p(2) } : null;
     case "lines":
     case "polygon": {
-      // `doDrawShape`: both tools build a `SHAPE_T::POLY` with `m_lastFillStyle`, which is `NO_FILL` -- an unfilled polyline, closed only by ending on its start.
+      // `doDrawShape`: both tools build a `SHAPE_T::POLY` with `m_lastFillStyle` -- a polyline, closed only by ending on its start.
       const done = polyFinish(ptsNm);
       return done ? { kind: "polyline", ...base, pts: done.pts.map(([x, y]) => nmPointToMm(x, y)) } : null;
     }
     case "bezier": {
       // `EndEdit` of the bezier's edit state: the four clicks, or fewer and the cursor (a double click or Enter, kicad-port/symBezier.ts)
       const b = bezierFromClicks(ptsNm, cursorNm ? [cursorNm[0], cursorNm[1]] : null);
-      return b ? bezierGraphic(b, unit, bodyStyle, base.stroke_mm) : null;
+      return b ? { ...bezierGraphic(b, unit, bodyStyle, base.stroke_mm), fill: base.fill } : null;
     }
     case "textbox":
       return null; // a text box is made by its own dialog (`newTextBox`), after the second click
@@ -188,7 +193,8 @@ export function SymbolEditorCanvas() {
   const wheelPrefs = useWheelPrefs();
   const userMovedRef = useRef(false);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
-  const studioPrefs = useStudioState().prefs;
+  const studioState = useStudioState();
+  const studioPrefs = studioState.prefs;
   // The middle and right drags, the pan on movement with a key and the auto-pan (`WX_VIEW_CONTROLS`), as the board and the schematic have them.
   const viewCtl = useLibraryViewControls({
     containerRef,
@@ -309,7 +315,12 @@ export function SymbolEditorCanvas() {
   // `FocusOnItem`'s `FocusOnLocation`: the Pin Table's cross-probed pin brought into view when it is off it or near its edge
   useEffect(() => {
     if (!state.brightened || containerSize.width < 50) return;
-    const next = focusOnLocation(state.view, state.brightened.atNm, containerSize.width, containerSize.height);
+    // `findDialogs()`: the dialogs over the canvas (the Pin Table among them), on the canvas's own corner (UI-LEFT-3 Y3-5)
+    const box = containerRef.current?.getBoundingClientRect();
+    const dialogs = box
+      ? [...document.querySelectorAll<HTMLElement>(".dialog")].map((d) => d.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0).map((r) => ({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height }))
+      : [];
+    const next = focusOnLocation(state.view, state.brightened.atNm, containerSize.width, containerSize.height, dialogs);
     if (next) dispatch({ type: "SET_VIEW", view: next });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.brightened]);
@@ -333,7 +344,8 @@ export function SymbolEditorCanvas() {
     if (!ctx) return;
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#1a1a1a";
+    // the editor's theme's background (`SCH_BASE_FRAME::GetDrawBgColor`: `LAYER_SCHEMATIC_BACKGROUND` of `SYMBOL_EDIT_FRAME::GetColorSettings`; UI-LEFT-3 Y3-1)
+    ctx.fillStyle = layerColor("LAYER_SCHEMATIC_BACKGROUND");
     ctx.fillRect(0, 0, width, height);
     ctx.save();
     ctx.translate(state.view.x, state.view.y);
@@ -349,6 +361,7 @@ export function SymbolEditorCanvas() {
       activeUnit: state.activeUnit,
       activeBodyStyle: state.activeBodyStyle,
       drawState: state.drawState,
+      units: studioState.units,
       // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
       cursorNm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorNm,
       movePreview: state.movePreview,
@@ -364,11 +377,12 @@ export function SymbolEditorCanvas() {
       // a derived symbol's field looks are its own entry's
       fieldLooksOf: (name) => fieldLooksOf(state.derivedOwn ?? sym!, name),
     });
-    // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
+    // What the grid helper shows: the snap marker, the snap lines, the construction geometry -- `EE_GRID_HELPER`'s (`m_viewSnapPoint.SetColor( COLOR4D( 0.0, 0.1, 0.4, 1.0 ) )`,
+    // `GRID_HELPER( aToolMgr, LAYER_SCHEMATIC_ANCHOR )`), as the schematic's.
     const snapOverlay = snap.overlay();
     if (snapOverlay) {
       const k = state.view.scale || 1;
-      paintSnapOverlay(ctx, k, [-state.view.x / k, -state.view.y / k, (width - state.view.x) / k, (height - state.view.y) / k], snapOverlay, { marker: "#4aa3ff", construction: layerColor("anchor"), guideActive: layerColor("anchor"), guides: false });
+      paintSnapOverlay(ctx, k, [-state.view.x / k, -state.view.y / k, (width - state.view.x) / k, (height - state.view.y) / k], snapOverlay, { marker: "#001966", construction: layerColor("LAYER_SCHEMATIC_ANCHOR"), guideActive: layerColor("LAYER_SCHEMATIC_ANCHOR"), guides: false });
     }
     ctx.restore();
     ctx.restore();
@@ -405,14 +419,45 @@ export function SymbolEditorCanvas() {
     [sym, shownFields, state.view.scale, state.activeUnit, state.activeBodyStyle, state.showHiddenPins]
   );
 
+  /**
+   * A shape the tool made, with the colours and line style of the tool's last stroke and fill kept beside it (`item->SetStroke( m_lastStroke )`, `SetFillColor( m_lastFillColor )`),
+   * one undo step; it is left selected, as the tool's `AddItemToSel( item )` leaves it for the point editor (`ACTIONS::activatePointEditor`).
+   */
+  const addDrawn = async (graphic: LibrarySymbolGraphic) => {
+    const libId = state.libId;
+    if (!libId) return;
+    const before = new Set((sym?.graphics ?? []).map((g) => g.id));
+    const style = lastShapeStyle(state.lastTextBox);
+    const looks = Object.keys(style.looks).length > 0 || style.lineStyle ? graphicLooksCmd(libId, "", { looks: style.looks, lineStyle: style.lineStyle, thicknessMm: null }) : [];
+    if (!(await api.runCmds([{ op: "add_symbol_graphic", lib_id: libId, graphic }, ...looks]))) return;
+    try {
+      const added = (await fetchSymbolForEditor(libId)).symbol.graphics.find((g) => g.id && !before.has(g.id));
+      if (added?.id) dispatch({ type: "SET_SELECTION", refs: [added.id] });
+    } catch {
+      // the shape is in; the selection stays as it was
+    }
+  };
+  /** An arc of the session as the symbol keeps it (mm, +y up), with the tool's last stroke and fill. */
+  const arcGraphic = (a: ThreePointArc): LibrarySymbolGraphic => {
+    const target = drawTarget(state);
+    const style = lastShapeStyle(state.lastTextBox);
+    return { kind: "arc", unit: target.unit, body_style: target.bodyStyle, start: nmPointToMm(a.start[0], a.start[1]), mid: nmPointToMm(a.mid[0], a.mid[1]), end: nmPointToMm(a.end[0], a.end[1]), stroke_mm: style.strokeMm, fill: style.fill };
+  };
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
+    if (draw?.arc) {
+      // `finishInteractive` / a double click: the arc as it stands, or nothing (kicad-port/arcDrawSession.ts)
+      const a = arcSessionFinish(draw.arc);
+      dispatch({ type: "SET_DRAW_STATE", draw: null });
+      if (a) void addDrawn(arcGraphic(a));
+      return;
+    }
     if (!draw) return;
     const target = drawTarget(state);
-    const graphic = symbolGraphicFromDraw(draw.shapeKind, draw.pts, target.unit, target.bodyStyle, snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null));
-    if (graphic) void api.addGraphic(graphic);
+    const graphic = symbolGraphicFromDraw(draw.shapeKind, draw.pts, target.unit, target.bodyStyle, snap.lastPoint() ?? (state.cursorNm ? [state.cursorNm.x, state.cursorNm.y] : null), lastShapeStyle(state.lastTextBox));
+    if (graphic) void addDrawn(graphic);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
-  }, [state.drawState, state.activeUnit, state.activeBodyStyle, state.cursorNm, api, dispatch]);
+  }, [state.drawState, state.activeUnit, state.activeBodyStyle, state.cursorNm, state.lastTextBox, api, dispatch]);
 
   /**
    * `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor`: the click point becomes the symbol's origin (`symbol->Move( -cursorPos )`) and the view is
@@ -470,6 +515,16 @@ export function SymbolEditorCanvas() {
     }
 
     const shapeKind = SHAPE_TOOL_KIND[state.activeTool];
+    if (shapeKind === "arc" && sym) {
+      // KiCad 25ec2335's Draw Arc (`EE_GRAPHIC_TOOL::DrawArc`, UI-LEFT-3 Y3-8): the schematic's session in the Symbol Editor's own mode; a TANGENT arc's first click on a
+      // graphic of the unit being edited starts from it (`findTangentSeed`: the snapped point, then the pointer)
+      const seedAt = (p: readonly [number, number]) => symTangentSeedAt(sym, p, state.view.scale, state.activeUnit, state.activeBodyStyle) ?? symTangentSeedAt(sym, [wx, wy], state.view.scale, state.activeUnit, state.activeBodyStyle);
+      const step = arcSessionClick(state.drawState?.arc ?? null, [sx, sy], state.arcDrawMode, seedAt);
+      if (step.started) dispatch({ type: "SET_SELECTION", refs: [] });
+      if (step.arc) void addDrawn(arcGraphic(step.arc));
+      dispatch({ type: "SET_DRAW_STATE", draw: step.geom ? { kind: "shape", shapeKind: "arc", pts: [], arc: step.geom } : null });
+      return;
+    }
     if (shapeKind) {
       const same = state.drawState?.shapeKind === shapeKind;
       if (isPolyKind(shapeKind)) {
@@ -488,8 +543,8 @@ export function SymbolEditorCanvas() {
           return;
         }
         const target = drawTarget(state);
-        const graphic = symbolGraphicFromDraw(shapeKind, pts, target.unit, target.bodyStyle);
-        if (graphic) void api.addGraphic(graphic);
+        const graphic = symbolGraphicFromDraw(shapeKind, pts, target.unit, target.bodyStyle, null, lastShapeStyle(state.lastTextBox));
+        if (graphic) void addDrawn(graphic);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       } else {
         dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind, pts } });
@@ -551,6 +606,10 @@ export function SymbolEditorCanvas() {
     if (state.carry) {
       const [cx, cy] = carryPoint(e, wx, wy);
       dispatch({ type: "SET_CARRY_DELTA", deltaNm: [cx - state.carry.originNm[0], cy - state.carry.originNm[1]] });
+    } else if (state.drawState?.arc) {
+      // `aBehavior.SetCursorPosition( cursorPos )`: the construction follows the snapped cursor
+      const [cx, cy] = toolPoint(e, wx, wy);
+      dispatch({ type: "SET_DRAW_STATE", draw: { ...state.drawState, arc: arcMotion(state.drawState.arc, [cx, cy], false) } });
     } else if (placing) toolPoint(e, wx, wy);
     const drag = dragRef.current;
     if (!drag) return;

@@ -65,3 +65,31 @@ export function bitmapSize(box: Box, scalePxPerNm: number): { width: number; hei
   return { width, height, scale };
 }
 
+
+/**
+ * `plotSymbolToSvg`'s page (UI-LEFT-3 Y3-6): `pageInfo.SetWidthMils( IUToMils( aBBox.GetWidth() ) )`, the same for the height, and `SetViewport( aBBox.GetOrigin(), .. )` -- the SVG
+ * of the copied items cropped to the selection's box (internal nm, +y down, as `clipboardBox` gives it). The plot is kicad-cli's (`sym export svg`, whose page is its own plot
+ * box of the symbol, 1.2 times as big): its root is given the box's size in mm and a `viewBox` of the box. kicad-cli 10.99's SVG plotter writes the symbol's own mm, +y
+ * down, as the user units (the `viewBox`'s width over the page's mm scales them if another did not); null when the text has no root `<svg ..>` with a size and a `viewBox`.
+ */
+export function svgCroppedTo(svg: string, box: ClipBox): string | null {
+  const open = /<svg\b[^>]*>/.exec(svg);
+  if (!open) return null;
+  const tag = open[0];
+  const width = /\swidth="([\d.eE+-]+)mm"/.exec(tag);
+  const viewBox = /\sviewBox="([^"]+)"/.exec(tag);
+  if (!width || !viewBox) return null;
+  const vb = viewBox[1]!.trim().split(/[\s,]+/).map(Number);
+  const widthMm = Number(width[1]);
+  if (vb.length !== 4 || vb.some((v) => !Number.isFinite(v)) || !(widthMm > 0)) return null;
+  const k = vb[2]! / widthMm;
+  const f = (v: number) => v.toFixed(4);
+  const [x0, y0, x1, y1] = box.map((v) => v / 1e6) as [number, number, number, number];
+  const wMm = x1 - x0;
+  const hMm = y1 - y0;
+  const cropped = tag
+    .replace(/\swidth="[^"]*"/, ` width="${f(wMm)}mm"`)
+    .replace(/\sheight="[^"]*"/, ` height="${f(hMm)}mm"`)
+    .replace(/\sviewBox="[^"]*"/, ` viewBox="${f(x0 * k)} ${f(y0 * k)} ${f(wMm * k)} ${f(hMm * k)}"`);
+  return svg.slice(0, open.index) + cropped + svg.slice(open.index + tag.length);
+}

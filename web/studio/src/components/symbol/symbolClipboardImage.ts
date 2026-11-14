@@ -2,12 +2,12 @@
 // (`plotSymbolToSvg`) and a PNG (`renderSymbolToImageWithAlpha`) of the selected items -- the symbol with the others deleted, plotted over the selection's box, merged from each
 // item's `GetBoundingBox()` and grown by 2% of its size on each side (`clipboardBboxInflation`). The PNG is drawn at the view's scale, at most 4096 pixels a side
 // (`clipboardMaxBitmapSize`), on a transparent background (KiCad renders on white and on black and works out the alpha); the SVG is kicad-cli's plot of that symbol
-// (`POST /api/sym/svg` with the copied text: KiCad's own SVG plotter, `SCH_PLOTTER`'s, the page being the symbol's plot box rather than the selection's).
+// (`POST /api/sym/svg` with the copied text: KiCad's own SVG plotter, `SCH_PLOTTER`'s), cropped to the selection's box as `plotSymbolToSvg`'s page is (UI-LEFT-3 Y3-6).
 import type { LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import type { SymPaintOptions } from "./symbolPainter";
 import { paintSymbol } from "./symbolPainter";
 import { postSymbolSvg } from "../../api/schControlClient";
-import { bitmapSize, type ClipBox as Box } from "../../kicad-port/symClipboard";
+import { bitmapSize, svgCroppedTo, type ClipBox as Box } from "../../kicad-port/symClipboard";
 export { clipboardBox } from "../../kicad-port/symClipboard";
 
 /** The PNG of the symbol `sym` (its selected items only) over `box`, or null when there is nothing to draw or no canvas. */
@@ -28,11 +28,18 @@ export async function selectionPng(sym: LibrarySymbol, box: Box, scalePxPerNm: n
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
 }
 
-/** The SVG of the copied symbol's text, plotted by kicad-cli in the unit and body style being edited, or null when it could not be. */
-export async function selectionSvg(libId: string, text: string, unit: number, bodyStyle: number): Promise<Blob | null> {
+/**
+ * The SVG of the copied symbol's text, plotted by kicad-cli in the unit and body style being edited and in the editor's theme (`renderSettings.LoadColors(
+ * aFrame->GetColorSettings() )`: the theme Export Symbol as SVG sends), on a page of the selection's box (`svgCroppedTo`, UI-LEFT-3 Y3-6); null when it could not be.
+ * The text it puts on the clipboard is kept as `window.__edaSymClipboardSvg` (a headless browser's clipboard holds no image).
+ */
+export async function selectionSvg(libId: string, text: string, unit: number, bodyStyle: number, box: Box): Promise<Blob | null> {
   try {
+    // Export Symbol as SVG's theme (actions/schControlExports.ts `SYMBOL_EDITOR_THEME`)
     const r = await postSymbolSvg({ lib_id: libId, text, unit, body_style: bodyStyle, theme: "_builtin_default" });
-    return r.ok && r.svg ? new Blob([r.svg.text], { type: "image/svg+xml" }) : null;
+    const svg = r.ok && r.svg ? svgCroppedTo(r.svg.text, box) : null;
+    (globalThis as { __edaSymClipboardSvg?: string | null }).__edaSymClipboardSvg = svg;
+    return svg ? new Blob([svg], { type: "image/svg+xml" }) : null;
   } catch {
     return null;
   }

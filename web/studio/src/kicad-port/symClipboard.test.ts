@@ -44,3 +44,12 @@ test("UI-LEFT-2 YY5: Copy's image box -- the selection's boxes merged and grown 
   const big = bitmapSize([0, 0, 100_000_000, 50_000_000], 1e-4);
   assert.deepEqual([big.width, big.height], [4096, 2048]);
 });
+
+test("svgCroppedTo: Copy's SVG on the selection's page (`plotSymbolToSvg`), in kicad-cli's mm (UI-LEFT-3 Y3-6)", async () => {
+  const { svgCroppedTo } = await import("./symClipboard");
+  const svg = `<?xml version="1.0"?>\n<svg\n  xmlns="http://www.w3.org/2000/svg"\n  version="1.1"\n  width="14.0000mm" height="16.0433mm" viewBox="-5.0000 -8.0216 14.0000 16.0433">\n<rect x="-2" y="-2" width="4" height="4"/>\n</svg>\n`;
+  const out = svgCroppedTo(svg, [-2_040_000, -2_040_000, 2_040_000, 2_040_000])!;
+  assert.match(out, /width="4\.0800mm" height="4\.0800mm" viewBox="-2\.0400 -2\.0400 4\.0800 4\.0800"/);
+  assert.ok(out.includes('<rect x="-2" y="-2" width="4" height="4"/>'), "the drawing is as kicad-cli plotted it");
+  assert.equal(svgCroppedTo("<svg></svg>", [0, 0, 1, 1]), null, "no size or viewBox, no crop");
+});

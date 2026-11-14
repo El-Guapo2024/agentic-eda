@@ -115,7 +115,11 @@ export function textBoxDistanceNm(g: Pick<LibTextBox, "start" | "end">, x: numbe
   return Math.hypot(dx, dy);
 }
 
-/** What the tool carries from one text box to the next (`m_lastTextBold`, `m_lastTextItalic`, `m_lastTextAngle`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`). */
+/**
+ * What the tool carries from one item to the next (`m_lastTextBold`, `m_lastTextItalic`, `m_lastTextAngle`, `m_lastTextJust` of a text box; `m_lastFillStyle`, `m_lastFillColor` and
+ * `m_lastStroke` -- its width, colour and line style -- of every shape and text box `doDrawShape` makes: one member of `SYMBOL_EDITOR_DRAWING_TOOLS`, so the border a text box's
+ * dialog chose is the next rectangle's too; a shape the tool draws sets them from itself, which changes nothing, as it took them).
+ */
 export interface LastTextBox {
   bold: boolean;
   italic: boolean;
@@ -126,6 +130,8 @@ export interface LastTextBox {
   /** `m_lastStroke`'s colour and `m_lastFillColor`; absent: `COLOR4D::UNSPECIFIED`. */
   strokeColor?: SchColor;
   fillColor?: SchColor;
+  /** `m_lastStroke`'s line style; absent or null: `LINE_STYLE::DEFAULT` (UI-LEFT-3 Y3-4). */
+  lineStyle?: string | null;
 }
 
 /** The tool's own start (`SYMBOL_EDITOR_DRAWING_TOOLS` constructor): upright, left, nothing bold, not filled, a border of the default width (`m_lastStroke( 0, ... )`). */
@@ -161,9 +167,29 @@ export function newTextBox(a: readonly [number, number], b: readonly [number, nu
   };
 }
 
-/** What the tool remembers once a box was accepted: its looks, for the next one. */
-export function lastOf(g: LibTextBox): LastTextBox {
-  return { bold: !!g.bold, italic: !!g.italic, vertical: isVertical(g), hAlign: g.h_align, fill: g.fill, strokeMm: g.stroke_mm, ...(g.stroke_color ? { strokeColor: g.stroke_color } : {}), ...(g.fill_color ? { fillColor: g.fill_color } : {}) };
+/** What the tool remembers once a box was accepted: its looks, and the line style its dialog chose (`m_lastStroke = item->GetStroke()`), for the next one. */
+export function lastOf(g: LibTextBox, lineStyle: string | null = null): LastTextBox {
+  return {
+    bold: !!g.bold,
+    italic: !!g.italic,
+    vertical: isVertical(g),
+    hAlign: g.h_align,
+    fill: g.fill,
+    strokeMm: g.stroke_mm,
+    ...(g.stroke_color ? { strokeColor: g.stroke_color } : {}),
+    ...(g.fill_color ? { fillColor: g.fill_color } : {}),
+    ...(lineStyle ? { lineStyle } : {}),
+  };
+}
+
+/**
+ * The stroke and fill a new shape of the tool starts with (`doDrawShape`: `new SCH_SHAPE( shapeType, LAYER_DEVICE, lineWidth, m_lastFillStyle )`, `item->SetStroke( m_lastStroke )`,
+ * `item->SetFillColor( m_lastFillColor )`): the width and the fill on the graphic, the colours and the line style kept beside it (`set_symbol_graphic_looks`), null when they are
+ * all the defaults. A text box's fill is a colour or none; a shape keeps a fill colour as its looks' `fill_color`.
+ */
+export function lastShapeStyle(last: LastTextBox): { strokeMm: number; fill: LibraryFill; looks: { stroke_color?: SchColor; fill_color?: SchColor }; lineStyle: string | null } {
+  const looks = { ...(last.strokeColor ? { stroke_color: last.strokeColor } : {}), ...(last.fillColor ? { fill_color: last.fillColor } : {}) };
+  return { strokeMm: last.strokeMm, fill: last.fill, looks, lineStyle: last.lineStyle ?? null };
 }
 
 /** The alignment buttons of the dialog: the three horizontal and the three vertical ones. */

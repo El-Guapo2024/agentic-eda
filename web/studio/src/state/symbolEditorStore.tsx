@@ -27,7 +27,9 @@ import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEdito
 import { ensureSymbolInProject, parseSymbolText, readClipboardText, symbolItemsText } from "../api/libraryClient";
 import { bareSymbolForms } from "../kicad-port/symClipboard";
 import { symbolNotLoaded } from "../kicad-port/libraryEnsure";
-import { joinLibName } from "../kicad-port/libraryNames";
+import { joinLibName, splitLibName } from "../kicad-port/libraryNames";
+import type { ArcDrawMode, ArcGeom } from "../kicad-port/arcGeom";
+import { symArcDrawMode } from "../kicad-port/symArcDraw";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { allFields, wireField } from "../kicad-port/symFields";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
@@ -60,7 +62,7 @@ export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   pin: "Pin: click to place, number auto-increments",
   draw_segment: "Line: click start, then end",
   draw_lines: "Lines: click each point of the connected graphic lines; double-click or Enter to finish, Esc to cancel",
-  draw_arc: "Arc: click start, mid, then end",
+  draw_arc: "Arc: click as the arc drawing mode says (centre, start, end by default); / switches the direction, Alt+/ the mode, Backspace takes the last point back",
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish (the shape closes), Esc to cancel",
@@ -71,7 +73,13 @@ export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
 };
 
 /** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). `lines` is the open multi-point polyline (`drawSymbolLines`), `polygon` the closed one. */
-export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox"; pts: [number, number][] };
+export type SymDrawState = {
+  kind: "shape";
+  shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "bezier" | "textbox";
+  pts: [number, number][];
+  /** Draw Arc's construction (`ARC_GEOM_MANAGER`, kicad-port/arcDrawSession.ts; UI-LEFT-3 Y3-8): an arc's clicks are its, not `pts`'. */
+  arc?: ArcGeom;
+};
 
 /** `DIALOG_SAVE_SYMBOL_AS` (Save As / Save Copy As): which of the two it is. */
 export interface SaveAsRequest {
@@ -129,8 +137,13 @@ export interface SymbolEditorState {
   /** `SYMBOL_EDIT_FRAME::FocusOnItem`: the pin the Pin Table cross-probes (brightened, the view centred on it when it is near the edge); `null` is `ClearFocus()`. */
   brightened: { id: string; atNm: [number, number] } | null;
   propertiesOpen: boolean;
+  /** The Symbol Editor's Draw Arc mode (`m_ArcDrawMode` of its settings, kicad-port/symArcDraw.ts; UI-LEFT-3 Y3-8). */
+  arcDrawMode: ArcDrawMode;
   /** The field the Symbol Properties dialog opens on (a double click on a field of the canvas): its row is the grid's selected one. */
   propertiesField: string | null;
+  /** Symbol Properties of a tree symbol that is not the one loaded (`SYMBOL_EDITOR_EDIT_TOOL::editSymbolPropertiesFromLibrary`): the symbol it edits, read from the library
+   *  without loading it on the canvas (`symbol` as drawn, `own` its own entry when derived); null: the dialog is about the loaded symbol (UI-LEFT-3 Y3-2). */
+  propertiesSubject: { symbol: LibrarySymbol; own: LibrarySymbol | null } | null;
   /** The symbols the library tree has selected (`GetSelectedLibIds()`); empty = none (the open symbol is the target, `GetTargetLibId`). */
   treeSelection: string[];
   /** `m_ShowPinsElectricalType`: draw each pin's electrical type beside it. On to begin with, as `show_pin_electrical_type` is in `SYMBOL_EDITOR_SETTINGS`. */
@@ -159,7 +172,9 @@ export interface SymbolEditorState {
   /** Which symbols the fields table lists (`DIALOG_LIB_FIELDS_TABLE::SCOPE`): the library's, or the ones related to the target (its root and everything derived from it). */
   fieldsTableScope: "library" | "related";
   /** `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog (`DIALOG_LIB_NEW_SYMBOL` with a parent) is open on this symbol. */
-  deriveRequest: { parent: string } | null;
+  deriveRequest: { parent: string; fromTable?: boolean } | null;
+  /** The symbol Bulk Edit's Create Derived Symbol just made (`CreateDerivedSymbolImmediate`): the table takes it as a row of its own (UI-LEFT-3 Y3-5). */
+  fieldsTableDerived: string | null;
   /** `DIALOG_LIB_NEW_SYMBOL` (Ctrl+N, `CreateNewSymbol` with no parent): open, asking for the new symbol's name and first properties. */
   newSymbolOpen: boolean;
   /** `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the pin the Pin tool has just dropped, whose properties Pin Properties asks for before it is added
@@ -191,6 +206,9 @@ export interface SymbolEditorState {
   /** `m_lastTextAngle`: the text angle the next Text dialog starts with. */
   lastTextAngle: number;
   toast: { message: string; kind: "error" | "info" } | null;
+  /** The frame's info bar over the canvas (`EDA_BASE_FRAME::ShowInfoBarError`: `m_infoBar->ShowMessageFor( msg, 8000, wxICON_ERROR )`), where KiCad's library actions say what
+   *  they refused (UI-LEFT-3 Y3-7); `seq` restarts its timer when the same words come again. */
+  infoBar: { message: string; kind: "error" | "warning" | "info"; seq: number } | null;
 }
 
 /** The unit and body style a new graphic or text goes on (`SYMBOL_EDITOR_DRAWING_TOOLS`: `if( m_drawSpecificUnit ) item->SetUnit( m_frame->GetUnit() )`, else it stays on 0, common to all). */
@@ -221,6 +239,8 @@ const initialState: SymbolEditorState = {
   brightened: null,
   propertiesOpen: false,
   propertiesField: null,
+  propertiesSubject: null,
+  arcDrawMode: symArcDrawMode.get(),
   treeSelection: [],
   showElectricalTypes: true,
   showPinNumbers: false,
@@ -236,6 +256,7 @@ const initialState: SymbolEditorState = {
   fieldsTableOpen: false,
   fieldsTableScope: "library",
   deriveRequest: null,
+  fieldsTableDerived: null,
   newSymbolOpen: false,
   pendingPin: null,
   lastPlacedPin: null,
@@ -249,6 +270,7 @@ const initialState: SymbolEditorState = {
   lastTextBox: INITIAL_LAST_TEXT_BOX,
   lastTextAngle: 0,
   toast: null,
+  infoBar: null,
 };
 
 export type SymAction =
@@ -273,7 +295,7 @@ export type SymAction =
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
   | { type: "SET_BRIGHTENED"; item: { id: string; atNm: [number, number] } | null }
-  | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string }
+  | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string; subject?: { symbol: LibrarySymbol; own: LibrarySymbol | null } }
   | { type: "SET_TREE_SELECTION"; names: string[] }
   | { type: "TOGGLE_ELECTRICAL_TYPES" }
   | { type: "TOGGLE_PIN_NUMBERS" }
@@ -286,7 +308,8 @@ export type SymAction =
   | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
   | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
   | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean; scope?: "library" | "related" }
-  | { type: "SET_DERIVE_REQUEST"; parent: string | null }
+  | { type: "SET_DERIVE_REQUEST"; parent: string | null; fromTable?: boolean }
+  | { type: "SET_FIELDS_TABLE_DERIVED"; libId: string | null }
   | { type: "SET_NEW_SYMBOL_OPEN"; open: boolean }
   | { type: "SET_PENDING_PIN"; pin: LibrarySymbolPin | null }
   /** The pending pin has been added: its number becomes the next click's starting point (`g_lastPin`, `PIN_PLACED` only on success). */
@@ -310,6 +333,9 @@ export type SymAction =
   | { type: "SET_LAST_TEXT_BOX"; last: LastTextBox }
   | { type: "SET_SHAPE_DIALOG_ID"; id: string | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
+  | { type: "SHOW_INFOBAR"; message: string; kind?: "error" | "warning" | "info" }
+  | { type: "SET_ARC_DRAW_MODE"; mode: ArcDrawMode }
+  | { type: "DISMISS_INFOBAR" }
   | { type: "TOAST_CLEAR" };
 
 function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState {
@@ -395,7 +421,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_BRIGHTENED":
       return { ...state, brightened: action.item };
     case "SET_PROPERTIES_OPEN":
-      return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null };
+      return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null, propertiesSubject: action.open ? (action.subject ?? null) : null };
     case "SET_TREE_SELECTION":
       return { ...state, treeSelection: action.names };
     case "TOGGLE_ELECTRICAL_TYPES":
@@ -421,7 +447,9 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_FIELDS_TABLE_OPEN":
       return { ...state, fieldsTableOpen: action.open, fieldsTableScope: action.scope ?? state.fieldsTableScope };
     case "SET_DERIVE_REQUEST":
-      return { ...state, deriveRequest: action.parent ? { parent: action.parent } : null };
+      return { ...state, deriveRequest: action.parent ? { parent: action.parent, ...(action.fromTable ? { fromTable: true } : {}) } : null };
+    case "SET_FIELDS_TABLE_DERIVED":
+      return { ...state, fieldsTableDerived: action.libId };
     case "SET_NEW_SYMBOL_OPEN":
       return { ...state, newSymbolOpen: action.open };
     case "SET_PENDING_PIN":
@@ -463,6 +491,12 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
       return { ...state, toast: null };
+    case "SHOW_INFOBAR":
+      return { ...state, infoBar: { message: action.message, kind: action.kind ?? "error", seq: (state.infoBar?.seq ?? 0) + 1 } };
+    case "DISMISS_INFOBAR":
+      return { ...state, infoBar: null };
+    case "SET_ARC_DRAW_MODE":
+      return { ...state, arcDrawMode: action.mode };
     default:
       return state;
   }
@@ -480,6 +514,8 @@ export interface NewSymbolRequest {
   name: string;
   /** "Default reference designator" (KiCad's "U"). */
   reference: string;
+  /** The name is the library's already and the person chose Overwrite (`CreateNewSymbol`'s validator, `KIDIALOG` "Overwrite"): the new symbol replaces it in the buffer. */
+  overwrite?: boolean;
   /** "Number of units per package" (1..64). */
   unitCount: number;
   /** "All units are interchangeable" (`units_locked` is the opposite, and only for a symbol of several units). KiCad's dialog starts it
@@ -718,7 +754,11 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         {
           op: "batch",
           cmds: [
-            { op: "new_symbol", lib_id: libId },
+            // a name in use that the person chose to overwrite: `LIB_SYMBOL_LIBRARY_MANAGER::CreateNewSymbol` -> `UpdateSymbol` replaces the buffer's symbol with the new, empty one
+            // (`new_symbol`'s Reference and Value, as `put_library_symbol` with overwrite); else `new_symbol`, which refuses a name in use
+            request.overwrite
+              ? { op: "put_library_symbol", symbol: { lib_id: libId, fields: [{ name: "Reference", text: "" }, { name: "Value", text: splitLibName(libId).item }] } as unknown as LibrarySymbol, overwrite: true }
+              : { op: "new_symbol", lib_id: libId },
             {
               op: "edit_symbol_properties",
               lib_id: libId,
@@ -967,7 +1007,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
               fieldLooksOf: (name) => fieldLooksOf(st.derivedOwn ?? sym, name),
             })
           : Promise.resolve(null);
-        const svg = box ? selectionSvg(st.libId, raw, st.activeUnit, st.activeBodyStyle) : Promise.resolve(null);
+        const svg = box ? selectionSvg(st.libId, raw, st.activeUnit, st.activeBodyStyle, box) : Promise.resolve(null);
         if (!(await writeClipboardWithImages(text, svg, png))) dispatch({ type: "TOAST", message: "The browser would not share the clipboard; Paste still works in this editor.", kind: "info" });
       } catch (e) {
         dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
