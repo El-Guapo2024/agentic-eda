@@ -803,6 +803,12 @@ pub struct FieldFontLook {
     /// The text colour; `None` is `COLOR4D::UNSPECIFIED`, the layer's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<SchColor>,
+    /// The field's own pen (`EDA_TEXT::GetTextThickness`, `(thickness ..)` in its `(font ..)`): `None` is none of its own (`GetEffectiveTextPenWidth` gives
+    /// the one for its size and weight). KiCad keeps it from the file (`parseEDA_TEXT`'s `T_thickness`) and from the library field a placed one copies (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), writes it back (`EDA_TEXT::Format`), draws the field
+    /// with it (`SCH_PAINTER::getTextThickness`) and Compare Symbol with Library compares it (`TEXT_ATTRIBUTES::Compare`'s `m_StrokeWidth`); no dialog sets it
+    /// (`SCH_FIELD_DESC` masks the Thickness row). Additive (UI-LEFT-3 S3-22's leftover).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::units::de")]
+    pub thickness_nm: Option<Nm>,
 }
 
 impl FieldFontLook {

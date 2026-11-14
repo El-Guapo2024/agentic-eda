@@ -24,8 +24,8 @@
 //   are compared too, and the keywords and footprint filters always).
 //
 // "Do not populate settings differ." is never reported: a library symbol holds no DNP of its own (`SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol` reads no `dnp`, so
-// `LIB_SYMBOL::m_DNP` is false on both sides). **Differs**: a placed field's pen width (`TEXT_ATTRIBUTES::m_StrokeWidth`) is not kept by the studio, so the text
-// styles do not compare it; a server built before these were sent leaves the schematic's side of each out (compared equal).
+// `LIB_SYMBOL::m_DNP` is false on both sides). A placed field's pen width (`TEXT_ATTRIBUTES::m_StrokeWidth`: its `(thickness ..)`, none 0) is compared with the
+// library field's. A server built before these were sent leaves the schematic's side of each out (compared equal).
 import type { LibGraphic, LibPin, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, LibSymbol, PinAlternate, PinElectricalType, PinShape, SchField, SymbolParitySettings } from "../api/types";
 import { fieldLooksOf, graphicStateOf, isUnspecified } from "./symLooks";
 import { DEFAULT_SYMBOL_PARITY } from "./schSetup";
@@ -333,7 +333,7 @@ export function diffSymbols(drawn: SchematicLibSymbol, library: LibrarySymbol, p
       if (flags.field_texts && f.name !== "Reference" && f.text !== other.text) out.push(`Field '${f.name}' differs: ${f.text}; ${other.text}.`);
       if (flags.field_styles) {
         // the font (`GetFont()`: none is the default font, "KiCad Font" the stroke font), the text size in IU (absent is 50 mil), then `TEXT_ATTRIBUTES::Compare`:
-        // the font's name, the size, the angle, the justification, italic, bold and the colour (the pen width the studio does not keep for a placed field)
+        // the font's name, the size, the pen width (`m_StrokeWidth`, IU: none is 0), the angle, the justification, italic, bold and the colour
         const looks = fieldLooksOf(library, other.name);
         const fontOf = (font: string | null | undefined) => (font ? font : "");
         const sameFont = fontOf(f.font) === fontOf(looks.font);
@@ -341,9 +341,10 @@ export function diffSymbols(drawn: SchematicLibSymbol, library: LibrarySymbol, p
         const colorKey = (c: { r: number; g: number; b: number; a: number } | null | undefined) => (isUnspecified(c) ? "" : `${c!.r},${c!.g},${c!.b},${c!.a}`);
         const sameAngle = f.local_vertical === undefined || f.local_vertical === (Math.round(other.angle_deg) % 180 === 90);
         const sameJustify = (f.local_h === undefined || f.local_h === other.h_align) && (f.local_v === undefined || f.local_v === other.v_align);
+        const samePen = f.thickness_nm === undefined || Math.round((f.thickness_nm ?? 0) / NM_PER_IU) === iuLen(looks.thickness_mm ?? 0);
         if (!sameFont) out.push(`Field '${f.name}' fonts differ.`);
         if (!sameSize) out.push(`Field '${f.name}' text sizes differ.`);
-        if (!sameFont || !sameSize || !sameAngle || !sameJustify || !!f.italic !== other.italic || !!f.bold !== other.bold || colorKey(f.color) !== colorKey(looks.color)) out.push(`Field '${f.name}' text styles differ.`);
+        if (!sameFont || !sameSize || !samePen || !sameAngle || !sameJustify || !!f.italic !== other.italic || !!f.bold !== other.bold || colorKey(f.color) !== colorKey(looks.color)) out.push(`Field '${f.name}' text styles differ.`);
       }
       if (flags.field_visibilities) {
         if (f.visible !== !other.hidden) out.push(`Field '${f.name}' visibility flags differ.`);

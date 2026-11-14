@@ -364,6 +364,13 @@ fn read_own_pen(item: &[Sexpr], size_nm: Nm, bold: bool) -> Option<Nm> {
     (t > Nm::ZERO && !(bold && t == bold_pen)).then_some(t)
 }
 
+/// A field's `(thickness t)` as `parseEDA_TEXT` keeps it (`SetTextThickness`, `TEXT_ATTRIBUTES::m_StrokeWidth`): any pen over 0, a bold field's bold pen too (the
+/// field's `SetBoldFlag` sets no pen, so the pen is what the file says; Compare Symbol with Library compares it as it is).
+pub(crate) fn read_field_pen(item: &[Sexpr]) -> Option<Nm> {
+    let t = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(crate::import::sch_mm_to_nm)?;
+    (t > Nm::ZERO).then_some(t)
+}
+
 /// `EDA_TEXT::Format`'s `(thickness t)` after the size, when the text has a pen of its own (`!GetAutoThickness()`; `Some(0)` writes none).
 pub(crate) fn with_own_pen(effects: String, attrs: Option<&eda_model::sch_extras::TextAttrs>) -> String {
     let Some(t) = attrs.and_then(|a| a.own_pen()) else { return effects };

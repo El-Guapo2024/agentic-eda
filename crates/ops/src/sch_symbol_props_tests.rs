@@ -178,7 +178,7 @@ fn a_placed_symbol_changes_unit_and_takes_what_the_sheet_keeps_for_it_along() {
         let s = b.design.schematic.as_mut().unwrap();
         s.extras.pin_alternates.insert(field_key("U1", 1), alts(&[("1", "USART1_TX")]));
         s.extras.excluded_from_pos_files.insert(field_key("U1", 1));
-        s.extras.set_field_look(&field_key("U1", 1), "Value", FieldFontLook { font: Some("KiCad Font".into()), color: None });
+        s.extras.set_field_look(&field_key("U1", 1), "Value", FieldFontLook { font: Some("KiCad Font".into()), color: None, thickness_nm: None });
     }
     b.apply(&set_unit(None, 2, false)).unwrap();
     let s = sch(&b);
@@ -234,10 +234,10 @@ fn a_fields_font_and_colour_are_set_and_the_default_font_keeps_no_entry() {
     let value = field_id("U1", "Value");
     let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
     b.apply(&looks(&[value.clone()], Some("DejaVu Sans"), Some(red))).unwrap();
-    assert_eq!(sch(&b).extras.field_look("U1", "Value"), Some(&FieldFontLook { font: Some("DejaVu Sans".into()), color: Some(red) }));
+    assert_eq!(sch(&b).extras.field_look("U1", "Value"), Some(&FieldFontLook { font: Some("DejaVu Sans".into()), color: Some(red), thickness_nm: None }));
     // the colour alone: the font stays
     b.apply(&looks(&[value.clone()], None, Some(SchColor { r: 0, g: 0, b: 0, a: 0 }))).unwrap();
-    assert_eq!(sch(&b).extras.field_look("U1", "Value"), Some(&FieldFontLook { font: Some("DejaVu Sans".into()), color: None }));
+    assert_eq!(sch(&b).extras.field_look("U1", "Value"), Some(&FieldFontLook { font: Some("DejaVu Sans".into()), color: None, thickness_nm: None }));
     // "KiCad Font" names the stroke font; "Default Font" is none of the field's own (`SetFont( nullptr )`)
     b.apply(&looks(&[value.clone()], Some("KiCad Font"), None)).unwrap();
     assert_eq!(sch(&b).extras.field_look("U1", "Value").and_then(|l| l.font.as_deref()), Some("KiCad Font"));

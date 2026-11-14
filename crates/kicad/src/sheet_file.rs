@@ -97,7 +97,11 @@ fn collect_lib_symbols(path: &Path, placed_by: Option<(&str, &str)>, seen: &mut 
         }
         return;
     };
-    let Ok(tree) = sexpr::parse(&text) else { return };
+    let Ok(mut tree) = sexpr::parse(&text) else { return };
+    // a file older than 20250318: the cache's `~` texts empty, as KiCad's parser reads them (`tilde_text`; the cache has no version of its own)
+    crate::tilde_text::normalize(&mut tree);
+    // KiCad 10's bold text (file version 20260826 on, a schematic's and a symbol library's as a board's: measured with kicad-cli's `sch upgrade`), read in the older meaning
+    crate::bold_text::normalize(&mut tree);
     let Some(root) = tree.as_list() else { return };
     for cache in sexpr::find_all(root, "lib_symbols") {
         let parsed = crate::symbol_import::symbols_of(cache);

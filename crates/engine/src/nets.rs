@@ -1021,12 +1021,14 @@ pub struct PinFacts<'a> {
 }
 
 impl PinFacts<'_> {
+    /// `SCH_PIN::GetShownName` of the library pin: its name as it is. A `~` is a name (a KiCad 5 legacy pin's, which KiCad's legacy reader keeps and, since the
+    /// file version 20250318, its s-expression reader too: `Net-(C5-~-Pad1)`, UI-LEFT-3 S3-35); an older file's `~` was made empty as it was read (`tilde_text`).
     fn shown(&self, pin_ref: &str) -> &str {
-        self.names.and_then(|n| n.get(pin_ref).or_else(|| n.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("")
+        self.names.and_then(|n| n.get(pin_ref).or_else(|| n.get(base_pin(pin_ref)))).map(String::as_str).unwrap_or("")
     }
     /// `SCH_PIN::GetShownName` of the placed pin, which the duplicate-name test compares: its alternate when it has one, else its library name.
     fn placed_shown(&self, pin_ref: &str) -> &str {
-        self.alternates.and_then(|a| a.get(pin_ref).or_else(|| a.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or_else(|| self.shown(pin_ref))
+        self.alternates.and_then(|a| a.get(pin_ref).or_else(|| a.get(base_pin(pin_ref)))).map(String::as_str).filter(|s| !s.is_empty()).unwrap_or_else(|| self.shown(pin_ref))
     }
     fn is_nc(&self, pin_ref: &str) -> bool {
         self.nc.is_some_and(|n| n.contains(pin_ref) || n.contains(base_pin(pin_ref)))
@@ -1103,7 +1105,7 @@ fn default_net_name(pin_ref: &str, facts: &PinFacts, shown_count: &BTreeMap<(Str
 
 /// `SCH_PIN::GetDefaultNetName( path, aForceNoConnect = true )`: the name KiCad gives the net of a pin that is alone on it or on a no-connect flag,
 /// `unconnected-(U1-NC1-Pad12)` (`unconnected-(R1-Pad1)` for a pin with no name of its own, `unconnected-(U1A-NC-Pad5)` for one of a symbol of several
-/// units). `shown` is the pin's shown name (empty or `~` for none), `with_unit` the reference with the unit the pin is drawn on.
+/// units). `shown` is the pin's shown name (empty for none; a legacy pin's `~` is a name), `with_unit` the reference with the unit the pin is drawn on.
 pub fn unconnected_net_name(pin_ref: &str, shown: Option<&str>, with_unit: Option<&str>) -> String {
     let names: BTreeMap<String, String> = shown.map(|s| (pin_ref.to_string(), s.to_string())).into_iter().collect();
     let units: BTreeMap<String, String> = with_unit.map(|u| (pin_ref.to_string(), u.to_string())).into_iter().collect();
@@ -2011,11 +2013,13 @@ mod tests {
 
     #[test]
     fn a_net_nothing_drives_is_named_the_way_kicad_names_it() {
-        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~"), ("U2.1", "OUT"), ("U2.5", "NC"), ("U3.4", "NC"), ("U3.5", "NC")]);
+        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", ""), ("R4.1", "~"), ("U2.1", "OUT"), ("U2.5", "NC"), ("U3.4", "NC"), ("U3.5", "NC")]);
         let units = shown(&[("U2.1", "U2A"), ("U2.5", "U2A")]);
         let nc: BTreeSet<String> = ["U2.5", "U3.4", "U3.5"].iter().map(|s| s.to_string()).collect();
         let f = PinFacts { names: Some(&names), units: Some(&units), nc: Some(&nc), ..PinFacts::default() };
         let count = shown_name_counts(&f);
+        // a KiCad 5 legacy pin's `~` is a name (`Net-(C5-~-Pad1)` when it is one of two of the name); an unnamed pin has none
+        assert_eq!(default_net_name("R4.1", &f, &count, false), "Net-(R4-~)");
         assert_eq!(default_net_name("R1.1", &f, &count, false), "Net-(R1-Pad1)");
         assert_eq!(default_net_name("U1.3", &f, &count, false), "Net-(U1-PA0)");
         assert_eq!(default_net_name("U1.2", &f, &count, false), "Net-(U1-GND-Pad2)");

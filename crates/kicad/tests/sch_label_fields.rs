@@ -53,7 +53,7 @@ fn drawn() -> (eda_model::ir::Design, ConstraintModel) {
     }
     // the first global label's Sheet References with looks of their own, and the first label's net class in a face and a colour (UI-LEFT-3 S3-31)
     sch.extras.intersheet_refs_looks.insert("lbl_fields_2".into(), LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() });
-    sch.extras.field_looks.entry("lbl_fields_0".into()).or_default().insert("Netclass".into(), eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }) });
+    sch.extras.field_looks.entry("lbl_fields_0".into()).or_default().insert("Netclass".into(), eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }), thickness_nm: Some(mm(0.2)) });
     (design, model)
 }
 
@@ -104,7 +104,10 @@ fn a_global_labels_sheet_references_and_a_fields_face_come_back() {
     assert!(line.contains("(show_name yes) (do_not_autoplace yes)") && line.contains("(size 2 2) (bold yes) (italic yes)"), "{line}");
     let (isr, face) = looks_back(&text);
     assert_eq!(isr, Some(LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() }));
-    assert_eq!(face.and_then(|f| f.font), Some("KiCad Font".to_string()));
+    assert_eq!(face.as_ref().and_then(|f| f.font.clone()), Some("KiCad Font".to_string()));
+    // and its own pen (`(thickness ..)` after the size, UI-LEFT-3 S3-22's leftover)
+    assert_eq!(face.and_then(|f| f.thickness_nm), Some(mm(0.2)));
+    assert!(text.lines().any(|l| l.contains("(property \"Netclass\"") && l.contains("(thickness 0.2)")), "{text}");
 }
 
 #[test]
@@ -132,7 +135,8 @@ fn kicad_loads_the_labels_fields_and_writes_them_back() {
     assert_eq!(read_back(&kicads), want, "what KiCad kept of the labels' fields");
     let (isr, face) = looks_back(&kicads);
     assert_eq!(isr, Some(LabelField { name: "Intersheetrefs".into(), size_nm: mm(2.0), bold: true, italic: true, name_shown: true, no_autoplace: true, ..Default::default() }), "the Sheet References' looks KiCad kept");
-    assert_eq!(face.and_then(|f| f.color), Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }), "the net class's colour KiCad kept");
+    assert_eq!(face.as_ref().and_then(|f| f.color), Some(eda_model::sch_extras::SchColor { r: 0, g: 128, b: 0, a: 255 }), "the net class's colour KiCad kept");
+    assert_eq!(face.and_then(|f| f.thickness_nm), Some(mm(0.2)), "the net class's own pen KiCad kept");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

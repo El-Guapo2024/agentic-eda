@@ -159,7 +159,11 @@ pub(crate) fn cache_aliases(root: &[Sexpr]) -> Vec<(String, String)> {
 /// `legacy` holds the root's `(symbol_instances ..)` entries for this screen's symbols, by uuid (see [`legacy_instances_where`]): the reference, value and
 /// footprint each gives its symbol (r5 D5-H1).
 fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, legacy: &BTreeMap<String, LegacyInstance>) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
-    let tree = sexpr::parse(text).map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
+    let mut tree = sexpr::parse(text).map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
+    // a file older than 20250318: its `~` texts empty where KiCad's parser reads them so (`tilde_text`), the cache's pins and fields with them
+    crate::tilde_text::normalize(&mut tree);
+    // KiCad 10's bold text (file version 20260826 on, a schematic's and a symbol library's as a board's: measured with kicad-cli's `sch upgrade`), read in the older meaning
+    crate::bold_text::normalize(&mut tree);
     let root = tree
         .as_list()
         .filter(|l| sexpr::tag(l) == Some("kicad_sch"))
@@ -1745,8 +1749,8 @@ fn standard_field_of(item: &[Sexpr], name: &str) -> Option<RawUserField> {
     })
 }
 
-/// The font face and colour of each `(property ..)` of a placed symbol that has one (`SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT`: `T_face`, `T_color` in
-/// `(font ..)`), by the field's name; a colour of all zeroes is KiCad's "unspecified" (`SchExtras::field_looks`).
+/// The font face, colour and pen of each `(property ..)` of a placed symbol that has one (`SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT`: `T_face`, `T_color`,
+/// `T_thickness` in `(font ..)`), by the field's name; a colour of all zeroes is KiCad's "unspecified" (`SchExtras::field_looks`).
 fn field_font_looks(item: &[Sexpr]) -> BTreeMap<String, eda_model::sch_extras::FieldFontLook> {
     let mut out = BTreeMap::new();
     for p in sexpr::find_all(item, "property") {
@@ -1755,7 +1759,9 @@ fn field_font_looks(item: &[Sexpr]) -> BTreeMap<String, eda_model::sch_extras::F
         let Some(font) = sexpr::find(p, "effects").and_then(|e| sexpr::find(e, "font")) else { continue };
         let face = sexpr::find(font, "face").and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(String::from);
         let color = sexpr::find(font, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
-        let look = eda_model::sch_extras::FieldFontLook { font: face, color };
+        // its own pen (`T_thickness`, S3-22's leftover)
+        let thickness_nm = crate::sch_extras_io::read_field_pen(p);
+        let look = eda_model::sch_extras::FieldFontLook { font: face, color, thickness_nm };
         if !look.is_default() {
             out.insert(name.to_string(), look);
         }

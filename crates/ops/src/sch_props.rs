@@ -640,7 +640,9 @@ impl<'a> Board<'a> {
             if places.is_empty() {
                 sch.extras.sheet_field_places.remove(id);
             }
-            let look = eda_model::sch_extras::FieldFontLook { font: f.font.as_deref().and_then(crate::sch_symbol_props::font_of), color: f.color.and_then(specified) };
+            // the grid has no pen column: the field's own pen stays (`FIELDS_GRID_TABLE`)
+            let pen = sch.extras.field_look(id, &f.name).and_then(|l| l.thickness_nm);
+            let look = eda_model::sch_extras::FieldFontLook { font: f.font.as_deref().and_then(crate::sch_symbol_props::font_of), color: f.color.and_then(specified), thickness_nm: pen };
             changed |= sch.extras.set_field_look(id, &f.name, look);
         }
         if !changed {

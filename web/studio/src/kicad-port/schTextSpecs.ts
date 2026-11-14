@@ -68,7 +68,7 @@ export interface SchFieldLook {
   size_nm?: number | null;
   bold?: boolean;
   italic?: boolean;
-  /** The text's own pen (`(thickness ..)`, `EDA_TEXT::GetTextThickness`); absent or 0 is the automatic one. Read by `deviceTextDrawSpec`. */
+  /** The text's own pen (`(thickness ..)`, `EDA_TEXT::GetTextThickness`); absent or 0 is the automatic one. Read by `deviceTextDrawSpec` and `schFieldDrawSpec`. */
   pen_nm?: number | null;
 }
 
@@ -95,10 +95,12 @@ export function schTextBoundsInFace(spec: KicadTextSpec, font: KicadFont): { min
 export function schFieldDrawSpec(text: string, f: SchFieldLook, font: KicadFont = STROKE, defaultPen = SCH_DEFAULT_PEN_NM): KicadTextSpec {
   const size = sizeOf(f.size_nm);
   const bold = !!f.bold;
-  const own: KicadTextSpec = { text, pos: f.at, size: [size, size], pen: schOwnPen(size, bold), halign: f.h, valign: f.v, italic: !!f.italic, bold, multiline: false, iu: SCH_IU };
+  // a pen of its own (`(thickness ..)`, `GetTextThickness() > 1`): `GetEffectiveTextPenWidth` is it, clamped to the size, for the box and for the drawing
+  const pen = f.pen_nm && f.pen_nm > 1 ? f.pen_nm : 0;
+  const own: KicadTextSpec = { text, pos: f.at, size: [size, size], pen: pen ? iuRound(effectiveTextPenWidth(pen, [size, size], bold, 0)) : schOwnPen(size, bold), halign: f.h, valign: f.v, italic: !!f.italic, bold, multiline: false, iu: SCH_IU };
   let c = centre(kicadTextBox(own, font));
   if (f.vertical) c = quarter(c, f.at);
-  return { ...own, pos: c, halign: "center", valign: "center", angleDeg: f.vertical ? 90 : 0, pen: schDrawPen(size, bold, defaultPen) };
+  return { ...own, pos: c, halign: "center", valign: "center", angleDeg: f.vertical ? 90 : 0, pen: schDrawPen(size, bold, defaultPen, pen) };
 }
 
 /**

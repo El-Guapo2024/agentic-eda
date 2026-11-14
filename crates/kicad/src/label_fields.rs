@@ -31,6 +31,8 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
         let look = sch.extras.field_look(&l.id, &f.name);
         let face = look.and_then(|k| k.font.as_deref()).map(|n| format!("(face {}) ", crate::sexpr_str(n))).unwrap_or_default();
         let color = look.and_then(|k| k.color).map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, crate::sch_extras_io::alpha_str(c.a))).unwrap_or_default();
+        // its own pen after the size (`EDA_TEXT::Format`'s `(thickness ..)`, `SchExtras::field_looks`' `thickness_nm`)
+        let pen = look.and_then(|k| k.thickness_nm).filter(|t| *t > eda_model::units::Nm::ZERO).map(|t| format!(" (thickness {})", crate::mm(t))).unwrap_or_default();
         let italic = if f.italic { " (italic yes)" } else { "" };
         let bold = if f.bold { " (bold yes)" } else { "" };
         let size = crate::mm(if f.size_nm > eda_model::units::Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM });
@@ -52,7 +54,7 @@ pub(crate) fn write_label_fields(out: &mut String, sch: &SchematicSection, l: &N
         let hide = if f.visible { "" } else { " (hide yes)" };
         let _ = writeln!(
             out,
-            "\t\t(property {} {} (at {} {} {}){show_name} (effects (font {face}(size {size} {size}){bold}{italic}{color}){justify}{hide}))",
+            "\t\t(property {} {} (at {} {} {}){show_name} (effects (font {face}(size {size} {size}){pen}{bold}{italic}{color}){justify}{hide}))",
             crate::sexpr_str(&f.name),
             crate::sexpr_str(&f.text),
             crate::mm(f.at.x),
@@ -170,7 +172,7 @@ pub(crate) fn read_intersheet_refs_look(item: &[Sexpr]) -> Option<LabelField> {
     (f != LabelField { name: INTERSHEET_REFS_FIELD.into(), ..Default::default() }).then_some(f)
 }
 
-/// The font face and colour of each of a label's fields (`(effects (font (face ..) (color ..)))`, `SchExtras::field_looks` under the label's id), by the field's
+/// The font face, colour and pen of each of a label's fields (`(effects (font (face ..) (thickness ..) (color ..)))`, `SchExtras::field_looks` under the label's id), by the field's
 /// canonical name (`Intersheetrefs` for a global label's Sheet References, `Netclass` for "Net Class").
 pub(crate) fn read_label_field_looks(item: &[Sexpr], global: bool) -> std::collections::BTreeMap<String, eda_model::sch_extras::FieldFontLook> {
     let mut out = std::collections::BTreeMap::new();
@@ -184,7 +186,7 @@ pub(crate) fn read_label_field_looks(item: &[Sexpr], global: bool) -> std::colle
             name
         };
         let attrs = crate::sch_extras_io::read_text_attrs(p);
-        let look = eda_model::sch_extras::FieldFontLook { font: attrs.font, color: attrs.color };
+        let look = eda_model::sch_extras::FieldFontLook { font: attrs.font, color: attrs.color, thickness_nm: crate::sch_extras_io::read_field_pen(p) };
         if !name.is_empty() && !look.is_default() {
             out.insert(name.to_string(), look);
         }

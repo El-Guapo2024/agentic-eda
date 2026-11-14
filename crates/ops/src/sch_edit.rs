@@ -939,16 +939,26 @@ impl<'a> Board<'a> {
             });
             let before = ctx.current(sch);
             let mut now = before.clone();
+            // `SetAttributes( *libField )` copies the face, the colour and the pen too (`TEXT_ATTRIBUTES`' `m_Font`, `m_Color`, `m_StrokeWidth`): the library
+            // field's (`LibrarySymbolKeep::field_looks`, the project's copy, else the one the model resolves), as a placement copies them
+            let lib_looks = if has_copy { lib.kicad.field_looks.clone() } else { model.symbol_of(lib_id).map(|s| s.connectivity.field_looks).unwrap_or_default() };
+            let mut looks: Vec<(String, eda_model::sch_extras::FieldFontLook)> = Vec::new();
             for (i, spec) in ctx.specs.iter().enumerate() {
                 // `doUpdate`: the mandatory fields always, a user field the library symbol has (`libField = GetLibSymbolRef()->GetField( field.GetName() )`)
                 let Some(lf) = lib.field(&spec.name).or_else(|| ["Reference", "Value", "Footprint", "Datasheet"].contains(&spec.name.as_str()).then(|| lib.default_field(&spec.name))) else { continue };
                 apply_library_field(&mut now[i], &lf, visibility, effects, if positions { corner } else { None });
+                if effects {
+                    looks.push((spec.name.clone(), lib_looks.get(&spec.name).map(field_look_of_library).unwrap_or_default()));
+                }
             }
             let algo = sch.extras.fields_autoplaced.get(&key).copied();
             let sch = self.schematic_mut()?;
             if now != before {
                 sch.field_layout.insert(key.clone(), now);
                 changed = true;
+            }
+            for (name, look) in looks {
+                changed |= sch.extras.set_field_look(&key, &name, look);
             }
             // `if( resetPositions ) { .. if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL ) symbol->AutoplaceFields( screen, .. ) }`;
             // a symbol with no library frame has its fields placed by Autoplace Fields whatever they were
@@ -1630,6 +1640,12 @@ mod tests {
 /// `DIALOG_CHANGE_SYMBOLS::processSymbols`' reset of one field to the library's `lf` (and what a new symbol's field is, `SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`):
 /// its visibility, its look (`SetAttributes( *libField )`, `SetNameShown`, `SetCanAutoplace`) and, given `corner` -- where the library's origin is in the item's
 /// own frame, the box corner `(x0, y1)` in millimetres the sheet places a symbol by, `(0, 0)` for a power symbol -- its place.
+/// A library field's face, colour and pen (`LibrarySymbolKeep::field_looks`) as a placed field's (`SchExtras::field_looks`): what `SCH_SYMBOL`'s constructor and
+/// `SetAttributes( *libField )` copy.
+pub(crate) fn field_look_of_library(l: &eda_model::lib_keep::KeptFieldLooks) -> eda_model::sch_extras::FieldFontLook {
+    eda_model::sch_extras::FieldFontLook { font: l.font.clone(), color: l.color, thickness_nm: l.thickness_mm.map(eda_model::units::Nm::from_mm).filter(|t| *t > Nm::ZERO) }
+}
+
 pub(crate) fn apply_library_field(p: &mut eda_model::ir::FieldPlacement, lf: &eda_model::sym_fields::LibrarySymbolField, visibility: bool, effects: bool, corner: Option<(f64, f64)>) {
     use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
     if visibility {

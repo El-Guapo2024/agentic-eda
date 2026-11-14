@@ -1342,7 +1342,7 @@ fn placing_a_symbol_copies_its_library_fields_face_and_colour() {
         connectivity: Default::default(),
     };
     let blue = eda_model::sch_extras::SchColor { r: 0, g: 0, b: 255, a: 255 };
-    lib.connectivity.field_looks.insert("Reference".into(), eda_model::lib_keep::KeptFieldLooks { font: Some("KiCad Font".into()), color: Some(blue), thickness_mm: None });
+    lib.connectivity.field_looks.insert("Reference".into(), eda_model::lib_keep::KeptFieldLooks { font: Some("KiCad Font".into()), color: Some(blue), thickness_mm: Some(0.3) });
     let m = ConstraintModel { symbols: vec![lib], ..Default::default() };
     let mut design = empty_design();
     design.schematic = Some(section());
@@ -1351,6 +1351,7 @@ fn placing_a_symbol_copies_its_library_fields_face_and_colour() {
     let out = b.design().schematic.clone().unwrap();
     let look = out.extras.field_look("U1", "Reference").cloned().unwrap_or_default();
     assert_eq!((look.font.as_deref(), look.color), (Some("KiCad Font"), Some(blue)));
+    assert_eq!(look.thickness_nm, Some(mm(0.3)), "and its own pen (`(thickness ..)`, UI-LEFT-3 S3-22's leftover)");
     assert!(out.extras.field_look("U1", "Value").is_none(), "a field the library gives no look keeps the default");
 }
 
