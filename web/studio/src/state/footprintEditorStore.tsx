@@ -102,7 +102,7 @@ export type FpPendingItem =
   | { kind: "zone"; zone: CmdZone; first?: [Nm, Nm] };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
-export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; bezier?: BezierGeom };
+export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Nm, Nm][]; arc?: ArcGeom; /** The layer and width the arc being drawn goes in with: its preview item's. */ arcItem?: { layer: string; widthNm: Nm }; bezier?: BezierGeom };
 
 export interface FpMovePreview {
   refs: string[];

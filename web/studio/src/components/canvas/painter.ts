@@ -40,7 +40,8 @@ import { dimensionEditPoints } from "../../kicad-port/dimensionDraw";
 import { imageEditPoints } from "../../kicad-port/refImagePointEdit";
 import type { BoardRefImage } from "../../api/pcbItemTypes";
 import { DEFAULT_DASH_RATIOS, dashPieces, isDashStyle, strokeArc, strokeSegment, type DashPiece, type DashRatios, type DashSpec } from "../../kicad-port/strokeDash";
-import { drawArcPreview } from "./arcPreview";
+import { drawArcItemPreview, drawArcPreview } from "./arcPreview";
+import { lineThicknessNm } from "../../kicad-port/layerDefaults";
 import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_NM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
@@ -2079,7 +2080,10 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 
   // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
   if (draw.kind === "shape" && draw.shapeKind === "arc" && draw.arc) {
-    drawArcPreview(ctx, draw.arc, { color: layerColor("selection"), hair: (px) => hairlineNm(view, px), units: opts.units });
+    // the arc on the layer it goes on at that layer's default width (`GetLineThickness`), then `ARC_ASSISTANT` in `LAYER_AUX_ITEMS` (KiCad 25ec2335)
+    const item = draw.arcItem ?? { layerKey: opts.activeLayer ?? "f_silks", widthNm: lineThicknessNm(board.board_rules?.text_graphics, layerNameOfKey(opts.activeLayer ?? "f_silks")) };
+    drawArcItemPreview(ctx, draw.arc, layerColor(item.layerKey), item.widthNm, (px) => hairlineNm(view, px));
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_AUX_ITEMS"), hair: (px) => hairlineNm(view, px), units: opts.units, background: layerColor("background") });
     return;
   }
   if (draw.kind === "shape" && draw.shapeKind === "bezier" && draw.bezier) {

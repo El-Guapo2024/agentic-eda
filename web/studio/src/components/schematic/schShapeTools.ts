@@ -191,7 +191,7 @@ export function paintShapePreview(ctx: CanvasRenderingContext2D, view: ViewTrans
     const shape = previewShape(draw, cursor);
     if (shape) paintGraphics(ctx, view, [{ id: "__preview__", shape }], new Set());
     const scale = view.scale || 1;
-    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => px / scale, units, drawArc: false, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => px / scale, units, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
     return;
   }
   if (draw.poly) {

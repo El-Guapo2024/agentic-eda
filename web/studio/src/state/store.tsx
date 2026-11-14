@@ -401,6 +401,8 @@ export type DrawState =
       pts: [Nm, Nm][];
       /** `shapeKind === "arc"` only: KIGFX::PREVIEW::ARC_GEOM_MANAGER's state (kicad-port/arcGeom.ts) -- centre, start, end angle, and the `/` posture (clockwise + lock). `pts` then holds just the clicks locked in so far. */
       arc?: ArcGeom;
+      /** `shapeKind === "arc"` only: the layer key and width the arc goes in with, which its preview item is drawn on (`ApplyToShape` on the tool's `PCB_SHAPE`). */
+      arcItem?: { layerKey: string; widthNm: Nm };
       /** `shapeKind === "bezier"` only: KIGFX::PREVIEW::BEZIER_GEOM_MANAGER's state (kicad-port/bezierGeom.ts). */
       bezier?: BezierGeom;
       /** `shapeKind === "segment"` only: `DrawLine`'s `committedLines`, the segments of the chain already on the board (start, end), the last one last. */

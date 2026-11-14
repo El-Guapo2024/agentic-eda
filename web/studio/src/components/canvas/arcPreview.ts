@@ -1,7 +1,9 @@
 // The in-progress "Draw Arc" overlay: KiCad 25ec2335's `KIGFX::PREVIEW::ARC_ASSISTANT` (kicad-port/arcAssistant.ts, over kicad-port/arcGeom.ts's ARC_GEOM_MANAGER
-// port) -- its guides and its cursor strings ("r", "θ", "Δθ", "s") next to the cursor with their drop shadows -- and, for the board's and the Footprint Editor's centre
-// mode, the arc as it would be drawn (the schematic and the Symbol Editor paint the arc itself as their preview item). Shared by every editor's painter.
-import { ARC_SET_ANGLE, arcSweep, arcUsesExactEndpoints, type ArcGeom } from "../../kicad-port/arcGeom";
+// port) -- its guides and its cursor strings ("r", "θ", "Δθ", "s") next to the cursor with their drop shadows -- in `LAYER_AUX_ITEMS`, and the arc being drawn as
+// the preview item it is (`drawManagedShape` / `DRAWING_TOOL::drawShape`: the shape on its layer at its width, `m_view->Update( &preview )`, [`drawArcItemPreview`]).
+// Shared by every editor's painter.
+import type { ArcGeom } from "../../kicad-port/arcGeom";
+import { arcSessionShape } from "../../kicad-port/arcDrawSession";
 import { arcAssistant, arcAssistantTexts, specialAngleColour } from "../../kicad-port/arcAssistant";
 import { parseColor } from "../../kicad-port/color4d";
 import { paintRuler } from "./rulerPaint";
@@ -13,8 +15,6 @@ export interface PreviewStyle {
   /** `hairlineNm( view, px )`: a width that is `px` screen pixels wide at the current zoom. */
   hair: (px: number) => number;
   units: LengthUnit;
-  /** Draw the centre mode's arc too (the board's and the Footprint Editor's tools); default true. */
-  drawArc?: boolean;
   /** The canvas background, for `IsBackgroundDark` (the special-angle colour); a light one when not given. */
   background?: string;
 }
@@ -22,21 +22,6 @@ export interface PreviewStyle {
 /** `ctx` already carries the view transform (world units). */
 export function drawArcPreview(ctx: CanvasRenderingContext2D, g: ArcGeom, style: PreviewStyle): void {
   const { color, hair } = style;
-  if (style.drawArc !== false && !arcUsesExactEndpoints(g) && g.step === ARC_SET_ANGLE) {
-    const sweep = arcSweep(g);
-    if (sweep) {
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = hair(2);
-      ctx.setLineDash([hair(4), hair(3)]);
-      const a0 = (sweep.startAngle * Math.PI) / 180;
-      ctx.beginPath();
-      // `ctx.arc` measures angles clockwise from +x on the y-down board -- the same direction of increasing `atan2` angle the stored arc runs in.
-      ctx.arc(g.origin[0], g.origin[1], g.radius, a0, a0 + (sweep.sweep * Math.PI) / 180, false);
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
   const scale = 1 / (hair(1) || 1);
   const d = arcAssistant(g, scale, style.units);
   if (!d) return;
@@ -65,4 +50,30 @@ export function drawArcPreview(ctx: CanvasRenderingContext2D, g: ArcGeom, style:
   ctx.restore();
   // `DrawTextNextToCursor` on both of `ViewGetLayers`' layers: the drop shadows, then the strings (the browser checks read them as `window.__edaRuler.arcAssistant`)
   if (d.strings.length > 0) paintRuler(ctx, (shadows) => ({ segs: [], texts: arcAssistantTexts(d, scale, shadows) }), color, "arcAssistant");
+}
+
+/**
+ * The arc being drawn as the preview item KiCad draws it (`ApplyToShape` on the tool's `PCB_SHAPE` / `SCH_SHAPE`, then the painter): solid, in its layer's `color`, `widthNm`
+ * wide (at least a pixel), from start to end through the middle; nothing while the construction has no sweep. (8303b2ad's board tool had no other look either: the
+ * dashed arc this file drew before was the studio's own.)
+ */
+export function drawArcItemPreview(ctx: CanvasRenderingContext2D, g: ArcGeom, color: string, widthNm: number, hair: (px: number) => number): void {
+  const a = arcSessionShape(g);
+  if (!a) return;
+  const [cx, cy] = a.center;
+  const ang = (p: readonly [number, number]) => Math.atan2(p[1] - cy, p[0] - cx);
+  const s0 = ang(a.start);
+  const m0 = ang(a.mid);
+  const e0 = ang(a.end);
+  const tau = 2 * Math.PI;
+  // the way round that passes the middle
+  const ccw = (m0 - s0 + 2 * tau) % tau > (e0 - s0 + 2 * tau) % tau;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(widthNm, hair(1));
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(cx, cy, a.radius, s0, e0, ccw);
+  ctx.stroke();
+  ctx.restore();
 }

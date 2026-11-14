@@ -295,7 +295,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
       ctx.stroke();
       ctx.restore();
     }
-    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => hairlineNm(view, px), units, drawArc: false, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => hairlineNm(view, px), units, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
     return;
   }
   if (draw.shapeKind === "bezier") {

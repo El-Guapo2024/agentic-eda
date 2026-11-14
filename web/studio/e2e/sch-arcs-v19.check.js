@@ -2,7 +2,8 @@
 //   centre mode   "r" and "θ" while the start is placed, "Δθ" and "θ" while the end is;
 //   start-end-mid "r", "s" (the sagitta) and "Δθ" once the third point is under the cursor;
 //   start-dir-end "θ" (the heading) while the direction is placed, then "r" and "Δθ";
-// and no angle snap of the direction (eeschema's tool sets none: `drawManagedShape` never calls `SetAngleSnap`). Every arc is cancelled: nothing is added.
+// and no angle snap of the direction (eeschema's tool sets none: `drawManagedShape` never calls `SetAngleSnap`); the board's Draw Arc shows the same assistant.
+// Every arc is cancelled: nothing is added.
 //
 // Run it in the page of a served board made from examples/ldo.yaml (`eda board new examples/ldo.yaml -o <dir>`, `eda board serve -C <dir> --ui web/studio/dist`).
 // It answers through `window.__schArcsCheck`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
@@ -95,6 +96,25 @@
     await hover(X + mm(20.32), Y);
     const parts = readout().split(" | ");
     t(parts.length === 2 && parts[0].startsWith("r: ") && parts[1].startsWith("Δθ: "), `then the radius and the sweep (${readout()})`);
+  });
+
+  await scenario("the board's Draw Arc: the same assistant in LAYER_AUX_ITEMS over the arc on its layer (KiCad 25ec2335)", async (t) => {
+    [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === "PCB")?.click();
+    await until(() => state().tab === "pcb");
+    await sleep(1500);
+    const arcs = async () => ((await fetch("/api/board.kicad_pcb", { cache: "no-store" }).then((r) => r.text())).match(/\(gr_arc/g) || []).length;
+    const before = await arcs();
+    await run("pcbnew.InteractiveDrawing.arc");
+    clearReadout();
+    await click(mm(100), mm(80));
+    await hover(mm(110), mm(80));
+    t(/^r: 10\.000 mm \| θ: 0\.0°$/.test(readout()) || /^r: .* \| θ: 0\.0°$/.test(readout()), `r and θ while the start is placed (${readout()})`);
+    await click(mm(110), mm(80));
+    await hover(mm(100), mm(70));
+    t(readout() === "Δθ: 90.0° | θ: 90.0°", `Δθ and θ while the end is placed (${readout()})`);
+    await toSelect();
+    const after = await arcs();
+    t(before === after, `nothing added (${before} -> ${after})`);
   });
 
   const end = await sch();
