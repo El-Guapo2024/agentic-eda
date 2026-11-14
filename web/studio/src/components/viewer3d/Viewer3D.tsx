@@ -56,6 +56,7 @@ import { useViewerColors } from "./useViewerColors";
 import { ModelCache } from "./modelCache";
 import { PartModels, type PartStats } from "./partModels";
 import { stackOfBoard } from "../../kicad-port/model3d";
+import { pickFootprintByPads } from "../../kicad-port/padPick3d";
 import { viewer3dProbe } from "./viewer3dProbe";
 
 
@@ -415,7 +416,13 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       if (e.button === 0 && !camera3d.isMoving() && !(navigatorShownRef.current && gizmo.pick(at.x, at.y, el.clientHeight, activeOrientation()))) {
         const activeCam = camera3d.projection === "perspective" ? perspCamera : orthoCamera;
         raycaster.setFromCamera(new THREE.Vector2((at.x / el.clientWidth) * 2 - 1, -(at.y / el.clientHeight) * 2 + 1), activeCam);
-        const hit = partModels.pick(raycaster);
+        // The first item the ray meets: a part's model (or placeholder), or a pad's copper (`case PCB_PAD_T`: its footprint; kicad-port/padPick3d.ts), so a
+        // footprint drawn without a model is picked by its pads, as in KiCad.
+        const model = partModels.pick(raycaster);
+        const { origin, direction } = raycaster.ray;
+        const current = boardRef.current;
+        const pad = current ? pickFootprintByPads(current.parts, { origin: [origin.x, origin.y, origin.z], dir: [direction.x, direction.y, direction.z] }, stackOfBoard(current.board_rules)) : null;
+        const hit = model && pad ? (model.distance <= pad.distance ? model : pad) : (model ?? pad);
         if (hit) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
       }
       if (e.button === 0) dragButton = "left";
