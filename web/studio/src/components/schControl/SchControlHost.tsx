@@ -16,7 +16,8 @@ import { RemapSymbolsDialog } from "./RemapSymbolsDialog";
 import { RescueSymbolsDialog } from "./RescueSymbolsDialog";
 import { SymbolCheckerDialog } from "./SymbolCheckerDialog";
 import { SymbolDiffDialog } from "./SymbolDiffDialog";
-import { DesignVariantDialogs } from "../DesignVariantDialogs";
+import { DesignVariantDialogs, SingleChoiceDialog } from "../DesignVariantDialogs";
+import { FP_VISIBILITY_CHOICES, FP_VISIBILITY_PROMPT, FP_VISIBILITY_TITLE } from "../../kicad-port/cmpFile";
 
 let askedOnOpen = false;
 
@@ -57,6 +58,21 @@ export function SchControlHost() {
       {dialog?.kind === "import_sheet" && <ImportSheetDialog forceSheet={dialog.forceSheet} initialPath={dialog.initialPath} onClose={close} />}
       {dialog?.kind === "symbol_diff" && <SymbolDiffDialog reference={dialog.ref} onClose={close} />}
       {dialog?.kind === "variant" && <DesignVariantDialogs />}
+      {dialog?.kind === "fp_visibility" && (
+        <SingleChoiceDialog
+          title={FP_VISIBILITY_TITLE}
+          prompt={FP_VISIBILITY_PROMPT}
+          choices={FP_VISIBILITY_CHOICES}
+          onCancel={() => {
+            close();
+            dialog.resolve(null);
+          }}
+          onChoose={(name) => {
+            close();
+            dialog.resolve(FP_VISIBILITY_CHOICES.indexOf(name));
+          }}
+        />
+      )}
     </>
   );
 }

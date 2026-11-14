@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseCmpFile } from "./cmpFile";
+import { parseCmpFile , FP_VISIBILITY_CHOICES, forcedFootprintVisibility } from "./cmpFile";
 
 const SAMPLE = `Cmp-Mod V01 Created by CvPcb (7.0.0) date = Sat 01 Oct 2026
 
@@ -43,4 +43,11 @@ test("Windows line ends and an unterminated last block are read", () => {
     { reference: "R1", footprint: "F:A" },
     { reference: "R2", footprint: "F:B" },
   ]);
+});
+
+test("Import Footprint Assignments' visibility question: keep, show all, hide all (UI-LEFT-3 S3-25)", () => {
+  assert.deepEqual(FP_VISIBILITY_CHOICES, ["Keep existing footprint field visibility", "Show all footprint fields", "Hide all footprint fields"]);
+  assert.equal(forcedFootprintVisibility(0), null);
+  assert.equal(forcedFootprintVisibility(1), true);
+  assert.equal(forcedFootprintVisibility(2), false);
 });

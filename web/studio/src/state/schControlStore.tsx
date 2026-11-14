@@ -25,7 +25,9 @@ export type SchControlDialog =
   | { kind: "import_sheet"; forceSheet?: boolean; initialPath?: string }
   /** A design variant dialog (KiCad 25ec2335 `SCH_EDIT_FRAME::ShowAddVariantDialog`, `RemoveVariant`, `EditVariantDescription`, `RenameVariant`, `CopyVariant`): `name` skips
    * the choice of the variant (the Symbol Fields Table's buttons act on the variant its list has selected); `fromTable` is the table's own copy check. */
-  | { kind: "variant"; action: VariantDialogAction; name?: string; fromTable?: boolean };
+  | { kind: "variant"; action: VariantDialogAction; name?: string; fromTable?: boolean }
+  /** Import Footprint Assignments' question (`ImportFPAssignments`' `wxSingleChoiceDialog`, UI-LEFT-3 S3-25): `resolve` gets the choice's index, or null for Cancel. */
+  | { kind: "fp_visibility"; resolve: (choice: number | null) => void };
 
 /** The design variant dialogs. */
 export type VariantDialogAction = "add" | "remove" | "describe" | "rename" | "copy";
