@@ -453,7 +453,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
             d.footprint_edits.retain(|e| e.id != moved.id);
             d.zone_overrides.retain(|z| z.id != moved.id);
         }
-        let extra = FpExtra { edit: Some(&edit), attrs: bare.effective_attrs(&moved.id, &one) };
+        let extra = FpExtra { edit: Some(&edit), attrs: bare.effective_attrs(&moved.id, &one), own: None };
         write_footprint(&mut out, &moved, &part, &one, &net_num, model, &bare, false, "", &extra, &Default::default());
     }
     for t in &picked.tracks {

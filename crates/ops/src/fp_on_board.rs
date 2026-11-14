@@ -205,13 +205,21 @@ impl Board<'_> {
         let old: Vec<Zone> = rt.zones.iter().filter(|z| z.parent_footprint.as_deref() == Some(reference)).cloned().collect();
         rt.zones.retain(|z| z.parent_footprint.as_deref() != Some(reference));
         let had = !old.is_empty() || !zones.is_empty();
+        // (each old zone hands its uuid on once: to the copy's zone cloned from it first)
+        let mut used: Vec<String> = Vec::new();
+        let cloned: Vec<String> = zones.iter().filter(|z| old.iter().any(|o| !z.id.is_empty() && o.id == z.id)).map(|z| z.id.clone()).collect();
         for z in zones {
+            let source_id = z.id.clone();
             let mut placed = zone_through(z, &steps, copper);
             placed.parent_footprint = Some(reference.to_string());
             placed.id = String::new();
-            if let Some(o) = old.iter().find(|o| o.layer_set() == placed.layer_set() && o.outline == placed.outline && o.holes == placed.holes) {
+            // a zone as it was keeps its uuid; so does the one Edit Footprint's copy cloned from it, changed or not (the copy's zone keeps the board zone's id:
+            // `SaveFootprintToBoard`'s `fixUuid`)
+            let same = |o: &&Zone| !used.contains(&o.id) && !cloned.contains(&o.id) && o.layer_set() == placed.layer_set() && o.outline == placed.outline && o.holes == placed.holes;
+            if let Some(o) = old.iter().find(|o| !source_id.is_empty() && o.id == source_id).or_else(|| old.iter().find(same)) {
                 placed.uuid = o.uuid.clone();
                 placed.id = o.id.clone();
+                used.push(o.id.clone());
             }
             rt.zones.push(placed);
         }

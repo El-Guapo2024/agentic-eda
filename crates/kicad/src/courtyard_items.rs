@@ -5,6 +5,28 @@
 use crate::sexpr::{self, Sexpr};
 use eda_model::units::Nm;
 
+/// A footprint's courtyard items (`FootprintExtra::courtyard_items`) as graphics of its definition (`FpArt::courtyard`'s frame: the footprint seen from the top, on
+/// `F.CrtYd` for its own side): what Edit Footprint's copy holds of them (`LoadFootprintFromBoard` clones the courtyard lines with the rest). A footprint read on the
+/// back in the library's frame (`FootprintExtra::library_frame`) has them turned half a turn with its other items (`pcb::half_turned`). Each comes with the uuid the
+/// file gave it (or none).
+pub fn courtyard_item_shapes(extra: &eda_model::ir::FootprintExtra) -> Vec<(eda_model::fp_art::FpShape, Option<String>)> {
+    let side = if extra.courtyard_bottom { eda_model::ir::Side::Bottom } else { eda_model::ir::Side::Top };
+    let mut out = Vec::new();
+    for item in &extra.courtyard_items {
+        let Ok(Sexpr::List(l)) = sexpr::parse(item) else { continue };
+        let Some(s) = sexpr::tag(&l).and_then(|tag| crate::fp_art_io::read_courtyard_shape(&l, tag, side)) else { continue };
+        out.push((s, crate::import_items::item_uuid(&l)));
+    }
+    if side == eda_model::ir::Side::Bottom && extra.library_frame {
+        let half_turn = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: Nm::ZERO, y: Nm::ZERO }, rot: 180_000, side: eda_model::ir::Side::Top, label: Default::default() };
+        let turned = eda_model::fp_art::FpArt { courtyard: out.iter().map(|(s, _)| s.clone()).collect(), ..Default::default() }.moved(&half_turn).courtyard;
+        for ((s, _), t) in out.iter_mut().zip(turned) {
+            *s = t;
+        }
+    }
+    out
+}
+
 /// The layer of a courtyard item (`(layer "F.CrtYd")`).
 pub fn courtyard_item_layer(item: &str) -> Option<String> {
     let Ok(Sexpr::List(l)) = sexpr::parse(item) else { return None };

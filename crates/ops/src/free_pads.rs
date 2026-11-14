@@ -135,6 +135,15 @@ impl Board<'_> {
                 }
             }
             extra.groups.retain(|g| !g.members.is_empty());
+            // the uuids Update Footprint on Board kept for the pads, by their places
+            let pads_of_number: Vec<(String, String)> = extra.child_uuids.iter().filter(|(p, _)| p.strip_prefix("pad:").and_then(|r| r.rsplit_once('#')).is_some_and(|(n, _)| n == number)).map(|(p, u)| (p.clone(), u.clone())).collect();
+            for (place, u) in pads_of_number {
+                extra.child_uuids.remove(&place);
+                let k: u32 = place.rsplit_once('#').and_then(|(_, k)| k.parse().ok()).unwrap_or(0);
+                if k != nth {
+                    extra.child_uuids.insert(format!("pad:{number}#{}", renamed(k)), u);
+                }
+            }
         }
         let edit = self.edit_slot(&reference);
         edit.removed_pads.push(RemovedPad { index: base_index, number: number.clone() });

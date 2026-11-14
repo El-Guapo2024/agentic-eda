@@ -7,7 +7,7 @@
 use super::tests::scratch;
 use super::{load, step};
 use eda_model::ir::{BoardFootprintCopy, Point};
-use eda_model::units::mm;
+use eda_model::units::{mm, Nm};
 use eda_ops::fp_editor::FpEditorCmd;
 use eda_ops::fp_items::{FpItem, FpItemCmd};
 use eda_ops::{Cmd, ExchangeOptions, FlipDirection};
@@ -334,4 +334,175 @@ fn a_footprint_zones_arc_goes_onto_the_board_into_ctrl_e_and_back() {
     step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key }), false, "test").unwrap();
     let fp = pcb(&dir);
     assert!(footprint_of(&fp, "K1").contains("(arc "), "Update Footprint on Board keeps it: {}", footprint_of(&fp, "K1"));
+}
+
+/// A board of one footprint with one of each kind of child, every one with a uuid of its own: what `uuid_diff` follows through Ctrl+E and Update Footprint on Board.
+const UUID_BOARD: &str = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6) (legacy_teardrops no))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (1 "F.Mask" user) (3 "B.Mask" user) (13 "F.Paste" user) (15 "B.Paste" user) (5 "F.SilkS" user) (7 "B.SilkS" user) (35 "F.Fab" user) (37 "B.Fab" user) (31 "F.CrtYd" user) (29 "B.CrtYd" user) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_rect (start 0 0) (end 100 80) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "00000000-0000-0000-0000-0000000000e1"))
+  (footprint "Lib:Logo" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000011") (at 50 40 0)
+    (property "Reference" "U1" (at 0 -6 0) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-000000000012") (effects (font (size 1 1) (thickness 0.15))))
+    (property "Value" "Logo" (at 0 6 0) (layer "F.Fab") (uuid "00000000-0000-0000-0000-000000000013") (effects (font (size 1 1) (thickness 0.15))))
+    (property "Vendor" "ACME" (at 0 7 0) (layer "F.Fab") (hide yes) (uuid "00000000-0000-0000-0000-000000000016") (effects (font (size 1 1) (thickness 0.15))))
+    (attr smd)
+    (fp_line (start -2 -2) (end 2 -2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-000000000014"))
+    (fp_line (start -2 2) (end 2 2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-000000000015"))
+    (fp_rect (start -3 -3) (end 3 3) (stroke (width 0.05) (type solid)) (fill no) (layer "F.CrtYd") (uuid "00000000-0000-0000-0000-000000000017"))
+    (fp_text user "${REFERENCE}" (at 0 1 0) (layer "F.Fab") (uuid "00000000-0000-0000-0000-000000000018") (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text_box "box" (start -1 3.5) (end 1 4.5) (margins 0.1 0.1 0.1 0.1) (layer "F.Fab") (uuid "00000000-0000-0000-0000-00000000001c") (effects (font (size 0.5 0.5) (thickness 0.075))) (border yes) (stroke (width 0.1) (type solid)))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-000000000019"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-00000000001a"))
+    (zone (net 0) (net_name "") (layer "F.Cu") (uuid "00000000-0000-0000-0000-00000000001b") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy -3 4) (xy 3 4) (xy 3 5) (xy -3 5))))
+    (group "G" (uuid "00000000-0000-0000-0000-0000000000f1") (members "00000000-0000-0000-0000-000000000014" "00000000-0000-0000-0000-000000000019" "00000000-0000-0000-0000-000000000017"))
+  )
+)"#;
+
+/// Every `(uuid "..")` of footprint `reference` in the board file of `dir`, in file order.
+fn uuids_of(dir: &Path, reference: &str) -> Vec<String> {
+    let text = pcb(dir);
+    let fp = footprint_of(&text, reference).to_string();
+    fp.split("(uuid \"").skip(1).map(|r| r[..r.find('"').unwrap()].to_string()).collect()
+}
+
+/// `UUID_BOARD` imported as a KiCad board is, and the uuids of U1's children as the board writes them.
+fn uuid_board(name: &str) -> (PathBuf, Vec<String>) {
+    let dir = scratch(name);
+    let file = dir.join("u.kicad_pcb");
+    std::fs::write(&file, UUID_BOARD).unwrap();
+    let out = dir.join("board");
+    crate::import_kicad::run(&[file.display().to_string(), "-o".into(), out.display().to_string()]).unwrap();
+    let before = uuids_of(&out, "U1");
+    (out, before)
+}
+
+/// The copy of U1 Edit Footprint (Ctrl+E) holds.
+fn copy_of_u1(dir: &Path) -> eda_model::ir::LibraryFootprint {
+    let (_, design, _) = load(dir).unwrap();
+    design.footprint_library.as_ref().unwrap().by_name(&BoardFootprintCopy::key_of("U1")).unwrap().clone()
+}
+
+/// The uuid of the first `(<tag> ..)` line of U1 in the board file that contains `needle`.
+fn uuid_of_line(dir: &Path, needle: &str) -> String {
+    let text = pcb(dir);
+    let fp = footprint_of(&text, "U1").to_string();
+    let at = fp.find(needle).unwrap_or_else(|| panic!("{needle} in {fp}"));
+    let rest = &fp[at..];
+    let u = &rest[rest.find("(uuid \"").unwrap() + 7..];
+    u[..u.find('"').unwrap()].to_string()
+}
+
+/// `SaveFootprintToBoard`'s `fixUuid` (PARITY-fpedit section 30's left): Update Footprint on Board gives each child of Edit Footprint's copy the uuid of the board item it
+/// was cloned from (`m_boardFootprintUuids`) and a child the copy added a new one -- a line whose place in the footprint moved, a moved pad, an edited zone keep theirs --
+/// so the board file's diff is what was edited.
+#[test]
+fn update_footprint_on_board_gives_the_copys_children_their_board_uuids_back() {
+    let (dir, before) = uuid_board("fpedit_uuids");
+    let line2 = uuid_of_line(&dir, "(fp_line (start -2 2)");
+    let pad1 = uuid_of_line(&dir, "(pad \"1\"");
+    let group = uuid_of_line(&dir, "(group");
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    let key = BoardFootprintCopy::key_of("U1");
+    let copy = copy_of_u1(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let board_uuids = &design.footprint_library.as_ref().unwrap().board_copy(&key).unwrap().board_uuids;
+    assert!(board_uuids.values().any(|u| *u == line2) && board_uuids.values().any(|u| *u == pad1), "the copy records the board's uuids: {board_uuids:?}");
+    // the first line deleted (the second is the footprint's first now), pad 1 moved, the keepout moved, a line added
+    let first_line = copy.graphics.iter().find(|g| g.layer() == "F.SilkS" && g.points().first().is_some_and(|p| p.y == mm(-2.0))).unwrap().id().to_string();
+    let pad = copy.pads.iter().find(|p| p.number == "1").unwrap().id.clone();
+    let zone = copy.items.zones[0].id.clone();
+    step(&dir, Cmd::FpItem(FpItemCmd::Delete { footprint: key.clone(), ids: vec![first_line] }), false, "test").unwrap();
+    step(&dir, Cmd::FpItem(FpItemCmd::Move { footprint: key.clone(), ids: vec![pad, zone], dx: mm(-0.5), dy: Nm::ZERO }), false, "test").unwrap();
+    let line = eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: mm(0.12), filled: false, start: Point { x: mm(-2.0), y: mm(2.5) }, end: Point { x: mm(2.0), y: mm(2.5) } };
+    step(&dir, Cmd::AddFootprintGraphic { footprint: key.clone(), shape: line }, false, "test").unwrap();
+    step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key }), false, "test").unwrap();
+
+    assert_eq!(uuid_of_line(&dir, "(fp_line (start -2 2)"), line2, "the line that is now the first keeps its uuid");
+    assert_eq!(uuid_of_line(&dir, "(pad \"1\""), pad1, "the moved pad keeps its uuid");
+    assert!(pcb(&dir).contains("(at -1.5 0"), "pad 1 moved");
+    assert_eq!(uuid_of_line(&dir, "(zone"), "00000000-0000-0000-0000-00000000001b", "the moved keepout keeps its uuid");
+    assert_eq!(uuid_of_line(&dir, "(group"), group);
+    let added = uuid_of_line(&dir, "(fp_line (start -2 2.5)");
+    assert!(!before.contains(&added), "the line the copy added has a new uuid");
+    let after = uuids_of(&dir, "U1");
+    let unique: std::collections::BTreeSet<&String> = after.iter().collect();
+    assert_eq!(unique.len(), after.len(), "no uuid twice: {after:?}");
+    // every child but the deleted line kept its uuid
+    let gone = before.iter().filter(|u| !after.contains(u)).count();
+    assert_eq!(gone, 1, "only the deleted line's uuid is gone: {before:?} -> {after:?}");
+    // and once more with nothing edited: the same uuids
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: BoardFootprintCopy::key_of("U1") }), false, "test").unwrap();
+    assert_eq!(uuids_of(&dir, "U1"), after);
+}
+
+/// `LoadFootprintFromBoard` clones the courtyard lines with the rest: a courtyard item the board file kept as its text is a graphic of Edit Footprint's copy (and a member
+/// of its group), Update Footprint on Board writes it back as it was while the copy left it, and as the copy's graphic -- moved, with its uuid and its group -- when the
+/// copy moved it. kicad-cli reads the courtyard where the copy put it.
+#[test]
+fn a_courtyard_item_kept_as_text_is_a_graphic_of_ctrl_es_copy_and_comes_back() {
+    let (dir, _) = uuid_board("fpedit_courtyard");
+    let crtyd = "00000000-0000-0000-0000-000000000017";
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    let key = BoardFootprintCopy::key_of("U1");
+    let copy = copy_of_u1(&dir);
+    let rect = copy.graphics.iter().find(|g| g.layer() == "F.CrtYd").expect("the courtyard rectangle is a graphic of the copy").clone();
+    assert!(matches!(rect, eda_model::ir::Shape::Rect { start, end, .. } if start == Point { x: mm(-3.0), y: mm(-3.0) } && end == Point { x: mm(3.0), y: mm(3.0) }), "{rect:?}");
+    assert_eq!(copy.items.groups.len(), 1);
+    assert!(copy.items.groups[0].member_ids.iter().any(|m| m == rect.id()), "the courtyard item is a member of the copy's group: {:?}", copy.items.groups[0]);
+    // nothing edited: the item as the file had it
+    step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key.clone() }), false, "test").unwrap();
+    let text = pcb(&dir);
+    let fp = footprint_of(&text, "U1");
+    assert!(fp.contains(&format!("(fp_rect (start -3 -3) (end 3 3) (stroke (width 0.05) (type solid)) (fill no) (layer \"F.CrtYd\") (uuid \"{crtyd}\"))")), "{fp}");
+    assert_eq!(fp.matches("F.CrtYd").count(), 1, "{fp}");
+    // the courtyard moved in the copy: written as the copy's graphic, moved, with its uuid, still in the group
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    let rect = copy_of_u1(&dir).graphics.iter().find(|g| g.layer() == "F.CrtYd").unwrap().id().to_string();
+    step(&dir, Cmd::FpItem(FpItemCmd::Move { footprint: key.clone(), ids: vec![rect], dx: mm(1.0), dy: Nm::ZERO }), false, "test").unwrap();
+    step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key }), false, "test").unwrap();
+    let text = pcb(&dir);
+    let fp = footprint_of(&text, "U1");
+    assert_eq!(fp.matches("F.CrtYd").count(), 1, "{fp}");
+    assert!(fp.contains("(fp_rect (start -2 -3) (end 4 3)"), "{fp}");
+    assert_eq!(uuid_of_line(&dir, "(layer \"F.CrtYd\")"), crtyd);
+    let group = &fp[fp.find("(group").unwrap()..];
+    assert!(group.contains(crtyd), "{group}");
+    if std::env::var_os("EDA_SLOW_TESTS").is_some() && eda_kicad_engine::find_cli().is_some() {
+        // kicad-cli reads the courtyard where the copy put it: U1's pads stay inside it, nothing is missing
+        let report = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
+        assert_eq!((count("missing_courtyard"), count("malformed_courtyard")), (0, 0), "{}", report["violations"]);
+    }
+}
+
+/// The same of a footprint on the back (read in the library's frame, `FootprintExtra::library_frame`): the copy's courtyard graphic is in the frame of its other
+/// drawings -- the silkscreen line drawn along the courtyard's edge in the file is along it in the copy.
+#[test]
+fn a_courtyard_item_of_a_footprint_on_the_back_is_in_the_frame_of_the_copys_other_drawings() {
+    let dir = scratch("fpedit_courtyard_back");
+    let text = UUID_BOARD
+        .replace("(footprint \"Lib:Logo\" (layer \"F.Cu\")", "(footprint \"Lib:Logo\" (layer \"B.Cu\")")
+        .replace("(at 50 40 0)", "(at 50 40 180)")
+        .replace("(fp_rect (start -3 -3) (end 3 3) (stroke (width 0.05) (type solid)) (fill no) (layer \"F.CrtYd\")", "(fp_rect (start -3 -2) (end 4 1) (stroke (width 0.05) (type solid)) (fill no) (layer \"B.CrtYd\")")
+        .replace("(fp_line (start -2 -2) (end 2 -2) (stroke (width 0.12) (type solid)) (layer \"F.SilkS\")", "(fp_line (start -3 -2) (end 4 -2) (stroke (width 0.12) (type solid)) (layer \"B.SilkS\")");
+    let file = dir.join("u.kicad_pcb");
+    std::fs::write(&file, text).unwrap();
+    let out = dir.join("board");
+    crate::import_kicad::run(&[file.display().to_string(), "-o".into(), out.display().to_string()]).unwrap();
+    step(&out, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    let copy = copy_of_u1(&out);
+    let (start, end) = match copy.graphics.iter().find(|g| g.layer() == "F.CrtYd").expect("the courtyard at the front of the copy") {
+        eda_model::ir::Shape::Rect { start, end, .. } => (*start, *end),
+        other => panic!("{other:?}"),
+    };
+    let edge = copy.graphics.iter().find(|g| g.layer() == "F.SilkS" && g.points().first().is_some_and(|p| p.x.get().abs() == mm(3.0).get() || p.x.get().abs() == mm(4.0).get())).expect("the line along the edge").points();
+    let (x0, x1, y0, y1) = (start.x.min(end.x), start.x.max(end.x), start.y.min(end.y), start.y.max(end.y));
+    assert!(edge.iter().all(|p| (p.y == y0 || p.y == y1) && p.x >= x0 && p.x <= x1), "the line {edge:?} along an edge of the courtyard {start:?}-{end:?}");
+    // and back unchanged: the item as the file had it
+    step(&out, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: BoardFootprintCopy::key_of("U1") }), false, "test").unwrap();
+    assert!(pcb(&out).contains("(fp_rect (start -3 -2) (end 4 1) (stroke (width 0.05) (type solid)) (fill no) (layer \"B.CrtYd\")"));
 }

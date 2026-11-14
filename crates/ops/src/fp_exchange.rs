@@ -614,6 +614,8 @@ impl Board<'_> {
             for p in record.pads.iter_mut() {
                 p.net = None;
             }
+            // the uuids Update Footprint on Board kept were the old children's (the new footprint's are new; Update Footprint on Board puts its own back after)
+            record.child_uuids.clear();
             dr.footprint_extras.push(record);
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }

@@ -1529,11 +1529,11 @@ pub(crate) fn write_footprint(
 
     // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
     // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
-    crate::fp_art_io::write_art(out, &footprint.art, fp);
+    crate::fp_art_io::write_art_of(out, &footprint.art, fp, own_extra);
     // Its text boxes, images, tables, barcodes, dimensions and points (`FootprintExtra::items`, UI-LEFT P17, PP14), while the part is on the footprint they were read from
     // (or, on a footprint made here, the ones Update Footprint on Board or an exchange put there: `FootprintExtra::items_are_for`), each with its lock.
     if let Some(e) = own_extra.filter(|e| !e.items.is_empty() && e.items_are_for(&lib_name_written)) {
-        crate::fp_board_items_io::write_items(out, &e.items, as_placed, turn, &|id| e.item_locked(id));
+        crate::fp_board_items_io::write_items_of(out, &e.items, as_placed, turn, &|id| e.item_locked(id), Some(e));
     }
 
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
@@ -1608,7 +1608,16 @@ pub(crate) fn write_footprint(
             seed = format!("{seed}:{pad_idx}");
             pad_seeds.insert(seed.clone());
         }
-        let uuid = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
+        let place = format!("pad:{}#{nth}", pad.number);
+        let uuid = match own_extra.and_then(|e| e.child_uuids.get(&place)) {
+            // the uuid Update Footprint on Board put back (`FootprintExtra::child_uuids`)
+            Some(_) => crate::child_uuid(own_extra, &fp.id, &place, &seed),
+            None => {
+                let u = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
+                crate::note_child_place(&fp.id, &place, &u);
+                u
+            }
+        };
         pad_uuids.insert(format!("pad:{}#{nth}", pad.number), uuid.clone());
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
@@ -1842,7 +1851,7 @@ pub(crate) fn write_footprint(
     } else if !footprint.art.courtyard.is_empty() {
         // a library footprint's courtyard, item for item as the library draws it
         for (i, s) in footprint.art.courtyard.iter().enumerate() {
-            crate::fp_art_io::write_shape(out, s, fp, &crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id));
+            crate::fp_art_io::write_shape(out, s, fp, &crate::child_uuid(own_extra, &fp.id, &format!("crtyd:{i}"), &format!("footprint:{}:crtyd:{i}", fp.id)));
         }
     } else if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
         // The footprint the file had has no courtyard: none is made up for it.
@@ -1910,17 +1919,19 @@ pub(crate) fn write_footprint(
                 .filter_map(|m| {
                     let (kind, rest) = m.split_once(':')?;
                     match kind {
-                        "art" => Some(crate::duid_for(&format!("footprint:{}:art:{rest}", fp.id), &fp.id)),
-                        "arttext" => Some(crate::duid_for(&format!("footprint:{}:arttext:{rest}", fp.id), &fp.id)),
-                        "item" => e.items.has(rest).then(|| crate::fp_board_items_io::item_uuid(&fp.id, rest)),
+                        "art" => Some(crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:art:{rest}", fp.id))),
+                        "arttext" => Some(crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:arttext:{rest}", fp.id))),
+                        "item" => e.items.has(rest).then(|| crate::fp_board_items_io::item_uuid_of(own_extra, &fp.id, rest)),
                         "pad" => pad_uuids.get(m).cloned(),
                         // a group of the footprint's groups (B-9): by the uuid that group is written with below
-                        "group" => rest.parse::<usize>().ok().filter(|i| *i < e.groups.len() && *i != gi).map(|i| crate::duid_for(&format!("footprint:{}:group:{i}", fp.id), &fp.id)),
+                        "group" => rest.parse::<usize>().ok().filter(|i| *i < e.groups.len() && *i != gi).map(|i| crate::child_uuid(own_extra, &fp.id, &format!("group:{i}"), &format!("footprint:{}:group:{i}", fp.id))),
                         "uuid" => own_courtyard.is_some().then(|| rest.to_string()),
+                        // a courtyard graphic of the footprint's own (`FpArt::courtyard`, as Update Footprint on Board puts one there), while it is written
+                        "crtyd" => (own_courtyard.is_none() && rest.parse::<usize>().is_ok_and(|i| i < footprint.art.courtyard.len())).then(|| crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:crtyd:{rest}", fp.id))),
                         "field" => match rest {
-                            "Reference" => Some(crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id)),
-                            "Value" => Some(crate::duid_for(&format!("footprint:{}:val", fp.id), &fp.id)),
-                            name => field_names.iter().position(|n| *n == name).map(|i| crate::duid_for(&format!("footprint:{}:field:{i}", fp.id), &fp.id)),
+                            "Reference" => Some(crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:ref", fp.id))),
+                            "Value" => Some(crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:val", fp.id))),
+                            name => field_names.iter().position(|n| *n == name).map(|i| crate::child_uuid(own_extra, &fp.id, m, &format!("footprint:{}:field:{i}", fp.id))),
                         },
                         _ => None,
                     }
@@ -1931,7 +1942,7 @@ pub(crate) fn write_footprint(
             }
             members.sort();
             members.dedup();
-            let guuid = crate::duid_for(&format!("footprint:{}:group:{gi}", fp.id), &fp.id);
+            let guuid = crate::child_uuid(own_extra, &fp.id, &format!("group:{gi}"), &format!("footprint:{}:group:{gi}", fp.id));
             let lock = if g.locked { " (locked yes)" } else { "" };
             let quoted: Vec<String> = members.iter().map(|m| sexpr_str(m)).collect();
             writeln!(out, "\t\t(group {} (uuid \"{guuid}\"){lock} (members {}))", sexpr_str(&g.name), quoted.join(" ")).unwrap();

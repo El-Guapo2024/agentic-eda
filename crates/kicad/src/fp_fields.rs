@@ -12,18 +12,20 @@ use eda_model::ir::{FootprintInstance, Millideg, Point, Side, Nm};
 use eda_model::{Footprint, Part};
 
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, mm_to_nm as mm_to_nm_f, sexpr_str};
+use crate::{fmt_mm_f, mm, mm_to_nm as mm_to_nm_f, sexpr_str};
 
 /// What a footprint's text needs beyond the footprint itself: its edit, if it has one, and the attributes in effect.
 pub(crate) struct FpExtra<'a> {
     pub edit: Option<&'a FootprintEdit>,
     pub attrs: FootprintAttrs,
+    /// The footprint's record, whose `child_uuids` the fields' uuids come from (`crate::child_uuid`).
+    pub own: Option<&'a eda_model::ir::FootprintExtra>,
 }
 
 impl<'a> FpExtra<'a> {
     /// The edit and attributes the design holds for `id`.
     pub fn of(design: &'a eda_model::ir::Design, id: &str, footprint: &Footprint) -> Self {
-        FpExtra { edit: design.footprint_edit(id), attrs: design.effective_attrs(id, footprint) }
+        FpExtra { edit: design.footprint_edit(id), attrs: design.effective_attrs(id, footprint), own: design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == id)) }
     }
 }
 
@@ -105,16 +107,16 @@ pub(crate) fn write_fields(out: &mut String, fp: &FootprintInstance, part: &Part
         }
     };
     let reference = in_file(extra.edit.and_then(|e| e.reference.clone()).unwrap_or_else(|| default_reference_layout(fp, footprint)));
-    let ref_uuid = duid_for(&format!("footprint:{}:ref", fp.id), &fp.id);
+    let ref_uuid = crate::child_uuid(extra.own, &fp.id, "field:Reference", &format!("footprint:{}:ref", fp.id));
     write_property(out, REFERENCE, reference.shown(&fp.id), &reference, file_fp.side, file_fp.rot, &ref_uuid);
 
     let value = in_file(extra.edit.and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(fp)));
-    let val_uuid = duid_for(&format!("footprint:{}:val", fp.id), &fp.id);
+    let val_uuid = crate::child_uuid(extra.own, &fp.id, "field:Value", &format!("footprint:{}:val", fp.id));
     write_property(out, VALUE, value.shown(part.value.as_deref().unwrap_or(&fp.id)), &value, file_fp.side, file_fp.rot, &val_uuid);
 
     if let Some(edit) = extra.edit {
         for (i, f) in edit.fields.iter().enumerate() {
-            let uuid = duid_for(&format!("footprint:{}:field:{i}", fp.id), &fp.id);
+            let uuid = crate::child_uuid(extra.own, &fp.id, &format!("field:{}", f.name), &format!("footprint:{}:field:{i}", fp.id));
             write_property(out, &f.name, &f.text, &in_file(f.layout.clone()), file_fp.side, file_fp.rot, &uuid);
         }
     }

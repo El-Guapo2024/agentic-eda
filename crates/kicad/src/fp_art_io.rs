@@ -30,7 +30,7 @@ use eda_model::{ConstraintModel, Footprint};
 use crate::fp_fields::{effects_with, parse_layout};
 use crate::import::{legacy_arc, mm_to_nm, xy_point};
 use crate::sexpr::{self, Sexpr};
-use crate::{duid_for, fmt_mm_f, mm, sexpr_str};
+use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// `DEFAULT_LINE_WIDTH` (`board_design_settings.h`), 0.1 mm: what a stroke of no width that is not filled is given (`parsePCB_SHAPE`).
 const DEFAULT_LINE_WIDTH_NM: Nm = Nm::new(100_000);
@@ -134,6 +134,11 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
 pub(crate) fn read_courtyard(fp: &[Sexpr], side: Side) -> Vec<FpShape> {
     let on_courtyard = |l: &str| l == "F.CrtYd" || l == "B.CrtYd";
     fp.iter().filter_map(Sexpr::as_list).filter_map(|item| sexpr::tag(item).filter(|t| SHAPE_TAGS.contains(t)).and_then(|tag| read_shape_on(item, tag, side, on_courtyard))).collect()
+}
+
+/// One courtyard graphic (`fp_line` .. on `F.CrtYd` / `B.CrtYd`) of a footprint on `side`, as [`read_courtyard`] reads it.
+pub(crate) fn read_courtyard_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
+    SHAPE_TAGS.contains(&tag).then(|| read_shape_on(item, tag, side, |l| l == "F.CrtYd" || l == "B.CrtYd")).flatten()
 }
 
 fn read_shape_on(item: &[Sexpr], tag: &str, side: Side, keep: impl Fn(&str) -> bool) -> Option<FpShape> {
@@ -399,12 +404,13 @@ fn quote(s: &str) -> String {
 
 /// The art of the footprint `fp`, in the file's frame: shapes, then texts (`format( FOOTPRINT )` writes the drawings sorted by type, shapes before
 /// text), each with a uuid made from the footprint and the item's place in the art.
-pub(crate) fn write_art(out: &mut String, art: &FpArt, fp: &FootprintInstance) {
+/// A place's uuid is the one the footprint's record `own` keeps for it (`FootprintExtra::child_uuids`, [`crate::child_uuid`]) when it keeps one.
+pub(crate) fn write_art_of(out: &mut String, art: &FpArt, fp: &FootprintInstance, own: Option<&eda_model::ir::FootprintExtra>) {
     for (i, s) in art.shapes.iter().enumerate() {
-        write_shape(out, s, fp, &duid_for(&format!("footprint:{}:art:{i}", fp.id), &fp.id));
+        write_shape(out, s, fp, &crate::child_uuid(own, &fp.id, &format!("art:{i}"), &format!("footprint:{}:art:{i}", fp.id)));
     }
     for (i, t) in art.texts.iter().enumerate() {
-        write_text(out, t, fp, &duid_for(&format!("footprint:{}:arttext:{i}", fp.id), &fp.id));
+        write_text(out, t, fp, &crate::child_uuid(own, &fp.id, &format!("arttext:{i}"), &format!("footprint:{}:arttext:{i}", fp.id)));
     }
 }
 

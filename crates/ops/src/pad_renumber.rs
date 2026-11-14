@@ -106,6 +106,21 @@ impl Board<'_> {
             }
         }
 
+        // The uuids Update Footprint on Board kept for the pads, each to the pad it was for.
+        if let Some(extra) = self.design.drawings.as_mut().and_then(|d| d.footprint_extras.iter_mut().find(|e| e.id == reference)) {
+            if !extra.child_uuids.is_empty() {
+                let mut kept = std::mem::take(&mut extra.child_uuids);
+                for (j, (n, k)) in keys_before.iter().enumerate() {
+                    if let Some(u) = kept.remove(&format!("pad:{n}#{k}")) {
+                        extra.child_uuids.insert(format!("pad:{}#{}", keys_after[j].0, keys_after[j].1), u);
+                    }
+                }
+                for (place, u) in kept {
+                    extra.child_uuids.entry(place).or_insert(u);
+                }
+            }
+        }
+
         // The zone overrides of the old number are the new number's too (and the old number's while a pad keeps it).
         if let Some(over) = self.design.drawings.as_mut().and_then(|d| d.zone_overrides.iter_mut().find(|o| o.id == reference)) {
             if let Some(o) = over.pads.iter().find(|o| o.number == old).cloned() {
