@@ -673,8 +673,16 @@ function routerWire(settings: RouterSettings): Record<string, string | boolean |
   return { ...routerSettingsToWire(settings), ...(routerGrabRadius != null ? { grab_radius: routerGrabRadius } : {}) };
 }
 
+/** The status bar's Strict switch (`state.strict`) as the store last set it: every request of the router that may commit carries it (`"strict"`), as
+ * `/api/cmd` does, so a route, a pair or a drag is judged by the gates only with it on. */
+let routerStrict = true;
+export function setRouterStrict(strict: boolean): void {
+  routerStrict = strict;
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const sent = url.startsWith("/api/route/") && body && typeof body === "object" && !Array.isArray(body) ? { ...(body as Record<string, unknown>), strict: routerStrict } : body;
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sent) });
   return (await r.json()) as T;
 }
 

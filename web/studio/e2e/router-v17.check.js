@@ -17,6 +17,8 @@
 //   no-net       a drag of a net with the highlight on another net (`highlightNets( true )`: the start set left empty), then a drag of two tracks of no net:
 //                its end puts back `m_startHighlightNetcodes` -- nothing, so the highlight goes off as KiCad's does;
 //   lone-pad     the route tool on U1.12 (a pin on no net), a move and End: the track is on U1.12's `unconnected-(..)` net;
+//   strict       Highlight collisions, the two tracks dragged onto the tracks of no net: with the status bar's Strict on the gates refuse the commit, with it
+//                off the drag is committed (the router's commits follow the Strict switch as every edit does); Ctrl+Z puts it back, Strict back on;
 // It answers through `window.__routerV17Check`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }.
 // run-all-checks: board=mcu30 minutes=8   (the board tools/run-all-checks.sh serves this check on, and how long it may take)
 (async () => {
@@ -241,6 +243,34 @@
     await leaveTool();
     await undo();
     t(snapshot(await state()) === withBus, "one Ctrl+Z takes it away");
+  });
+
+  await scenario("strict", async (t) => {
+    const strictBox = () => [...document.querySelectorAll("label.toggle")].find((l) => l.textContent.trim() === "strict")?.querySelector("input");
+    const setStrict = async (on) => { const b = strictBox(); if (b && b.checked !== on) { b.click(); await sleep(300); } return strictBox()?.checked; };
+    t((await setStrict(true)) === true, "Strict on");
+    await E.run("pcbnew.InteractiveRouter.HighlightMode");
+    const dragDown = async () => {
+      await startDrag(t, Y1, Y2, busIds());
+      await moveTo(15_000_000, Y1 + 6_000_000);
+      const n = replies.length;
+      await clickAt(15_000_000, Y1 + 6_000_000);
+      return waitReply("drag_finish", n);
+    };
+    let f = await dragDown();
+    t(f && f.req && f.req.strict === true, `the finish carries Strict: ${f && JSON.stringify(f.req)}`);
+    t(f && f.body.ok === false && /refused because --strict/.test(f.body.message ?? ""), `Strict on: the gates refuse it: ${f && JSON.stringify(f.body.message)}`);
+    await settle();
+    t(snapshot(await state()) === withBus, "nothing committed");
+    t((await setStrict(false)) === false, "Strict off");
+    f = await dragDown();
+    t(f && f.req && f.req.strict === false && f.body.ok === true, `Strict off: the drag is committed: ${f && JSON.stringify([f.req && f.req.strict, f.body.ok, f.body.message])}`);
+    await settle();
+    t(snapshot(await state()) !== withBus, "the tracks moved");
+    await undo();
+    t(snapshot(await state()) === withBus, "one Ctrl+Z puts them back");
+    await setStrict(true);
+    await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
   });
 
   // leave the board as it was
