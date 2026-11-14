@@ -894,3 +894,21 @@ fn a_power_symbols_library_text_and_text_box_show_its_variables() {
     assert_eq!(p["text_box_shown"]["0"], "net VBUS", "{p}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// UI-LEFT-3 S3-5: a symbol read from a `.kicad_sym` and placed keeps what the file keeps beside its texts (a hidden text's `(hide yes)`), whatever id it is given.
+#[test]
+fn an_embedded_library_symbol_keeps_its_hidden_text_hidden() {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    let dir = scratch("s3_5_hidden_text");
+    setup(&dir);
+    let mut s = base_symbol();
+    s.lib_id = "Lib:Hid".into();
+    s.graphics.push(LibrarySymbolGraphic::Text { id: "file_text".into(), unit: 1, body_style: 1, text: "GONE".into(), at: SPoint { x: 0.0, y: 1.27 }, angle_deg: 0.0, size_mm: 1.27, bold: false, italic: false, h_align: FieldHAlign::Center, v_align: FieldVAlign::Center, private: false, font: None, text_color: None });
+    s.kicad.text_styles.insert("file_text".into(), eda_model::lib_keep::KeptTextStyle { hidden: true, ..Default::default() });
+    step(&dir, Cmd::EmbedLibSymbol { symbol: s }, false, "test").unwrap();
+    step(&dir, Cmd::AddSymbol { id: "U7".into(), lib_id: "Lib:Hid".into(), at: Point { x: mm(50.8), y: mm(50.8) }, rot_millideg: 0, value: "H".into(), footprint: String::new(), unit: 1, annotate: None }, false, "test").unwrap();
+    let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+    let t = sch["lib_symbols"]["Lib:Hid"]["graphics"].as_array().unwrap().iter().find(|g| g["content"] == "GONE").cloned().expect("the text");
+    assert_eq!(t["hidden"].as_bool(), Some(true), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
