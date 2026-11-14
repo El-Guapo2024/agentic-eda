@@ -52,7 +52,6 @@
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
 import type { BoardState, FillZone, Part, Side } from "../../api/types";
-import { buildTextBoxMesh } from "./pcbItems3d";
 import { layerColor } from "../canvas/layers";
 import { THEME_COLORS, userRowOfLayer, type Rgba } from "../../kicad-port/appearance3d";
 import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
@@ -60,8 +59,7 @@ import { fallbackBodyHeightMm, partBodyBoxNm } from "../../kicad-port/partBody";
 import { DEFAULT_STACK, stackOfBoard, type Stack } from "../../kicad-port/model3d";
 import { MAX_ERROR_NM, arcToSegmentCount, circlePolygon, nestContours, type Contour, type Pt } from "../../kicad-port/padShape3d";
 import { boardMaterial3d, copperLayerMaterial3d, glShininess, innerLayersDrawn, maskMaterial3d, nonPlatedCopperMaterial3d, pasteMaterial3d, plasticMaterial3d, silkMaterial3d, type Material3d, type Rgb } from "../../kicad-port/material3d";
-import { buildLayers3d, makeJob, padHoleContour, type Cylinder, type Layers3d, type PolyJob, type Prim, type ZRef } from "../../kicad-port/layers3d";
-import { fpTextBoxes } from "../../kicad-port/fpBoardItems";
+import { buildLayers3d, makeJob, padHoleContour, type Cylinder, type Layers3d, type PolyJob, type Prim, type RuleMargins, type ZRef } from "../../kicad-port/layers3d";
 import { readyPaths } from "../../kicad-port/barcodeShapes";
 import { Culler, MASK_BITS, contoursToShapes, listShapes, maskOpenings, primShapes, type JobResults, type Subtract } from "./cull3d";
 import { cloneLit, kicadLit, scaledColor } from "./glLighting";
@@ -562,6 +560,8 @@ export interface BuildBoardOptions {
 export interface Board3d {
   body: Array<{ outer: [number, number][]; holes: [number, number][][] }>;
   plating: number;
+  /** What the custom rules make of the mask expansions and paste margins (null: no such rules; absent from an older backend). */
+  rule_margins?: RuleMargins | null;
 }
 
 /** `BOARD_ADAPTER::InitSettings`' `m_nonCopperLayerThickness3DU` (DEFAULT_TECH_LAYER_THICKNESS) and `layerThicknessMargin`: where the technical layers sit. */
@@ -749,7 +749,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   // The layers' items (`createLayers`).
   const L = buildLayers3d(
     board,
-    { layerOrder, ...(opts.zoneFills ? { zoneFills: opts.zoneFills } : {}), barcodePaths: (b) => readyPaths(b) },
+    { layerOrder, ...(opts.zoneFills ? { zoneFills: opts.zoneFills } : {}), barcodePaths: (b) => readyPaths(b), ruleMargins: opts.board3d?.rule_margins ?? null },
     {
       layerShown: (layer) => (/\.Cu$/.test(layer) ? copperShown(layer) : ((r) => r !== null && shown(r))(techRow(layer))),
       fpText: shown("footprint_text"),
@@ -782,18 +782,47 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       const slab = buildSlab(shape);
       if (slab) {
         slab.userData.holes = shape.holes.length;
+        if (body) slab.userData.withHoles = true;
         group.add(slab);
       }
     }
-    if (shown("soldermask_top")) group.add(buildMask(shape, "top"));
-    if (shown("soldermask_bottom")) group.add(buildMask(shape, "bottom"));
+    for (const side of ["top", "bottom"] as const) {
+      if (!shown(side === "top" ? "soldermask_top" : "soldermask_bottom")) continue;
+      const m = buildMask(shape, side);
+      if (body) m.userData.withHoles = true;
+      group.add(m);
+    }
   }
-  // `m_postMachinePlugs`: the board material left under a counterbore or countersink and beside a backdrill, drawn with the body.
+  // `m_postMachinePlugs`: the board material left under a counterbore or countersink and beside a backdrill, drawn with the body ("if( !aSkipRenderHoles &&
+  // m_postMachinePlugs )": not while the camera moves with "Disable holes").
   if (shown("board") && L.plugs.length > 0) {
     const bm = boardMaterial();
     for (const p of L.plugs) {
       const mesh = cylinderMesh(p, layerOrder, bm, "post-machine-plug");
-      if (mesh) group.add(mesh);
+      if (mesh) {
+        mesh.userData.withHoles = true;
+        group.add(mesh);
+      }
+    }
+  }
+  // `renderBoardBody( skipRenderHoles )` and `renderSolderMaskLayer( .., aSkipRenderHoles )` while the camera moves with "Disable holes": `m_board`, the outlines
+  // without the holes (`createBoard( GetBoardPoly() )`), and the masks over it with no via holes culled -- built hidden beside the body with its holes, and shown in its
+  // place by `setMoving3d`.
+  if (body) {
+    for (const shape of buildOutlineShapes(board)) {
+      const parts: THREE.Mesh[] = [];
+      if (shown("board")) {
+        const slab = buildSlab(shape);
+        if (slab) parts.push(slab);
+      }
+      if (shown("soldermask_top")) parts.push(buildMask(shape, "top"));
+      if (shown("soldermask_bottom")) parts.push(buildMask(shape, "bottom"));
+      for (const m of parts) {
+        m.name = `${m.name}:no-holes`;
+        m.userData.noHoles = true;
+        m.visible = false;
+        group.add(m);
+      }
     }
   }
 
@@ -881,14 +910,10 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
 
   // The technical layers (`Redraw`'s other branch: `pLayerDispList->DrawCulled( showThickness, solder_mask, throughHolesOuter, anti_board )`).
   const annuli = render.clipSilkOnViaAnnuli ? listShapes(L.viaAnnuli) : thOD;
-  // The text boxes, the board's and the footprints' (`addShape( const PCB_TEXTBOX* )`), are on their layer's list too: a layer with nothing else still has them.
-  const textBoxes = [...(board.drawings?.text_boxes ?? []), ...board.parts.filter((p) => p.placed).flatMap((p) => fpTextBoxes(p))];
-  const techLayers = new Map(L.layers);
-  for (const b of textBoxes) if (!techLayers.has(b.layer)) techLayers.set(b.layer, []);
-  for (const [layer, list] of techLayers) {
+  for (const [layer, list] of L.layers) {
     if (/\.Cu$/.test(layer) || layer === "F.Mask" || layer === "B.Mask") continue;
     const row = techRow(layer);
-    if (!row || !shown(row) || (list.length === 0 && !textBoxes.some((b) => b.layer === layer))) continue;
+    if (!row || !shown(row) || list.length === 0) continue;
     const range = techRange(layer);
     const y = (range[0] + range[1]) / 2;
     const silk = layer === "F.SilkS" || layer === "B.SilkS";
@@ -904,26 +929,13 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       nameOf = () => "solder-paste";
     } else {
       // `m_materials.m_Plastic` of the layer's colour (`setLayerMaterial`: the adhesive, user and technical layers).
-      const color = row.startsWith("user_") ? srgbOfRow(row) : hexColor(layerColor(layer.startsWith("B.") ? "B_Adhes" : "F_Adhes"));
+      // (the user layers', and KiCad 25ec2335's fab and courtyard layers' `m_FFabColor` .. `m_BCourtyardColor`: their rows')
+      const color = row !== "adhesive" ? srgbOfRow(row) : hexColor(layerColor(layer.startsWith("B.") ? "B_Adhes" : "F_Adhes"));
       material = kicadMaterial(plasticMaterial3d({ r: color.r, g: color.g, b: color.b }), { side: THREE.DoubleSide });
       material.userData.ink = color;
       nameOf = (tag) => `${row}-${tag}`;
     }
     const meshes: THREE.Object3D[] = layerMeshes(list, range, material, nameOf, jobs);
-    // The text boxes on the layer, the board's and the footprints' (`addShape( const PCB_TEXTBOX* )`): a picture of the box (pcbItems3d.ts), culled with the layer.
-    for (const b of textBoxes) {
-      if (b.layer !== layer) continue;
-      const tint = silk ? paletteColor(row) : ((material as THREE.MeshPhongMaterial).userData.ink as THREE.Color | undefined);
-      const mesh = buildTextBoxMesh(b, range[side === "top" ? 1 : 0], tint, silk ? "silk" : row);
-      if (mesh) {
-        const m = mesh.material as THREE.MeshBasicMaterial;
-        // drawn with the layer (an opaque object), its empty texels left out
-        m.transparent = false;
-        m.alphaTest = 0.5;
-        m.depthWrite = true;
-        meshes.push(mesh);
-      }
-    }
     if (meshes.length === 0) continue;
     if (meshes.length > 0) group.add(...meshes);
     const subtracts: Subtract[] = [{ shapes: silk ? annuli : thOD, y, hole: true }];
@@ -971,6 +983,26 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     maskViasBottom: tagCount("B.Mask", "via"),
     silkFpShapePrims: tagCount("F.SilkS", "fp-shape") + tagCount("B.SilkS", "fp-shape"),
     cullPieces: group.children.filter((o) => o.name === "cull-piece").length,
+    // the area of the pads' mask openings on F.Mask (mm^2, their polygons' boxes): what a custom rule's expansion grows
+    maskPadArea: (L.layers.get("F.Mask") ?? []).filter((p) => p.tag === "pad" && p.k === "poly").reduce((a, p) => {
+      const pts = (p as { contours: Pt[][] }).contours[0] ?? [];
+      const xs = pts.map((q) => q[0]);
+      const ys = pts.map((q) => q[1]);
+      return a + (pts.length ? ((Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys))) / 1e12 : 0);
+    }, 0),
+    // per layer and kind of item, how many primitives and how many of them polygons (`n:F.SilkS:text`, `poly:F.SilkS:text`): an outline font's glyphs are polygons
+    ...Object.fromEntries(
+      [...L.layers].flatMap(([layer, list]) => {
+        const by = new Map<string, [number, number]>();
+        for (const p of list) {
+          const e = by.get(p.tag ?? "item") ?? [0, 0];
+          e[0]++;
+          if (p.k === "poly") e[1]++;
+          by.set(p.tag ?? "item", e);
+        }
+        return [...by].flatMap(([tag, [n, poly]]) => [[`n:${layer}:${tag}`, n] as const, [`poly:${layer}:${tag}`, poly] as const]);
+      })
+    ),
   };
   return group;
 }
@@ -981,25 +1013,28 @@ function srgbOfRow(row: string): THREE.Color {
   return new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
 }
 
-/** A palette colour as three.js holds it (the RGB read as sRGB). */
-function paletteColor(row: string): THREE.Color {
-  const c = paletteRgba(row);
-  return new THREE.Color().setRGB(c.r, c.g, c.b, THREE.SRGBColorSpace);
-}
-
 /**
  * The "While Moving" options (Preferences > 3D Viewer > Realtime Rendering): `Redraw( aIsMoving )`'s `skipThickness`, `skipRenderHoles` and `skipRenderMicroVias` -- while
  * the camera moves the layers are drawn without their walls (`DrawCulled( showThickness = false, .. )`), without their culling by the holes and with no barrels
- * (`m_padHoles`), and the micro, blind and post-machined vias' barrels are left out (`m_microviaHoles`). Called when what applies changes. Not ported: the body drawn
- * without its holes while moving (`renderBoardBody( skipRenderHoles )` draws `m_board`): the studio's body is one polygon with its holes.
+ * (`m_padHoles`), the body and the masks are the board's outlines without the holes and the post-machining plugs are left out (`renderBoardBody( skipRenderHoles )` draws
+ * `m_board`, `renderSolderMaskLayer` culls no via holes), and the micro, blind and post-machined vias' barrels are left out (`m_microviaHoles`). Called when what applies
+ * changes.
  */
-export function setMoving3d(root: THREE.Object3D, skip: { holes: boolean; microvias: boolean; thickness: boolean }): void {
+export function setMoving3d(root: THREE.Object3D, skip: { holes: boolean; microvias: boolean; thickness: boolean }): { withHoles: number; noHoles: number } {
+  const shown = { withHoles: 0, noHoles: 0 };
   root.traverse((o) => {
-    if (o.name === "cull-piece" && o.userData.hole) o.visible = !skip.holes;
+    if (o.userData.withHoles) {
+      o.visible = !skip.holes;
+      if (o.visible) shown.withHoles++;
+    } else if (o.userData.noHoles) {
+      o.visible = skip.holes;
+      if (o.visible) shown.noHoles++;
+    } else if (o.name === "cull-piece" && o.userData.hole) o.visible = !skip.holes;
     else if (o.name === "plated-barrel") o.visible = !skip.holes && !(skip.microvias && o.userData.microvia);
     const m = (o as THREE.Mesh).material;
     if (Array.isArray(m)) for (const x of m) if (x.userData.walls) x.visible = !skip.thickness;
   });
+  return shown;
 }
 
 
@@ -1082,6 +1117,16 @@ export function boardOutlineBounds(board: BoardState): OutlineBounds | null {
   }
   if (!Number.isFinite(minX)) return null;
   return { minX, minZ, maxX, maxZ };
+}
+
+/** The body's pieces shown now: those with the holes and those without (what [`setMoving3d`] switches between), for the test hook. */
+export function movingBodyOf(root: THREE.Object3D): { withHoles: number; noHoles: number } {
+  const out = { withHoles: 0, noHoles: 0 };
+  root.traverse((o) => {
+    if (o.userData.withHoles && o.visible) out.withHoles++;
+    else if (o.userData.noHoles && o.visible) out.noHoles++;
+  });
+  return out;
 }
 
 /** The pads drawn by their shape and the corners of their polygons, for the test hook (a trapezoid has 4, a rounded rectangle dozens, a box would be 4). */

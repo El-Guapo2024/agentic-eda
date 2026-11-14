@@ -39,8 +39,8 @@ export function padHasCopper(pad: Pick<Pad, "layers">): boolean {
  * The margin: `PAD::GetSolderPasteMargin( aLayerId )`. "Pads defined only on mask layers (and perhaps on other tech layers) use the shape defined by the pad settings
  * only": a pad with no copper layer gets none (r7 V7-1). Otherwise the margin is the pad's own (`m_padStack.SolderPasteMargin`), else the footprint's
  * (`GetLocalSolderPasteMargin`), else the board's (`m_SolderPasteMargin`); the ratio the same way; per axis `margin + KiROUND( padSize * ratio )`, no less than minus
- * half the pad (a custom pad excepted). Custom DRC rules (`SOLDER_PASTE_ABS_MARGIN_CONSTRAINT`) are not read here, and the pad's own margin is the one an edit set (a pad's
- * margin from the board's file is not in the state).
+ * half the pad (a custom pad excepted). Custom DRC rules (`SOLDER_PASTE_ABS_MARGIN_CONSTRAINT`) come from the server (`pasteMarginOf`'s `rule`), and the pad's own margin is
+ * the one an edit set (a pad's margin from the board's file is not in the state).
  */
 export function padPasteMargin3d(pad: Pad, part: Pick<Part, "paste_margin" | "paste_margin_ratio">, board: Pick<MaskPaste, "paste_margin_nm" | "paste_margin_ratio"> | undefined | null): [number, number] | null {
   const onPaste = pad.layers ? pad.layers.includes("F.Paste") : !pad.th && pad.kind !== "non_plated_hole";
@@ -49,10 +49,18 @@ export function padPasteMargin3d(pad: Pad, part: Pick<Part, "paste_margin" | "pa
   return pasteMarginOf(pad, part, board);
 }
 
+/** A pad's paste margins from the custom rules (`GET /api/board3d`'s `rule_margins`): the absolute one (nm) and the relative one (thousandths); null or absent when the rules give none. */
+export interface PasteRule {
+  abs?: number | null;
+  rel?: number | null;
+}
+
 /** `PAD::GetSolderPasteMargin` of a pad with copper (the margin part of [`padPasteMargin3d`]): the pad's own, else the footprint's, else the board's, per axis of the pad's frame. */
-export function pasteMarginOf(pad: Pad, part: Pick<Part, "paste_margin" | "paste_margin_ratio">, board: Pick<MaskPaste, "paste_margin_nm" | "paste_margin_ratio"> | undefined | null): [number, number] {
-  const margin = pad.paste_margin ?? part.paste_margin ?? board?.paste_margin_nm ?? 0;
-  const ratio = pad.paste_ratio ?? part.paste_margin_ratio ?? board?.paste_margin_ratio ?? 0;
+export function pasteMarginOf(pad: Pad, part: Pick<Part, "paste_margin" | "paste_margin_ratio">, board: Pick<MaskPaste, "paste_margin_nm" | "paste_margin_ratio"> | undefined | null, rule?: PasteRule): [number, number] {
+  // The custom rules first (`if( hasAbsRules || hasRelRules )`: `EvalRules( SOLDER_PASTE_ABS_MARGIN_CONSTRAINT .. )`'s opt, the relative one in thousandths), each kind
+  // falling back to the pad's chain when the rules give it none (`if( !margin.has_value() )`).
+  const margin = rule?.abs ?? pad.paste_margin ?? part.paste_margin ?? board?.paste_margin_nm ?? 0;
+  const ratio = (rule?.rel != null ? rule.rel / 1000 : undefined) ?? pad.paste_ratio ?? part.paste_margin_ratio ?? board?.paste_margin_ratio ?? 0;
   const [sx, sy] = pad.size ?? [pad.w, pad.h];
   let mx = margin + kiRound(sx * ratio);
   let my = margin + kiRound(sy * ratio);
@@ -103,9 +111,10 @@ export function padMaskSides(pad: Pick<Pad, "layers" | "th">, side: "top" | "bot
  * pad's own margin, else the footprint's (`GetLocalSolderMaskMargin`), else the board's (`m_SolderMaskExpansion`, Board Setup's "Solder mask expansion"), "ensure mask have
  * a size always >= 0": no less than minus half the pad's smaller side. Custom DRC rules are not read.
  */
-export function padMaskMargin3d(pad: Pad, part: Pick<Part, "mask_margin"> | undefined | null, board: Pick<MaskPaste, "expansion_nm"> | undefined | null): number {
+export function padMaskMargin3d(pad: Pad, part: Pick<Part, "mask_margin"> | undefined | null, board: Pick<MaskPaste, "expansion_nm"> | undefined | null, rule?: number | null): number {
   if (!padHasCopper(pad)) return 0;
-  const margin = pad.mask_margin ?? part?.mask_margin ?? board?.expansion_nm ?? 0;
+  // With rules of the kind (`HasRulesForConstraintType( SOLDER_MASK_EXPANSION_CONSTRAINT )`, `rule` not undefined) the engine's opt, none being 0 (`margin.value_or( 0 )`).
+  const margin = rule !== undefined ? (rule ?? 0) : (pad.mask_margin ?? part?.mask_margin ?? board?.expansion_nm ?? 0);
   if (margin < 0) {
     const [sx, sy] = pad.size ?? [pad.w, pad.h];
     const minsize = -Math.trunc(Math.min(sx, sy) / 2);

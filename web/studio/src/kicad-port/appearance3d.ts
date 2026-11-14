@@ -165,6 +165,11 @@ export const USER_ROWS: readonly Row[] = [
   row("user_comments", "User.Comments", "Show user comments layer", "user", true),
   row("user_eco1", "User.Eco1", "Show user ECO1 layer", "user", true),
   row("user_eco2", "User.Eco2", "Show user ECO2 layer", "user", true),
+  // KiCad 25ec2335's fab and courtyard rows (`LAYER_3D_F_FAB` .. `LAYER_3D_B_COURTYARD`; `render.show_f_fab` .. `show_b_courtyard`, all false)
+  row("f_fab", "F.Fab", "Show front fabrication layer", "user", true, false),
+  row("b_fab", "B.Fab", "Show back fabrication layer", "user", true, false),
+  row("f_courtyard", "F.Courtyard", "Show front courtyard layer", "user", true, false),
+  row("b_courtyard", "B.Courtyard", "Show back courtyard layer", "user", true, false),
   // `EDA_3D_VIEWER_SETTINGS`: `render.show_user{n}` defaults to false (the four named ones, `show_drawings` .. `show_eco2`, to true).
   ...Array.from({ length: USER_LAYER_COUNT }, (_, i) => row(`user_${i + 1}`, `User.${i + 1}`, `Show user defined layer ${i + 1}`, "user", true, false)),
 ];
@@ -307,6 +312,14 @@ export function rowLayer(id: string): string | null {
       return "Eco1.User";
     case "user_eco2":
       return "Eco2.User";
+    case "f_fab":
+      return "F.Fab";
+    case "b_fab":
+      return "B.Fab";
+    case "f_courtyard":
+      return "F.CrtYd";
+    case "b_courtyard":
+      return "B.CrtYd";
   }
   const m = /^user_(\d+)$/.exec(id);
   return m ? `User.${m[1]}` : null;
@@ -351,6 +364,14 @@ export function userRowOfLayer(layerName: string): string | null {
       return "user_eco1";
     case "Eco2.User":
       return "user_eco2";
+    case "F.Fab":
+      return "f_fab";
+    case "B.Fab":
+      return "b_fab";
+    case "F.CrtYd":
+      return "f_courtyard";
+    case "B.CrtYd":
+      return "b_courtyard";
   }
   const m = /^User\.(\d+)$/.exec(layerName);
   if (m && Number(m[1]) >= 1 && Number(m[1]) <= USER_LAYER_COUNT) return `user_${m[1]}`;
@@ -368,12 +389,21 @@ export function userRowEditorKey(id: string): string {
       return "Eco1_User";
     case "user_eco2":
       return "Eco2_User";
+    // `s_defaultTheme`'s `LAYER_3D_F_FAB` .. are the 2D theme's F_Fab .. colours
+    case "f_fab":
+      return "F_Fab";
+    case "b_fab":
+      return "B_Fab";
+    case "f_courtyard":
+      return "F_CrtYd";
+    case "b_courtyard":
+      return "B_CrtYd";
     default:
       return `User_${id.replace("user_", "")}`;
   }
 }
 
-/** What a drawing on `layerName` is in the 3D view: a silkscreen of a side, an adhesive, a user layer (its row), or nothing KiCad draws (`Edge.Cuts`, courtyard, fab, copper, mask, paste). */
+/** What a drawing on `layerName` is in the 3D view: a silkscreen of a side, an adhesive, a user layer (its row), or nothing KiCad draws (`Edge.Cuts`, copper, mask, paste); a fab or courtyard layer is a user row as KiCad 25ec2335 has it. */
 export type ShapeLayer = { kind: "silk"; side: "top" | "bottom" } | { kind: "adhesive"; side: "top" | "bottom" } | { kind: "user"; row: string } | null;
 
 export function shapeLayerOf(layerName: string): ShapeLayer {
@@ -472,6 +502,11 @@ export const DEFAULT_COLORS: Readonly<Record<string, Rgba>> = {
   user_comments: unit(0.85, 0.85, 0.85, 1),
   user_eco1: unit(0.7, 0.1, 0.1, 1),
   user_eco2: unit(0.7, 0.1, 0.1, 1),
+  // KiCad 25ec2335 `g_DefaultFabColor`, `g_DefaultCourtyardColor`
+  f_fab: unit(0.6, 0.6, 0.6, 1),
+  b_fab: unit(0.6, 0.6, 0.6, 1),
+  f_courtyard: unit(1.0, 0.149, 0.886, 1),
+  b_courtyard: unit(1.0, 0.149, 0.886, 1),
 };
 
 /** The person's colour choices after the swatch of `id` is reset: its `DEFAULT_COLORS` colour (both copper rows at once, as `withSwatch`), or no choice for a row KiCad's default is the theme's. */

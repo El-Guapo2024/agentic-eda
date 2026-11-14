@@ -203,3 +203,55 @@ export function bezierPointAt(start: readonly [number, number], c1: readonly [nu
   const d = t * t * t;
   return [a * start[0] + b * c1[0] + c * c2[0] + d * end[0], a * start[1] + b * c1[1] + c * c2[1] + d * end[1]];
 }
+
+const approxInt = (x: number): number => {
+  const d = 0.6744897501960817;
+  const d4 = d * d * d * d;
+  return x / (1.0 - d + Math.pow(d4 + x * x * 0.25, 0.25));
+};
+
+const approxInvInt = (x: number): number => {
+  const p = 0.39538816;
+  return x * (1.0 - p + Math.sqrt(p * p + 0.25 * x * x));
+};
+
+/** `BEZIER_POLY::getQuadPoly` (Raph Levien's flattening of a quadratic): the start, `n` points at parameters spread for an even error, the end. */
+function getQuadPoly(c: [V, V, V], out: V[], maxError: number): void {
+  const ddx = 2 * c[1][0] - c[0][0] - c[2][0];
+  const ddy = 2 * c[1][1] - c[0][1] - c[2][1];
+  const u0 = (c[1][0] - c[0][0]) * ddx + (c[1][1] - c[0][1]) * ddy;
+  const u2 = (c[2][0] - c[1][0]) * ddx + (c[2][1] - c[1][1]) * ddy;
+  const cr = (c[2][0] - c[0][0]) * ddy - (c[2][1] - c[0][1]) * ddx;
+  const x0 = u0 / cr;
+  const x2 = u2 / cr;
+  const scale = Math.abs(cr) / (Math.hypot(ddx, ddy) * Math.abs(x2 - x0));
+  const a0 = approxInt(x0);
+  const a2 = approxInt(x2);
+  const n = Math.ceil(0.5 * Math.abs(a2 - a0) * Math.sqrt(scale / maxError));
+  const v0 = approxInvInt(a0);
+  const v2 = approxInvInt(a2);
+  const evalAt = (t: number): V => {
+    const omt = 1 - t;
+    return [omt * omt * c[0][0] + 2 * omt * t * c[1][0] + t * t * c[2][0], omt * omt * c[0][1] + 2 * omt * t * c[1][1] + t * t * c[2][1]];
+  };
+  out.push(c[0]);
+  // a straight "curve" (`cross` 0) gives NaN parameters and no points between: its ends are the line
+  for (let ii = 0; Number.isFinite(n) && ii < n; ++ii) {
+    const u = approxInvInt(a0 + ((a2 - a0) * ii) / n);
+    const t = (u - v0) / (v2 - v0);
+    if (Number.isFinite(t)) out.push(evalAt(t));
+  }
+  out.push(c[2]);
+}
+
+/**
+ * `BEZIER_POLY( ctrlPts ).GetPoly( std::vector<VECTOR2D>&, aMaxError )`: a quadratic (three points) or cubic (four) curve as a polyline in doubles, start first and end
+ * last -- what `OUTLINE_DECOMPOSER::cubicTo` flattens a glyph's curves with.
+ */
+export function bezierPolyD(ctrl: ReadonlyArray<readonly [number, number]>, maxError: number): [number, number][] {
+  const err = maxError <= 0 ? 10 : maxError;
+  const out: V[] = [];
+  if (ctrl.length === 3) getQuadPoly([[ctrl[0]![0], ctrl[0]![1]], [ctrl[1]![0], ctrl[1]![1]], [ctrl[2]![0], ctrl[2]![1]]], out, err);
+  else if (ctrl.length === 4) getCubicPoly([[ctrl[0]![0], ctrl[0]![1]], [ctrl[1]![0], ctrl[1]![1]], [ctrl[2]![0], ctrl[2]![1]], [ctrl[3]![0], ctrl[3]![1]]], out, err);
+  return out;
+}

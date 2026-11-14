@@ -248,6 +248,7 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     std::fs::create_dir_all(out).map_err(|e| fail("io", &out.display().to_string(), e.to_string()))?;
     let intent_path = out.join("intent.yaml");
 
+    let mut viewports3d: Vec<serde_json::Value> = Vec::new();
     let (design, model, notes, setup) = match &sources.board {
         Some((name, text, project_dir)) => {
             let (mut design, mut model, notes) = eda::import_kicad_pcb(text)?;
@@ -261,6 +262,8 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
                 let board_file = PathBuf::from(&args.input);
                 let pro_path = board_file.with_extension("kicad_pro");
                 if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
+                    // The 3D viewer's saved viewports (`PROJECT_FILE::m_Viewports3D`, `board.3dviewports`): the studio keeps them in `appearance.json` (UI-LEFT-3 D3-5).
+                    viewports3d = eda_kicad::appearance::viewports3d_from_project(&pro_text);
                     // A board with legacy design settings in its `(setup ..)` keeps them and KiCad ignores the project's, and a board with `(net_class ..)` blocks
                     // keeps its classes in place of the project's (`board.cpp::SetProject`, `eda_kicad::project_json_for_board`).
                     let pro_text = eda_kicad::project_json_for_board(&pro_text, &notes);
@@ -359,6 +362,15 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     let abs_intent = std::fs::canonicalize(&intent_path).unwrap_or(intent_path);
     let meta = Meta { intent: abs_intent.display().to_string(), snap_nm: model.solver.place_snap_nm, spacing_nm: model.solver.place_spacing_nm };
     std::fs::write(out.join("board.json"), serde_json::to_string_pretty(&meta).expect("meta encodes")).map_err(|e| fail("io", "board.json", e.to_string()))?;
+    // The project's 3D viewports, into the folder's `appearance.json` (its `viewer3d` section's other keys kept).
+    if !viewports3d.is_empty() {
+        let mut v3 = crate::appearance_api::get(out).get("viewer3d").cloned().filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+        v3["viewports"] = serde_json::Value::Array(viewports3d);
+        let saved = crate::appearance_api::post(out, &serde_json::json!({ "viewer3d": v3 }).to_string());
+        if let Some(e) = saved.get("error") {
+            eprintln!("  3D viewports of the project not kept: {e}");
+        }
+    }
 
     // The libraries kicad-cli made of the footprints and symbols it read, and the tables that name them, so "Update from Library" finds them from this folder.
     let mut libraries = 0;
@@ -654,7 +666,7 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("b.kicad_pcb"), "(kicad_pcb (version 20240108) (generator \"test\") (general (thickness 1.6)))\n").unwrap();
         std::fs::write(project.join("fp-lib-table"), "(fp_lib_table\n\t(version 7)\n\t(lib (name \"Mine\") (type \"KiCad\") (uri \"${KIPRJMOD}/Mine.pretty\") (options \"\") (descr \"\"))\n)\n").unwrap();
-        std::fs::write(project.join("b.kicad_pro"), r#"{ "text_variables": { "MYLIBS": "${KIPRJMOD}/libs" } }"#).unwrap();
+        std::fs::write(project.join("b.kicad_pro"), r#"{ "text_variables": { "MYLIBS": "${KIPRJMOD}/libs" }, "board": { "3dviewports": [{ "name": "Side", "wz": -7.5 }] } }"#).unwrap();
         let args = [project.join("b.kicad_pcb").display().to_string(), "-o".to_string(), board.display().to_string()];
         if let Err(e) = run(&args) {
             panic!("import failed: {}", e.iter().map(|c| format!("{c:?}")).collect::<String>());
@@ -665,6 +677,10 @@ mod tests {
         assert!(!board.join("sym-lib-table").exists(), "a project without a table brings none");
         let vars = eda_kicad::library_table::read_project_variables(&board);
         assert_eq!(vars.get("MYLIBS"), Some(&format!("{folder}/libs")));
+        // UI-LEFT-3 D3-5: the project's 3D viewports are the folder's (`appearance.json`'s `viewer3d.viewports`)
+        let app = crate::appearance_api::get(&board);
+        assert_eq!(app["viewer3d"]["viewports"][0]["name"], "Side", "{app}");
+        assert_eq!(app["viewer3d"]["viewports"][0]["matrix"][14].as_f64(), Some(-7.5));
         let _ = std::fs::remove_dir_all(&root);
     }
 

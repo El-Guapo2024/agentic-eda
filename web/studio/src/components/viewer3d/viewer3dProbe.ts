@@ -46,6 +46,8 @@ export interface Viewer3dSnapshot {
   copperColors: Record<string, string>;
   /** What kicad-port/layers3d.ts built (`createLayers`): the through holes, the via annuli, the body's post-machining cuts, the plugs, the off-board pads, the via covers, and the server's polygon jobs (asked, answered). */
   layers3d: Record<string, number>;
+  /** The body's pieces shown as the last "While Moving" change left them (`setMoving3d`): those with the holes (`m_boardWithHoles`, the plugs, the masks culled by the holes) and those without (`m_board`). */
+  movingBody: { withHoles: number; noHoles: number };
 }
 
 const empty = (): Viewer3dSnapshot => ({
@@ -62,6 +64,7 @@ const empty = (): Viewer3dSnapshot => ({
   navigator: false,
   copperColors: {},
   layers3d: {},
+  movingBody: { withHoles: 0, noHoles: 0 },
   hovered: null,
   cameraMoving: false,
   scene: {},

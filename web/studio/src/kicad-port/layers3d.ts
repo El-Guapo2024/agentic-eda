@@ -10,13 +10,16 @@
 // scene draws it once the answer is in.
 //
 // Pure: no three.js, no React (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, FieldInfo, FillZone, MaskPaste, Pad, Part, Shape, Track, Via, Zone } from "../api/types";
-import type { BoardBarcode } from "../api/pcbItemTypes";
+import type { BoardState, BoardTable, BoardText, Dimension, FieldInfo, FillZone, MaskPaste, Pad, Part, Shape, Track, Via, Zone } from "../api/types";
+import type { BoardBarcode, BoardTextBox } from "../api/pcbItemTypes";
 import { bezierPolyline } from "./bezierPoly";
-import { kicadArc } from "./lineEnding";
-import { dashPieces, isDashStyle, type DashRatios } from "./strokeDash";
+import { endingInks, hasEndings, kicadArc, shortenArc, shortenBezier, shortenSegment } from "./lineEnding";
+import { DEFAULT_DASH_RATIOS, dashPieces, isDashStyle, strokeArc, strokeSegment, type DashPiece, type DashRatios, type DashStyle } from "./strokeDash";
 import { fieldStrokes } from "./textHit";
-import { boardTextAsField, strokesBoxRing } from "./textCoverage";
+import { boardTextAsField } from "./textCoverage";
+import { frameToWorld, knockoutBox, layoutKicadText, layoutLineAt, layoutSegments, resolveFont, runGlyphs, runInk, type KicadTextLayout } from "./kicadText";
+import { dimensionTextSpec, fieldSpec } from "./textSpecs";
+import { textBoxKicadLayout } from "./pcbTextBox";
 import { artTextAsField, graphicsOf, layersOf } from "./fpArt";
 import { padHasCopper, padMaskMargin3d, pasteMarginOf } from "./footprint3d";
 import { MAX_ERROR_NM, arcToSegmentCount, circlePolygon, nestContours, ovalPolygon, padContours, padPlacement, toBoard, type Contour, type PadPlacement, type Pt } from "./padShape3d";
@@ -255,6 +258,8 @@ interface Ctx {
   jobs: PolyJob[];
   ratios: DashRatios | undefined;
   maskPaste: MaskPaste | undefined;
+  /** The custom rules' margins, when the board's rules have such constraints. */
+  rules?: RuleMargins | null;
 }
 
 /** A job for the server, named by what it holds (so the same polygon is asked for once and its answer kept across builds). */
@@ -288,10 +293,10 @@ function hashPolys(ps: ReadonlyArray<{ outer: Contour; holes: Contour[] }>): str
 }
 
 /** `createTrackWithMargin( track, container, layer, margin )`: each segment of a track (an arc's tessellation is its `pts`) a round segment `width + 2 margin` wide. */
-function addTrack(out: Prim[], t: Pick<Track, "pts" | "width">, margin: number): void {
-  const w = t.width + margin * 2;
-  if (t.pts.length === 1) out.push({ k: "seg", a: t.pts[0]!, b: t.pts[0]!, w });
-  for (let i = 0; i + 1 < t.pts.length; i++) out.push({ k: "seg", a: t.pts[i]!, b: t.pts[i + 1]!, w });
+function addTrack(out: Prim[], t: Pick<Track, "pts" | "width">, margin: number | ((segment: number) => number)): void {
+  const w = (i: number) => t.width + (typeof margin === "number" ? margin : margin(i)) * 2;
+  if (t.pts.length === 1) out.push({ k: "seg", a: t.pts[0]!, b: t.pts[0]!, w: w(0) });
+  for (let i = 0; i + 1 < t.pts.length; i++) out.push({ k: "seg", a: t.pts[i]!, b: t.pts[i + 1]!, w: w(i) });
 }
 
 /** `PCB_VIA::GetWidth( aLayer )`: the padstack's diameter of the layer (a front / inner / back stack, or one per layer), else the via's. */
@@ -321,16 +326,34 @@ function viaSpan(v: Via, layerOrder: readonly string[]): string[] {
   return layerOrder.slice(Math.min(from, to), Math.max(from, to) + 1);
 }
 
-/** `PCB_SHAPE::GetSolderMaskExpansion`: the shape's own margin, else the board's (custom DRC rules are not read). */
-function shapeMaskExpansion(s: Pick<Shape, "solder_mask_margin">, mp: MaskPaste | undefined): number {
-  return s.solder_mask_margin ?? mp?.expansion_nm ?? 0;
+/** `PCB_SHAPE::GetSolderMaskExpansion`: the custom rules' (`rule`, not undefined when the rules have the kind: their opt, none being 0), else the shape's own margin, else the
+ *  board's; "Ensure the resulting mask opening has a non-negative size" of a shape that is not filled. */
+function shapeMaskExpansion(s: Pick<Shape, "solder_mask_margin" | "stroke_width" | "filled">, mp: MaskPaste | undefined, rule?: number | null): number {
+  let margin = rule !== undefined ? (rule ?? 0) : (s.solder_mask_margin ?? mp?.expansion_nm ?? 0);
+  if (margin < 0 && !s.filled) margin = Math.max(margin, -s.stroke_width / 2);
+  return margin;
 }
 
-/** `PCB_TRACK::GetSolderMaskExpansion`: the track's own margin, else the board's, "ensure the resulting mask opening has a non-negative size". */
-function trackMaskExpansion(t: Track, mp: MaskPaste | undefined): number {
-  let margin = t.mask?.margin ?? mp?.expansion_nm ?? 0;
+/** `PCB_TRACK::GetSolderMaskExpansion`: the custom rules' (as above), else the track's own margin, else the board's, "ensure the resulting mask opening has a non-negative size". */
+function trackMaskExpansion(t: Track, mp: MaskPaste | undefined, rule?: number | null): number {
+  let margin = rule !== undefined ? (rule ?? 0) : (t.mask?.margin ?? mp?.expansion_nm ?? 0);
   if (margin < 0) margin = Math.max(margin, -t.width / 2);
   return margin;
+}
+
+/**
+ * `GET /api/board3d`'s `rule_margins` (crates/cli/src/board3d_api.rs `rule_margins`): what the board's custom rules make of the mask expansions and paste margins (each
+ * constraint's opt, or null), for the kinds the rules have: a pad's by its id (`REF.NUM`, `REF.NUM#k`) per side, a track's per segment, a board shape's by its id, a
+ * footprint's graphics in their order.
+ */
+export interface RuleMargins {
+  mask: boolean;
+  paste_abs: boolean;
+  paste_rel: boolean;
+  pads: Record<string, { mask: [number | null, number | null] | null; abs: [number | null, number | null] | null; rel: [number | null, number | null] | null }>;
+  tracks: Record<string, Array<number | null>>;
+  shapes: Record<string, number | null>;
+  fp_shapes: Record<string, Array<number | null>>;
 }
 
 /** `PCB_SHAPE::IsOnLayer`: its layer, and its side's mask when it has a solder mask opening on outer copper. */
@@ -397,20 +420,40 @@ function outlineSegs(out: Prim[], contour: Contour, width: number): void {
   for (let i = 0; i < contour.length; i++) out.push({ k: "seg", a: contour[i]!, b: contour[(i + 1) % contour.length]!, w: width });
 }
 
+/** An arc's body once its endings have taken their part (`CalcArcAngles`, `ShortenArcForEndings`): its centre, its first point and its sweep in degrees; null when nothing is left. */
+function arcBody(s: Extract<Shape, { kind: "arc" }>, k: NonNullable<ReturnType<typeof kicadArc>>): { c: Pt; from: Pt; sweepDeg: number } | null {
+  const c: Pt = [k.centre[0], k.centre[1]];
+  const r = Math.hypot(k.start[0] - c[0], k.start[1] - c[1]);
+  const a0 = (Math.atan2(k.start[1] - c[1], k.start[0] - c[0]) * 180) / Math.PI;
+  let a1 = (Math.atan2(k.end[1] - c[1], k.end[0] - c[0]) * 180) / Math.PI;
+  if (a1 === a0) a1 = a0 + 360;
+  while (a1 < a0) a1 += 360;
+  const body = shortenArc(a0, a1 - a0, r, s.start_ending, s.end_ending, s.stroke_width);
+  if (!body) return null;
+  const from: Pt = body[0] === a0 ? [k.start[0], k.start[1]] : [c[0] + r * Math.cos((body[0] * Math.PI) / 180), c[1] + r * Math.sin((body[0] * Math.PI) / 180)];
+  return { c, from, sweepDeg: body[1] };
+}
+
+/** A curve's body as KiCad 25ec2335 flattens it (`ShortenedBezierPolyline`): what its endings leave, at the board's error. */
+function bezierBody(s: Extract<Shape, { kind: "bezier" }>): Pt[] {
+  const b = shortenBezier({ start: s.start, c1: s.c1, c2: s.c2, end: s.end }, s.start_ending, s.end_ending, s.stroke_width);
+  return b ? bezierPolyline(b.start, b.c1, b.c2, b.end, MAX_ERROR_NM) : [];
+}
+
 /**
  * `BOARD_ADAPTER::addShape( const PCB_SHAPE*, .., aLayer )`: a shape on `layer`. On a mask layer, a shape on outer copper with a solder mask opening is grown by its expansion,
  * solid and filled if hatched; a solid line is drawn as round segments of its width (a circle as a ring, an arc in `createArcSegments`' pieces); a dashed one as
  * `STROKE_PARAMS::Stroke` cuts it (kicad-port/strokeDash.ts) with Board Setup's ratios; a filled shape as its polygon, without its line width when it is dashed; a
- * hatched one with its hatch lines. Line endings are not drawn (`aShape->GetStartEnding()`).
+ * hatched one with its hatch lines; a line, an arc or a curve shortened for its endings and the endings drawn (KiCad 25ec2335).
  */
-export function addShape(ctx: Ctx, out: Prim[], s: Shape, layer: string): void {
+export function addShape(ctx: Ctx, out: Prim[], s: Shape, layer: string, rule?: number | null): void {
   let linewidth = s.stroke_width;
   let margin = 0;
   let dashed = isDashStyle(s.dash);
   let solidFill = s.filled;
   let hatched = !!s.fill && !s.filled;
   if (isMaskLayer(layer) && s.solder_mask && (s.layer === "F.Cu" || s.layer === "B.Cu")) {
-    margin = shapeMaskExpansion(s, ctx.maskPaste);
+    margin = shapeMaskExpansion(s, ctx.maskPaste, rule);
     linewidth += margin * 2;
     dashed = false;
     if (hatched) {
@@ -448,18 +491,20 @@ export function addShape(ctx: Ctx, out: Prim[], s: Shape, layer: string): void {
           out.push({ k: "seg", a: s.start, b: s.end, w: linewidth });
           break;
         }
-        const c: Pt = [k.centre[0], k.centre[1]];
-        const a0 = Math.atan2(k.start[1] - c[1], k.start[0] - c[0]);
-        let a1 = Math.atan2(k.end[1] - c[1], k.end[0] - c[0]);
-        while (a1 <= a0) a1 += Math.PI * 2;
-        arcSegs(out, c, [k.start[0], k.start[1]], ((a1 - a0) * 180) / Math.PI, linewidth);
+        // KiCad 25ec2335: `ShortenArcForEndings( startAngle, arcAngle, radius, linewidth )`, the start turned by what the start ending took
+        const body = arcBody(s, k);
+        if (body) arcSegs(out, body.c, body.from, body.sweepDeg, linewidth);
         break;
       }
-      case "segment":
-        out.push({ k: "seg", a: s.start, b: s.end, w: linewidth });
+      case "segment": {
+        // KiCad 25ec2335: `EDA_SHAPE::ShortenSegmentForEndings( segStart, segEnd, startEnding, endEnding, linewidth )`
+        const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, s.stroke_width);
+        if (body) out.push({ k: "seg", a: body[0], b: body[1], w: linewidth });
         break;
+      }
       case "bezier": {
-        const pts = bezierPolyline(s.start, s.c1, s.c2, s.end, 5);
+        // KiCad 25ec2335: `ShortenedBezierPolyline( linewidth )`, `BEZIER_POLY::GetPoly( pts, std::max( 1, getMaxError() ) )`
+        const pts = bezierBody(s);
         for (let i = 0; i + 1 < pts.length; i++) out.push({ k: "seg", a: pts[i]!, b: pts[i + 1]!, w: linewidth });
         break;
       }
@@ -484,7 +529,34 @@ export function addShape(ctx: Ctx, out: Prim[], s: Shape, layer: string): void {
     }
   }
   if (dashed) {
-    for (const [a, b] of dashPieces(s, { style: s.dash!, width: s.stroke_width, ...(ctx.ratios ? { ratios: ctx.ratios } : {}) }, 5)) out.push({ k: "seg", a, b, w: linewidth });
+    // `STROKE_PARAMS::Stroke` of `MakeEffectiveShapesForStroking( linewidth )`: the body the endings leave (KiCad 25ec2335)
+    const ratios = ctx.ratios ?? DEFAULT_DASH_RATIOS;
+    const style = s.dash as DashStyle;
+    const pieces: DashPiece[] = [];
+    if (s.kind === "segment" && hasEndings(s)) {
+      const body = shortenSegment(s.start, s.end, s.start_ending, s.end_ending, s.stroke_width);
+      if (body) strokeSegment(body[0], body[1], style, s.stroke_width, ratios, pieces);
+    } else if (s.kind === "arc" && hasEndings(s)) {
+      const k = kicadArc(s.start, s.mid, s.end);
+      const body = k ? arcBody(s, k) : null;
+      if (body) strokeArc(body.c, body.from, body.sweepDeg, style, s.stroke_width, ratios, pieces);
+    } else if (s.kind === "bezier") {
+      const pts = bezierBody(s);
+      for (let i = 1; i < pts.length; i++) strokeSegment(pts[i - 1]!, pts[i]!, style, s.stroke_width, ratios, pieces);
+    } else pieces.push(...dashPieces(s, { style, width: s.stroke_width, ratios }, MAX_ERROR_NM));
+    for (const [a, b] of pieces) out.push({ k: "seg", a, b, w: linewidth });
+  }
+  // KiCad 25ec2335's line endings (`LINE_ENDING::GetShapes` at `GetLineEndingEndpoints`, turned by `GetEndingTangents`): an open arrow as round segments of its own stroke
+  // or the line's, a closed one as its polygon, outlined with round segments when it has a stroke of its own.
+  if ((s.kind === "segment" || s.kind === "arc" || s.kind === "bezier") && hasEndings(s)) {
+    for (const ink of endingInks(s)) {
+      if (!ink.fill) {
+        for (let i = 0; i + 1 < ink.pts.length; i++) out.push({ k: "seg", a: ink.pts[i]!, b: ink.pts[i + 1]!, w: ink.stroke });
+        continue;
+      }
+      if (ink.stroke > 0) outlineSegs(out, ink.pts, ink.stroke);
+      out.push({ k: "poly", contours: [ink.pts] });
+    }
   }
   // `ConvertPolygonToTriangles( aShape->GetHatching() )`: the hatch lines `UpdateHatching` made, each its width wide.
   if (hatched && s.hatch_lines) {
@@ -494,23 +566,39 @@ export function addShape(ctx: Ctx, out: Prim[], s: Shape, layer: string): void {
 }
 
 /**
- * `BOARD_ADAPTER::addText`: a stroke-font text's pen strokes as round segments of its pen width (`CALLBACK_GAL`'s stroke callback); an outline font's runs as their ink's
- * boxes (kicad-port/textHit.ts `fieldStrokes`: the page has no glyph triangles); a knockout text the box of its strokes grown by `GetKnockoutTextMargin` less its strokes
- * (`PCB_TEXT::TransformTextToPolySet`), the server's subtraction.
+ * `BOARD_ADAPTER::addText` of a laid-out text (kicad-port/kicadText.ts `layoutKicadText`): a stroke-font text's pen strokes as round segments of its pen width
+ * (`CALLBACK_GAL`'s stroke callback); an outline font's glyphs as their polygons (the triangulation callback: `OUTLINE_GLYPH::Triangulate`, kicad-port/sfnt.ts
+ * `sfntGlyphPolys`), a run's ink box only while its face's file is not read; a knockout text (`knockout`: its size) the box of what it draws grown by
+ * `GetKnockoutTextMargin` less its strokes and glyphs (`PCB_TEXT::TransformTextToPolySet`), the server's subtraction.
  */
-export function addText(ctx: Ctx, out: Prim[], f: FieldInfo): void {
-  const s = fieldStrokes(f);
-  if (f.knockout) {
-    const margin = Math.max(kiRound(s.pen / 2), kiRound(f.h / 9));
-    const box = strokesBoxRing(s, margin);
+export function addTextLayout(ctx: Ctx, out: Prim[], l: KicadTextLayout, knockout?: readonly [number, number]): void {
+  const segs = layoutSegments(l);
+  const glyphs: Array<{ outer: Contour; holes: Contour[] }> = [];
+  for (const r of l.runs) {
+    const polys = runGlyphs(l, r);
+    if (polys) {
+      for (const g of polys) glyphs.push({ outer: g.outer.map(([x, y]) => frameToWorld(l, x, y)), holes: g.holes.map((h) => h.map(([x, y]) => frameToWorld(l, x, y))) });
+      continue;
+    }
+    const ink = runInk(l, r);
+    if (ink) glyphs.push({ outer: [frameToWorld(l, ink.x0, ink.y0), frameToWorld(l, ink.x1, ink.y0), frameToWorld(l, ink.x1, ink.y1), frameToWorld(l, ink.x0, ink.y1)], holes: [] });
+  }
+  if (knockout) {
+    const box = knockoutBox(l, knockout);
     if (!box) return;
-    const strokes = s.segs.map(([x0, y0, x1, y1]) => ({ outer: x0 === x1 && y0 === y1 ? circlePolygon([x0, y0], s.pen / 2, MAX_ERROR_NM) : ovalPolygon([x0, y0], [x1, y1], s.pen, MAX_ERROR_NM), holes: [] }));
-    for (const a of s.areas) strokes.push({ outer: a.map(([x, y]) => [x, y] as Pt), holes: [] });
-    out.push(job(ctx, { a: [{ outer: box.map(([x, y]) => [x, y] as Pt), holes: [] }], b: strokes }));
+    const ring: Contour = [frameToWorld(l, box.x0, box.y0), frameToWorld(l, box.x1, box.y0), frameToWorld(l, box.x1, box.y1), frameToWorld(l, box.x0, box.y1)];
+    const strokes = segs.map(([x0, y0, x1, y1]) => ({ outer: x0 === x1 && y0 === y1 ? circlePolygon([x0, y0], l.pen / 2, MAX_ERROR_NM) : ovalPolygon([x0, y0], [x1, y1], l.pen, MAX_ERROR_NM), holes: [] as Contour[] }));
+    out.push(job(ctx, { a: [{ outer: ring, holes: [] }], b: [...strokes, ...glyphs] }));
     return;
   }
-  for (const [x0, y0, x1, y1] of s.segs) out.push({ k: "seg", a: [x0, y0], b: [x1, y1], w: s.pen });
-  for (const a of s.areas) out.push({ k: "poly", contours: [a.map(([x, y]) => [x, y] as Pt)] });
+  for (const [x0, y0, x1, y1] of segs) out.push({ k: "seg", a: [x0, y0], b: [x1, y1], w: l.pen });
+  for (const g of glyphs) out.push({ k: "poly", contours: [g.outer, ...g.holes] });
+}
+
+/** `addText` of a footprint's field or text, or a board text made one (`FieldInfo`): its spec (kicad-port/textSpecs.ts `fieldSpec`) laid out in its face. */
+export function addText(ctx: Ctx, out: Prim[], f: FieldInfo): void {
+  const { spec, face } = fieldSpec(f);
+  addTextLayout(ctx, out, layoutKicadText(spec, resolveFont(face, spec.bold, spec.italic)), f.knockout ? spec.size : undefined);
 }
 
 /** A board text (`PCB_TEXT`) through [`addText`]. */
@@ -523,6 +611,83 @@ function addBarcode(out: Prim[], b: BoardBarcode, paths: ReadonlyArray<ReadonlyA
   if (!paths) return;
   // The plot's micrometres about the barcode's centre, already turned and mirrored.
   for (const path of paths) out.push({ k: "poly", contours: path.map((ring) => ring.map(([x, y]) => [b.x + x * 1000, b.y + y * 1000] as Pt)) });
+}
+
+/** The board's text boxes, tables and dimensions on `layer` (`createLayers`' `PCB_TEXTBOX_T`, `PCB_TABLE_T` and `PCB_DIM_*` cases, on copper and on the technical layers). */
+function addBoardItems(ctx: Ctx, out: Prim[], board: BoardState, layer: string): void {
+  for (const b of board.drawings?.text_boxes ?? []) if (b.layer === layer) tagged(out, "text-box", () => addTextBox(ctx, out, b, true));
+  for (const t of board.drawings?.tables ?? []) if (t.layer === layer) tagged(out, "table", () => addTable(ctx, out, t));
+  for (const d of (board.drawings?.dimensions ?? []) as Dimension[]) if (d.layer === layer) tagged(out, "dimension", () => addDimension(ctx, out, d));
+}
+
+/**
+ * `BOARD_ADAPTER::addShape( const PCB_TEXTBOX*, .., aOwner )`: its text (`addText( aTextBox, aContainer, aOwner )`: a knockout box of the board -- its own owner -- is the box,
+ * with its border, less the text, `PCB_TEXTBOX::TransformTextToPolySet`; a footprint's box is owned by the footprint, never a knockout), then its border when it has one: a
+ * rectangle through `addShape( PCB_SHAPE )` (its line style kept), a turned box's outline as its strokes (`PCB_SHAPE::TransformShapeToPolygon`).
+ */
+function addTextBox(ctx: Ctx, out: Prim[], b: BoardTextBox, ownedByItself: boolean): void {
+  const { layout } = textBoxKicadLayout(b);
+  const outline = textBoxOutline(b);
+  const width = b.stroke_width;
+  if (ownedByItself && b.knockout) {
+    // `TransformShapeToPolygon` of the box: its corners and, with a border, each side as an oval of the line's width
+    const a: Array<{ outer: Contour; holes: Contour[] }> = [{ outer: outline, holes: [] }];
+    if (b.border && width > 0) for (let i = 0; i < outline.length; i++) a.push({ outer: ovalPolygon(outline[i]!, outline[(i + 1) % outline.length]!, width, MAX_ERROR_NM), holes: [] });
+    const glyphs: Prim[] = [];
+    addTextLayout(ctx, glyphs, layout);
+    const b2 = glyphs.flatMap((p) => (p.k === "poly" ? [{ outer: p.contours[0]!, holes: p.contours.slice(1) }] : primContours(p).map((c) => ({ outer: c, holes: [] as Contour[] }))));
+    out.push(job(ctx, { a, b: b2 }));
+  } else if ((b.shown ?? b.text) !== "") addTextLayout(ctx, out, layout);
+  if (!b.border) return;
+  if (b.pts.length === 0) {
+    const style = b.line_style === "default" ? undefined : b.line_style;
+    addShape(ctx, out, { id: b.id, kind: "rect", layer: b.layer, start: b.start, end: b.end, stroke_width: width, filled: false, ...(style && style !== "solid" ? { dash: style } : {}) } as Shape, "");
+  } else if (width > 0) outlineSegs(out, outline, width);
+}
+
+/** A text box's outline: its corners (`GetRectCorners`), or the four of a box turned by an angle that is no multiple of 90 degrees. */
+function textBoxOutline(b: Pick<BoardTextBox, "start" | "end" | "pts">): Contour {
+  if (b.pts.length >= 3) return b.pts.map(([x, y]) => [x, y] as Pt);
+  return rectCorners({ start: b.start, end: b.end });
+}
+
+/** `BOARD_ADAPTER::addShape( const PCB_DIMENSION_BASE* )`: its text, then each of its shapes -- a segment as a round segment of the line's width, a circle as a ring. */
+function addDimension(ctx: Ctx, out: Prim[], d: Dimension): void {
+  if (d.text) {
+    const { spec, face } = dimensionTextSpec(d);
+    addTextLayout(ctx, out, layoutKicadText(spec, resolveFont(face, spec.bold, spec.italic)));
+  }
+  const w = d.stroke_width;
+  for (const [a, b] of d.lines) out.push(a[0] === b[0] && a[1] === b[1] ? { k: "circle", c: a, r: w / 2 } : { k: "seg", a, b, w });
+  for (const [c, r] of d.circles ?? []) {
+    const ri = r - w / 2;
+    const ro = r + w / 2;
+    // `addRING_2D`: "if( aOuterRadius > aInnerRadius && aInnerRadius > 0.0f )"
+    if (ro > ri && ri > 0) out.push({ k: "ring", c, ri, ro });
+  }
+}
+
+/**
+ * `BOARD_ADAPTER::addTable`: `DrawBorders`' lines as round segments of their stroke's width (solid: the 3D view does not dash a table), then every cell another does not
+ * cover, its text (`addText( cell, .. )`) laid out as the canvas lays it out (components/canvas/tablePaint.ts: the server's lines in the stroke font, `GetDrawPos` in an
+ * outline face).
+ */
+function addTable(ctx: Ctx, out: Prim[], t: BoardTable): void {
+  for (const b of t.borders) {
+    if (b.width < 0) continue;
+    out.push({ k: "seg", a: b.a, b: b.b, w: b.width });
+  }
+  for (const c of t.cells) {
+    if (c.col_span === 0 || c.row_span === 0) continue;
+    const font = resolveFont(c.face, c.bold, c.italic);
+    const size: [number, number] = [c.size_w || c.size_h, c.size_h];
+    const look = { size, pen: c.pen, angleDeg: t.angle / 1000, mirror: c.mirror, italic: c.italic, bold: c.bold };
+    if (font.kind === "outline" && c.draw_pos) {
+      addTextLayout(ctx, out, layoutKicadText({ ...look, text: c.shown ?? c.text, pos: c.draw_pos, halign: c.h_align, valign: c.v_align, lineSpacing: (c.line_spacing || 1000) / 1000 }, font));
+      continue;
+    }
+    for (const line of c.lines) if (line.text) addTextLayout(ctx, out, layoutLineAt(line.text, [line.x, line.y], look));
+  }
 }
 
 /**
@@ -553,7 +718,16 @@ function padCopperOn(pad: Pad, part: Part, layer: string): Contour[] | null {
 
 /** `BOARD_ADAPTER::addPads( footprint, container, layer )`: the footprint's pads on `layer` -- on a copper layer those with copper there; on a mask layer grown by `GetSolderMaskExpansion`, on a paste layer by `GetSolderPasteMargin`. */
 function addPads(ctx: Ctx, out: Prim[], part: Part, layer: string, layerOrder: readonly string[]): void {
-  for (const pad of part.pads ?? []) {
+  // the studio's pad ids (kicad-port/pcbItems.ts `padIds`): what the custom rules' margins are keyed by
+  const seen = new Map<string, number>();
+  const ids = (part.pads ?? []).map((pad) => {
+    const n = (seen.get(pad.num) ?? 0) + 1;
+    seen.set(pad.num, n);
+    return n === 1 ? `${part.ref}.${pad.num}` : `${part.ref}.${pad.num}#${n}`;
+  });
+  const side = layer.startsWith("B.") ? 1 : 0;
+  for (const [pi, pad] of (part.pads ?? []).entries()) {
+    const rule = ctx.rules?.pads[ids[pi]!];
     if (isCopperLayer(layer)) {
       const layers = Array.isArray(pad.stack_layers) ? pad.stack_layers.flatMap((g) => g.layers) : padCopperLayers(pad, part, layerOrder);
       if (!layers.includes(layer)) continue;
@@ -563,10 +737,10 @@ function addPads(ctx: Ctx, out: Prim[], part: Part, layer: string, layerOrder: r
     }
     if (!padOnTechLayer(pad, part, layer)) continue;
     if (isMaskLayer(layer)) {
-      const m = padMaskMargin3d(pad, part, ctx.maskPaste);
+      const m = padMaskMargin3d(pad, part, ctx.maskPaste, ctx.rules?.mask ? (rule?.mask?.[side] ?? null) : undefined);
       addPadWithMargin(ctx, out, pad, part, [m, m]);
     } else if (layer === "F.Paste" || layer === "B.Paste") {
-      const m = padHasCopper(pad) ? pasteMarginOf(pad, part, ctx.maskPaste) : ([0, 0] as Pt);
+      const m = padHasCopper(pad) ? pasteMarginOf(pad, part, ctx.maskPaste, { abs: ctx.rules?.paste_abs ? rule?.abs?.[side] : null, rel: ctx.rules?.paste_rel ? rule?.rel?.[side] : null }) : ([0, 0] as Pt);
       addPadWithMargin(ctx, out, pad, part, m);
     } else {
       addPadWithMargin(ctx, out, pad, part, [0, 0]);
@@ -599,11 +773,14 @@ function addFootprintShapes(ctx: Ctx, out: Prim[], part: Part, layer: string, op
       if (t.layer === layer && t.text) tagged(out, t.role === "reference" ? "part-ref" : t.role === "value" ? "part-value" : "fp-text", () => addText(ctx, out, artTextAsField(t)));
     }
   }
+  for (const b of part.items?.text_boxes ?? []) if (b.layer === layer) tagged(out, "text-box", () => addTextBox(ctx, out, b, false));
+  for (const t of part.items?.tables ?? []) if (t.layer === layer) tagged(out, "table", () => addTable(ctx, out, t));
+  for (const d of part.items?.dimensions ?? []) if (d.layer === layer) tagged(out, "dimension", () => addDimension(ctx, out, d));
   for (const b of part.items?.barcodes ?? []) if (b.layer === layer) tagged(out, "barcode", () => addBarcode(out, b, barcodePaths(b)));
-  for (const g of graphicsOf(part)) {
+  for (const [gi, g] of graphicsOf(part).entries()) {
     for (const l of layersOf(g)) {
       const s = l === g.layer ? g : { ...g, layer: l };
-      if (shapeOnLayer(s, layer)) tagged(out, "fp-shape", () => addShape(ctx, out, s, layer));
+      if (shapeOnLayer(s, layer)) tagged(out, "fp-shape", () => addShape(ctx, out, s, layer, ctx.rules?.mask ? (ctx.rules.fp_shapes[part.ref]?.[gi] ?? null) : undefined));
     }
   }
 }
@@ -629,8 +806,8 @@ function layerEnabled(board: BoardState, layer: string, layerOrder: readonly str
   return !enabled || enabled.length === 0 || enabled.includes(layer);
 }
 
-/** `LSET::AllNonCuMask().Seq( { B_Adhes, F_Adhes, .. } )`: the technical layers `createLayers` builds, in its order (the fab and courtyard layers are not 3D rows in the studio). */
-export const TECH_LAYERS: readonly string[] = ["B.Adhes", "F.Adhes", "B.Paste", "F.Paste", "B.SilkS", "F.SilkS", "B.Mask", "F.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", ...Array.from({ length: 45 }, (_, i) => `User.${i + 1}`)];
+/** `techLayerList`: the technical layers `createLayers` builds, in its order (KiCad 25ec2335: the fab and courtyard layers after the four named user layers). */
+export const TECH_LAYERS: readonly string[] = ["B.Adhes", "F.Adhes", "B.Paste", "F.Paste", "B.SilkS", "F.SilkS", "B.Mask", "F.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "F.Fab", "B.Fab", "F.CrtYd", "B.CrtYd", ...Array.from({ length: 45 }, (_, i) => `User.${i + 1}`)];
 
 /** The box of a footprint (`FOOTPRINT::GetBoundingBox`): its pads, its graphics and its shown texts. Null for a footprint with none. */
 function footprintBox(part: Part): [number, number, number, number] | null {
@@ -667,13 +844,15 @@ export interface Layers3dInput {
   zoneFills?: readonly FillZone[];
   /** A barcode's polygons once they are in (kicad-port/barcodeShapes.ts `readyPaths`). */
   barcodePaths?: (b: BoardBarcode) => BarcodePaths | null;
+  /** `GET /api/board3d`'s `rule_margins`, once it has answered. */
+  ruleMargins?: RuleMargins | null;
 }
 
 /** `BOARD_ADAPTER::createLayers` and the hole and post-machining geometry `RENDER_3D_OPENGL::bgWorker` makes from it (`backfillPostMachine`, `generateViaBarrels`, `generateViaCovers`). */
 export function buildLayers3d(board: BoardState, input: Layers3dInput, opts: Layers3dOptions): Layers3d {
   const layerOrder = input.layerOrder;
   const mp = board.board_rules?.mask_paste;
-  const ctx: Ctx = { board, jobs: [], ratios: dashRatiosOf(board), maskPaste: mp };
+  const ctx: Ctx = { board, jobs: [], ratios: dashRatiosOf(board), maskPaste: mp, rules: input.ruleMargins ?? null };
   const barcodePaths = input.barcodePaths ?? (() => null);
   const plating = opts.plating;
   const halfPlating = plating / 2;
@@ -788,8 +967,9 @@ export function buildLayers3d(board: BoardState, input: Layers3dInput, opts: Lay
       addPads(ctx, c, part, layer, layerOrder);
       addFootprintShapes(ctx, c, part, layer, opts, barcodePaths);
     }
-    for (const s of drawings?.shapes ?? []) if (shapeOnLayer(s, layer)) tagged(c, "shape", () => addShape(ctx, c, s, layer));
+    for (const s of drawings?.shapes ?? []) if (shapeOnLayer(s, layer)) tagged(c, "shape", () => addShape(ctx, c, s, layer, ctx.rules?.mask ? (ctx.rules.shapes[s.id] ?? null) : undefined));
     for (const t of drawings?.texts ?? []) if (t.layer === layer) tagged(c, "text", () => addBoardText(ctx, c, t));
+    addBoardItems(ctx, c, board, layer);
     for (const b of drawings?.barcodes ?? []) if (b.layer === layer) tagged(c, "barcode", () => addBarcode(c, b, barcodePaths(b)));
     if (opts.showZones) for (const z of zones) if (zoneLayers(z).includes(layer)) tagged(c, "zone-fill", () => addZone(c, z, layer, input.zoneFills));
   }
@@ -800,12 +980,18 @@ export function buildLayers3d(board: BoardState, input: Layers3dInput, opts: Lay
     if (!enabled3d(layer) && !forced) continue;
     const c: Prim[] = [];
     out.layers.set(layer, c);
-    for (const s of drawings?.shapes ?? []) if (shapeOnLayer(s, layer)) tagged(c, "shape", () => addShape(ctx, c, s, layer));
+    for (const s of drawings?.shapes ?? []) if (shapeOnLayer(s, layer)) tagged(c, "shape", () => addShape(ctx, c, s, layer, ctx.rules?.mask ? (ctx.rules.shapes[s.id] ?? null) : undefined));
     for (const t of drawings?.texts ?? []) if (t.layer === layer) tagged(c, "text", () => addBoardText(ctx, c, t));
+    addBoardItems(ctx, c, board, layer);
     for (const b of drawings?.barcodes ?? []) if (b.layer === layer) tagged(c, "barcode", () => addBarcode(c, b, barcodePaths(b)));
     if (isMaskLayer(layer)) {
       const copper = layer === "F.Mask" ? "F.Cu" : "B.Cu";
-      for (const t of tracks) if (t.mask && t.layer === copper) tagged(c, "track", () => addTrack(c, t, trackMaskExpansion(t, mp)));
+      for (const t of tracks) {
+        if (!t.mask || t.layer !== copper) continue;
+        // each segment's own expansion (`createTrackWithMargin( track, .., track->GetSolderMaskExpansion() )`, a track being its segments to KiCad)
+        const perSeg = ctx.rules?.mask ? ctx.rules.tracks[t.id] : undefined;
+        tagged(c, "track", () => addTrack(c, t, (i) => trackMaskExpansion(t, mp, ctx.rules?.mask ? (perSeg?.[i] ?? null) : undefined)));
+      }
       for (const v of vias) {
         // `PCB_VIA::IsOnLayer( F_Mask )`: "a via on a mask layer if not tented and if it is on the corresponding external copper layer", and flashed there.
         const span = viaSpan(v, layerOrder);

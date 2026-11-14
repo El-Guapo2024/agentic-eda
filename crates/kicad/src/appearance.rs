@@ -209,6 +209,23 @@ fn viewport3d_json(v: &Value) -> Option<Value> {
     Some(Value::Object(out))
 }
 
+/// The 3D viewer's saved viewports of a `.kicad_pro` (`board.3dviewports`, `PARAM_VIEWPORT3D::jsonToViewports`) as the studio's `appearance.json` keeps them
+/// (`viewer3d.viewports[]`): each with a name, its `matrix` column-major (a key the file lacks is the identity's, `VIEWPORT3D`'s `glm::mat4()`), and no studio camera --
+/// the page puts the camera at the matrix as `CAMERA::SetViewMatrix` does (`web/studio/src/kicad-port/viewer3dSettings.ts` `viewFromKicadMatrix`). Empty for a project with
+/// none ("if( aJson.empty() || !aJson.is_array() ) return;").
+pub fn viewports3d_from_project(pro_text: &str) -> Vec<Value> {
+    let Ok(pro) = serde_json::from_str::<Value>(pro_text) else { return Vec::new() };
+    let Some(list) = pro.get("board").and_then(|b| b.get("3dviewports")).and_then(Value::as_array) else { return Vec::new() };
+    list.iter()
+        .filter_map(|v| {
+            // "if( viewport.contains( "name" ) )"
+            let name = v.get("name").and_then(Value::as_str)?;
+            let matrix: Vec<f64> = VIEWPORT3D_KEYS.iter().enumerate().map(|(i, k)| v.get(*k).and_then(Value::as_f64).unwrap_or(if i % 5 == 0 { 1.0 } else { 0.0 })).collect();
+            Some(json!({ "name": name, "matrix": matrix }))
+        })
+        .collect()
+}
+
 /// The Appearance settings with the nets they name under the board's names: a net colour (`project.net_colors`) or a hidden net (`local.hidden_nets`) saved
 /// under a name the board's nets no longer have -- the intent's, before the board loader gave the net KiCad's (`ConstraintModel::intent_net_names`,
 /// `FB` is `/FB`) -- is the net's under its new name, as a net class follows its nets (`crates/cli/src/net_names.rs`). A name that is neither stays.
@@ -647,6 +664,27 @@ mod tests {
         let mut untouched = json!({ "board": {} });
         merge_into_project(&mut untouched, &json!({ "viewer3d": { "viewports": [] } }));
         assert!(untouched["board"].get("3dviewports").is_none(), "nothing for an empty list");
+    }
+
+    /// UI-LEFT-3 D3-5: a project's `board.3dviewports` read back as the studio keeps them, a missing key the identity's; what the derived project writes again.
+    #[test]
+    fn the_3d_viewports_of_a_project_are_read_back() {
+        let pro = json!({ "board": { "3dviewports": [
+            { "name": "Tilted", "xx": 1.0, "xy": 0.0, "xz": 0.0, "xw": 0.0, "yx": 0.0, "yy": 0.5, "yz": 0.866, "yw": 0.0, "zx": 0.0, "zy": -0.866, "zz": 0.5, "zw": 0.0, "wx": 1.5, "wy": -2.0, "wz": -9.0, "ww": 1.0 },
+            { "name": "Bare" },
+            { "xx": 1.0 }
+        ] } })
+        .to_string();
+        let vps = viewports3d_from_project(&pro);
+        assert_eq!(vps.len(), 2, "one without a name is left out");
+        assert_eq!(vps[0]["name"], "Tilted");
+        assert_eq!(vps[0]["matrix"][6].as_f64(), Some(0.866), "column by column: yz");
+        assert_eq!(vps[0]["matrix"][14].as_f64(), Some(-9.0), "wz");
+        assert_eq!(vps[1]["matrix"], json!([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]), "the identity");
+        assert!(viewports3d_from_project("{}").is_empty());
+        let mut out = json!({});
+        merge_into_project(&mut out, &json!({ "viewer3d": { "viewports": vps } }));
+        assert_eq!(out["board"]["3dviewports"][0]["yz"].as_f64(), Some(0.866), "and written back as it was read");
     }
 
     #[test]

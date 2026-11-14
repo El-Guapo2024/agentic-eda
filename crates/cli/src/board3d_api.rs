@@ -186,12 +186,98 @@ pub fn polys_report(body: &[u8]) -> Value {
     json!({ "results": results })
 }
 
-/// The answer for the board in `dir`.
+/// The answer for the board in `dir`: [`board3d_json`] and the custom rules' margins ([`rule_margins`]).
 pub fn report(dir: &std::path::Path) -> Value {
     match crate::board::load(dir) {
-        Ok((_, design, model)) => board3d_json(&design, &model),
+        Ok((meta, design, model)) => {
+            let mut out = board3d_json(&design, &model);
+            out["rule_margins"] = rule_margins(dir, &meta.intent, &design, &model);
+            out
+        }
         Err(e) => json!({ "error": crate::board::reasons(&e) }),
     }
+}
+
+/// What the custom rules make of the solder mask expansions and paste margins the 3D view opens the masks and lays the paste with: `PAD::GetSolderMaskExpansion`,
+/// `PAD::GetSolderPasteMargin`, `PCB_TRACK::GetSolderMaskExpansion` and `PCB_SHAPE::GetSolderMaskExpansion` (pcbnew/pad.cpp, pcb_track.cpp, pcb_shape.cpp) ask the DRC
+/// engine -- `if( drcEngine->HasRulesForConstraintType( SOLDER_MASK_EXPANSION_CONSTRAINT ) )` .. `EvalRules( SOLDER_MASK_EXPANSION_CONSTRAINT, this, nullptr, aLayer )`,
+/// its `m_Value.Opt()` -- whenever the board's rules have a constraint of the kind; the engine's own fallback is the item's, its footprint's and the board's values
+/// (`eda_drc::constraints`). `null` for a board whose rules have none of the three kinds (the page then reads the items' own values); else
+/// `{ "mask": bool, "paste_abs": bool, "paste_rel": bool, "pads": { "<REF.NUM[#k]>": { "mask": [front, back], "abs": [front, back], "rel": [front, back] } },
+/// "tracks": { "<id>": [segment's, ..] }, "shapes": { "<id>": m }, "fp_shapes": { "<REF>": [m | null, ..] } }`: each the constraint's `opt` (nm; a relative margin in
+/// thousandths, as the rule holds it) or `null` when it has none, the clamps left to the page as KiCad applies them after (a pad on F.Mask / B.Mask and F.Paste /
+/// B.Paste, a track or shape on its own layer; a footprint's graphics in its art's order, those not on outer copper `null`).
+pub fn rule_margins(dir: &std::path::Path, intent: &str, design: &Design, model: &ConstraintModel) -> Value {
+    use eda_drc::constraints::{CType, Units};
+    use eda_drc::rule_item::Class;
+    let Some(text) = model.board.custom_rules_text.as_deref() else { return Value::Null };
+    let dru = crate::inspect_api::expanded_rules(dir, intent, design, model, text);
+    let drc_board = eda_drc::board::build(design, model);
+    let rb = eda_drc::rule_board::RuleBoard::new(design, model, &drc_board, Units::Mm, Some(&dru));
+    let e = rb.engine();
+    let (mask, abs, rel) = (e.has_rules_for(CType::SolderMaskExpansion), e.has_rules_for(CType::SolderPasteAbsMargin), e.has_rules_for(CType::SolderPasteRelMargin));
+    if !(mask || abs || rel) {
+        return Value::Null;
+    }
+    let opt = |t: CType, item: &std::rc::Rc<eda_drc::rule_item::RuleItem>, layer: &str| e.eval_rules(t, Some(item), None, Some(layer), None).value.opt;
+    let outer = |l: &str| l == "F.Cu" || l == "B.Cu";
+    let mut pads = serde_json::Map::new();
+    for (pid, idx) in rb.pad_ids() {
+        let Some(item) = rb.pad_item_at(*idx) else { continue };
+        let side = |t: CType, on: bool, f: &str, b: &str| if on { json!([opt(t, &item, f), opt(t, &item, b)]) } else { Value::Null };
+        pads.insert(
+            pid.clone(),
+            json!({ "mask": side(CType::SolderMaskExpansion, mask, "F.Mask", "B.Mask"), "abs": side(CType::SolderPasteAbsMargin, abs, "F.Paste", "B.Paste"), "rel": side(CType::SolderPasteRelMargin, rel, "F.Paste", "B.Paste") }),
+        );
+    }
+    let mut tracks = serde_json::Map::new();
+    let mut shapes = serde_json::Map::new();
+    let mut fp_shapes = serde_json::Map::new();
+    if mask {
+        // `copper_items`: the pads, then every track segment (its track's id) in the board's order, then the vias
+        for (id, item) in rb.copper_items() {
+            if !matches!(item.class, Class::Track | Class::Arc) || !item.layer.as_deref().is_some_and(outer) {
+                continue;
+            }
+            let m = opt(CType::SolderMaskExpansion, &item, item.layer.as_deref().unwrap_or("F.Cu"));
+            if let Value::Array(list) = tracks.entry(id).or_insert_with(|| Value::Array(Vec::new())) {
+                list.push(json!(m));
+            }
+        }
+        for s in design.drawings.as_ref().map(|d| d.shapes.as_slice()).unwrap_or_default() {
+            if outer(s.layer()) {
+                // the shape's own `(solder_mask_margin ..)` (`ShapeStyle`), the engine's local override
+                let mut it = (*rb.shape_item_of(s)).clone();
+                it.overrides.solder_mask_margin = design.drawings.as_ref().and_then(|d| d.board_items.style_of(s.id())).and_then(|st| st.solder_mask_margin);
+                shapes.insert(s.id().to_string(), json!(opt(CType::SolderMaskExpansion, &std::rc::Rc::new(it), s.layer())));
+            }
+        }
+        for fp in design.placement.as_ref().map(|p| p.footprints.as_slice()).unwrap_or_default() {
+            let Some(footprint) = model.part(&fp.id).and_then(|p| model.footprint_of(p)) else { continue };
+            let parent = rb.footprint_item(&fp.id);
+            let list: Vec<Value> = footprint
+                .art
+                .shapes
+                .iter()
+                .map(|s| {
+                    let placed = s.placed(fp).shape;
+                    if !outer(placed.layer()) {
+                        return Value::Null;
+                    }
+                    let mut it = (*rb.shape_item_of(&placed)).clone();
+                    // the graphic's own `(solder_mask_margin ..)`, the engine's local override
+                    it.overrides.solder_mask_margin = s.mask_margin;
+                    it.footprint = parent.as_ref().and_then(|p| p.footprint.clone());
+                    it.parent = parent.clone();
+                    json!(opt(CType::SolderMaskExpansion, &std::rc::Rc::new(it), placed.layer()))
+                })
+                .collect();
+            if list.iter().any(|v| !v.is_null()) {
+                fp_shapes.insert(fp.id.clone(), Value::Array(list));
+            }
+        }
+    }
+    json!({ "mask": mask, "paste_abs": abs, "paste_rel": rel, "pads": pads, "tracks": tracks, "shapes": shapes, "fp_shapes": fp_shapes })
 }
 
 #[cfg(test)]
@@ -288,5 +374,25 @@ mod tests {
         let expect = 1.0e12 + 4.0 * 1.0e11 + std::f64::consts::PI * 1.0e10;
         assert!((area - expect).abs() < expect * 0.002, "{area} vs {expect}");
         assert_eq!(out["results"]["cut"][0]["holes"].as_array().map(Vec::len), Some(1), "the square less the hole has it as a hole");
+    }
+
+    /// UI-LEFT-3 D3-3: the custom rules' solder mask expansion and paste margins reach the 3D view (`PAD::GetSolderMaskExpansion`'s `EvalRules`), none without such a rule.
+    #[test]
+    fn the_custom_rules_margins_are_the_rule_engines() {
+        use crate::inspect_api::tests::{scratch, setup};
+        let dir = scratch("board3d_rules");
+        setup(&dir, mm(1.0), eda_model::BoardRules { clearance: mm(0.2), ..Default::default() });
+        let (meta, design, model) = crate::board::load(&dir).unwrap();
+        assert!(rule_margins(&dir, &meta.intent, &design, &model).is_null(), "no rules file");
+        let rules = "(version 1)\n(rule \"one\" (condition \"A.Pad_Number == '1'\") (constraint solder_mask_expansion (opt 0.2mm)))\n(rule \"paste\" (condition \"A.Type == 'Pad'\") (constraint solder_paste_abs_margin (opt -0.03mm)))\n";
+        let mut model = model;
+        model.board.custom_rules_text = Some(rules.into());
+        let m = rule_margins(&dir, &meta.intent, &design, &model);
+        assert_eq!((m["mask"].as_bool(), m["paste_abs"].as_bool(), m["paste_rel"].as_bool()), (Some(true), Some(true), Some(false)), "{m}");
+        assert_eq!(m["pads"]["U1.1"]["mask"], json!([200_000, 200_000]), "pad 1 takes the rule on both masks: {m}");
+        // pad 2 matches no mask rule: the engine falls back to the board's expansion (0 here)
+        assert_eq!(m["pads"]["U1.2"]["mask"], json!([0, 0]), "{m}");
+        assert_eq!(m["pads"]["U1.2"]["abs"], json!([-30_000, -30_000]));
+        assert!(m["pads"]["U1.2"]["rel"].is_null(), "no relative rule");
     }
 }

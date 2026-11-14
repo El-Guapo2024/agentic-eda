@@ -187,7 +187,7 @@ export function FootprintLibraryPropertiesDialog() {
               </button>
             ))}
           </div>
-          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} body={body} onBody={setBody} />}
+          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ footprint: fp.name }} units={units} body={body} onBody={setBody} exportFootprint={{ name: fp.name, reference: rows.find((r) => r.name === "Reference")?.text || "REF**" }} />}
           {tab === "embedded" && (
             <EmbeddedFilesPanel owner={{ kind: "library_footprint", name: fp.name }} run={api.cmd} version={studio.version} draft={embedded.draft} onDraft={(draft, listing) => setEmbedded({ draft, listing })} />
           )}

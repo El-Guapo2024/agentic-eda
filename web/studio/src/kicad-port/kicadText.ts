@@ -81,6 +81,9 @@ export interface OutlineFace {
   advance(text: string): number;
   /** The ink of `text` at an em of 1, from its origin on the baseline, y down: `[left, top, right, bottom]`; null for none (a space). */
   ink(text: string): readonly [number, number, number, number] | null;
+  /** The polygons of `text`'s glyphs at an em of 1, from its origin on the baseline, y down, a fake italic slanted and a fake bold emboldened (kicad-port/sfnt.ts
+   *  `sfntGlyphPolys`: `OUTLINE_FONT::getTextAsGlyphsUnlocked`'s `OUTLINE_GLYPH`s); undefined when the face's outlines are not read. */
+  glyphs?(text: string): ReadonlyArray<{ outer: ReadonlyArray<readonly [number, number]>; holes: ReadonlyArray<ReadonlyArray<readonly [number, number]>> }> | undefined;
 }
 
 /** The font a text is drawn in: the stroke font, or an outline face. */
@@ -585,6 +588,15 @@ export function runInk(l: Pick<KicadTextLayout, "font" | "fakeItalic">, r: Outli
     box = merge(box, { x0: gx + Math.min(...xs), y0: r.y + y0, x1: gx + Math.max(...xs), y1: r.y + y1 });
   });
   return box;
+}
+
+/** An outline run's glyph polygons (an outline and its holes each) in the text's frame; null when the face's outlines are not read (the 3D view then draws the run's ink box). */
+export function runGlyphs(l: Pick<KicadTextLayout, "font">, r: OutlineRun): Array<{ outer: P[]; holes: P[][] }> | null {
+  if (l.font.kind !== "outline" || !l.font.face.glyphs) return null;
+  const polys = l.font.face.glyphs(r.text);
+  if (!polys) return null;
+  const place = (c: ReadonlyArray<readonly [number, number]>): P[] => c.map(([u, v]) => [r.x + u * r.emX, r.y + v * r.emY] as P);
+  return polys.map((g) => ({ outer: place(g.outer), holes: g.holes.map(place) }));
 }
 
 /**

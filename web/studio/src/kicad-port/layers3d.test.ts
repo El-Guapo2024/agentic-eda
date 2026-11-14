@@ -133,3 +133,146 @@ test("a pad is on a technical layer by its layers in its footprint's frame", () 
   assert.equal(padOnTechLayer(pad, { side: "bottom" }, "B.Paste"), true);
   assert.equal(padOnTechLayer({ th: true, kind: "through_hole" } as Pad, { side: "top" }, "B.Mask"), true, "a hole opens both masks");
 });
+
+import { setFontResolver, STROKE, type OutlineFace } from "./kicadText";
+import type { BoardTextBox } from "../api/pcbItemTypes";
+
+/** A face whose every glyph is a unit square on the baseline, one em wide (and its ink that square). */
+const SQUARE_FACE: OutlineFace = {
+  family: "square",
+  unitsPerEm: 1000,
+  ascender: 800,
+  descender: -200,
+  height: 1000,
+  fakeBold: false,
+  fakeItalic: false,
+  advance: (t) => Array.from(t).length,
+  ink: (t) => (t.trim() ? [0, -1, Array.from(t).length, 0] : null),
+  glyphs: (t) =>
+    Array.from(t).flatMap((ch, i) => (ch === " " ? [] : [{ outer: [[i, 0], [i, -1], [i + 1, -1], [i + 1, 0]] as [number, number][], holes: [] }])),
+};
+
+function withFace<T>(face: OutlineFace, fn: () => T): T {
+  setFontResolver(() => ({ kind: "outline", face }));
+  try {
+    return fn();
+  } finally {
+    setFontResolver(() => STROKE);
+  }
+}
+
+const text = (over: Record<string, unknown> = {}) => ({ id: "t1", content: "AB", x: 10_000_000, y: 10_000_000, angle: 0, layer: "F.SilkS", size: 1_000_000, stroke_width: 150_000, justify: "left", mirror: false, ...over });
+
+test("an outline font's text is its glyphs' polygons (addText's triangulation callback), the ink box only while the face's outlines are not read", () => {
+  const b = board({ texts: [text({ face: "Square" })] });
+  const L = withFace(SQUARE_FACE, () => build(b));
+  const polys = (L.layers.get("F.SilkS") ?? []).filter((p): p is Extract<Prim, { k: "poly" }> => p.k === "poly" && p.tag === "text");
+  assert.equal(polys.length, 2, "one per glyph");
+  for (const p of polys) assert.equal(p.contours[0]!.length, 4);
+  const noGlyphs = { ...SQUARE_FACE, glyphs: undefined };
+  const boxes = withFace(noGlyphs, () => build(b));
+  assert.equal((boxes.layers.get("F.SilkS") ?? []).filter((p) => p.k === "poly" && p.tag === "text").length, 1, "the run's ink box");
+  // a knockout text asks the server for its box less the glyphs
+  const ko = withFace(SQUARE_FACE, () => build(board({ texts: [text({ face: "Square", knockout: true })] })));
+  assert.equal(ko.jobs.length, 1);
+  assert.equal(ko.jobs[0]!.b?.length, 2, "the two glyphs are cut out");
+});
+
+test("the board's dimensions are drawn: their text and shapes (addShape( PCB_DIMENSION_BASE ): segments of the line width, circles as rings)", () => {
+  const dim = { id: "d1", layer: "Dwgs.User", kind: "leader", stroke_width: 100_000, lines: [[[0, 0], [5_000_000, 0]], [[5_000_000, 0], [5_000_000, 3_000_000]]], circles: [[[8_000_000, 0], 1_000_000]], text: "12", text_at: [2_000_000, -1_000_000], computed_text_angle: 0, text_size_nm: 1_000_000 };
+  const b = board();
+  (b.drawings as { dimensions: unknown[] }).dimensions = [dim];
+  const list = build(b).layers.get("Dwgs.User") ?? [];
+  const mine = list.filter((p) => p.tag === "dimension");
+  assert.equal(mine.filter((p) => p.k === "seg" && p.w === 100_000).length, 2, "its two lines");
+  assert.deepEqual(mine.filter((p) => p.k === "ring").map((p) => [(p as { ri: number }).ri, (p as { ro: number }).ro]), [[950_000, 1_050_000]]);
+  assert.ok(mine.filter((p) => p.k === "seg" && p.w !== 100_000).length > 2, "and its text's strokes");
+});
+
+test("the board's tables are drawn: DrawBorders' lines and each cell's text (addTable)", () => {
+  const cell = { id: "tb:0:0", row: 0, col: 0, text: "X", col_span: 1, row_span: 1, corners: [[0, 0], [4_000_000, 0], [4_000_000, 2_000_000], [0, 2_000_000]], margins: [0, 0, 0, 0], h_align: "left", v_align: "top", size_w: 1_000_000, size_h: 1_000_000, thickness: 0, pen: 150_000, bold: false, italic: false, mirror: false, face: null, line_spacing: 1000, color: null, lines: [{ text: "X", x: 200_000, y: 1_200_000 }] };
+  const covered = { ...cell, id: "tb:0:1", col_span: 0, lines: [{ text: "Y", x: 4_200_000, y: 1_200_000 }] };
+  const table = { id: "tb", layer: "F.SilkS", angle: 0, borders: [{ a: [0, 0], b: [8_000_000, 0], width: 120_000, style: "solid", color: null }, { a: [0, 0], b: [0, 2_000_000], width: -1, style: "solid", color: null }], cells: [cell, covered] };
+  const b = board();
+  (b.drawings as { tables?: unknown[] }).tables = [table];
+  const mine = (build(b).layers.get("F.SilkS") ?? []).filter((p) => p.tag === "table");
+  assert.equal(mine.filter((p) => p.k === "seg" && p.w === 120_000).length, 1, "the border that has a width");
+  const strokes = mine.filter((p) => p.k === "seg" && p.w === 150_000);
+  assert.ok(strokes.length >= 2 && strokes.every((p) => (p as { a: number[] }).a[0]! < 4_000_000), "the X, not the covered cell's Y");
+});
+
+const textBox = (over: Partial<BoardTextBox> = {}): BoardTextBox =>
+  ({ id: "x1", layer: "F.SilkS", text: "T", start: [0, 0], end: [6_000_000, 3_000_000], pts: [], angle: 0, margins: [250_000, 250_000, 250_000, 250_000], border: true, stroke_width: 100_000, line_style: "solid", stroke_color: null, knockout: false, size: 1_000_000, width: 1_000_000, thickness: 150_000, thickness_auto: false, halign: "left", valign: "top", mirror: false, bold: false, italic: false, line_spacing_permille: 1000, face: null, ...over }) as BoardTextBox;
+
+test("a text box is its text and its border (addShape( PCB_TEXTBOX )), on any layer -- copper too; a knockout box of the board is its box less the text", () => {
+  const b = board();
+  (b.drawings as { text_boxes?: unknown[] }).text_boxes = [textBox(), textBox({ id: "x2", layer: "F.Cu" }), textBox({ id: "x3", layer: "B.Cu", knockout: true })];
+  const L = build(b);
+  const silk = (L.layers.get("F.SilkS") ?? []).filter((p) => p.tag === "text-box");
+  assert.equal(silk.filter((p) => p.k === "seg" && p.w === 100_000).length, 4, "the border's four sides");
+  assert.ok(silk.filter((p) => p.k === "seg" && p.w === 150_000).length >= 2, "the T's strokes");
+  assert.ok((L.layers.get("F.Cu") ?? []).some((p) => p.tag === "text-box"), "a box on copper is drawn");
+  const back = (L.layers.get("B.Cu") ?? []).filter((p) => p.tag === "text-box");
+  const jobKey = back.find((p) => p.k === "job") as { key: string } | undefined;
+  assert.ok(jobKey, "the knockout is the server's subtraction");
+  const job = L.jobs.find((j) => j.key === jobKey!.key)!;
+  assert.equal(job.a.length, 5, "the box and its four border ovals");
+  assert.ok((job.b?.length ?? 0) >= 2, "less the T's strokes");
+  // a footprint's text box is the footprint's: never a knockout
+  const part = { ref: "U1", placed: true, side: "top", rot: 0, pads: [], items: { text_boxes: [textBox({ id: "x4", layer: "F.Cu", knockout: true })] } } as unknown as Part;
+  const fp = build(board({ parts: [part] }));
+  assert.ok((fp.layers.get("F.Cu") ?? []).filter((p) => p.tag === "text-box").every((p) => p.k !== "job"));
+  // a dashed border is dashed
+  const dashed = board();
+  (dashed.drawings as { text_boxes?: unknown[] }).text_boxes = [textBox({ line_style: "dash" })];
+  assert.ok((build(dashed).layers.get("F.SilkS") ?? []).filter((p) => p.k === "seg" && p.w === 100_000).length > 4);
+});
+
+test("a line with endings is shortened and its endings drawn (KiCad 25ec2335 addShape: ShortenSegmentForEndings, LINE_ENDING::GetShapes)", () => {
+  const arrow = { style: "arrow", length: 0, width: 0, stroke_width: 0 };
+  const line = { id: "l1", kind: "segment", layer: "F.SilkS", stroke_width: 100_000, filled: false, start: [0, 0], end: [10_000_000, 0], end_ending: arrow } as unknown as Shape;
+  const list = (build(board({ shapes: [line] })).layers.get("F.SilkS") ?? []).filter((p) => p.tag === "shape");
+  const body = list.filter((p): p is Extract<Prim, { k: "seg" }> => p.k === "seg");
+  assert.equal(body.length, 1);
+  assert.ok(body[0]!.b[0] < 10_000_000, `the body stops short of the arrow's tip: ${body[0]!.b[0]}`);
+  const head = list.filter((p) => p.k === "poly");
+  assert.equal(head.length, 1, "the arrowhead, filled");
+  const open = { ...line, end_ending: { ...arrow, style: "arrow_open" } } as unknown as Shape;
+  const openList = (build(board({ shapes: [open] })).layers.get("F.SilkS") ?? []).filter((p) => p.tag === "shape");
+  assert.equal(openList.filter((p) => p.k === "poly").length, 0, "an open arrow is segments");
+  assert.ok(openList.filter((p) => p.k === "seg").length >= 3);
+});
+
+test("KiCad 25ec2335's fab and courtyard layers are built when their rows are on", () => {
+  const fab = { id: "f1", kind: "segment", layer: "F.Fab", stroke_width: 100_000, filled: false, start: [0, 0], end: [1_000_000, 0] } as Shape;
+  const crt = { id: "c1", kind: "segment", layer: "B.CrtYd", stroke_width: 50_000, filled: false, start: [0, 0], end: [1_000_000, 0] } as Shape;
+  const b = board({ shapes: [fab, crt] });
+  const on = build(b);
+  assert.equal(segs(on.layers.get("F.Fab")).length, 1);
+  assert.equal(segs(on.layers.get("B.CrtYd")).length, 1);
+  const off = build(b, { layerShown: (l) => !/Fab|CrtYd/.test(l) });
+  assert.equal(off.layers.has("F.Fab"), false);
+});
+
+test("the custom rules' mask expansion and paste margin open the masks and lay the paste (PAD::GetSolderMaskExpansion's EvalRules, from GET /api/board3d)", () => {
+  const smd = (num: string, x: number): Pad => ({ num, net: null, x, y: 5_000_000, w: 1_000_000, h: 1_000_000, round: false, th: false, shape: "rect", size: [1_000_000, 1_000_000], kind: "smd" }) as Pad;
+  const part = { ref: "U1", placed: true, side: "top", rot: 0, pads: [smd("1", 5_000_000), smd("1", 8_000_000)] } as unknown as Part;
+  const b = board({ parts: [part] });
+  const xs = (list: readonly Prim[] | undefined) => (list ?? []).filter((p) => p.k === "poly").map((p) => {
+    const c = (p as { contours: [number, number][][] }).contours[0]!;
+    return Math.max(...c.map((q) => q[0])) - Math.min(...c.map((q) => q[0]));
+  });
+  assert.deepEqual(xs(build(b).layers.get("F.Mask")), [1_100_000, 1_100_000], "the board's 0.05 mm without rules");
+  const ruleMargins = {
+    mask: true,
+    paste_abs: true,
+    paste_rel: false,
+    pads: { "U1.1": { mask: [200_000, 0], abs: [-100_000, null], rel: null }, "U1.1#2": { mask: [null, null], abs: [null, null], rel: null } },
+    tracks: {},
+    shapes: {},
+    fp_shapes: {},
+  };
+  const L = buildLayers3d(b, { layerOrder: b.layers, ruleMargins: ruleMargins as never }, OPTS);
+  assert.deepEqual(xs(L.layers.get("F.Mask")), [1_400_000, 1_000_000], "the rule's 0.2 mm on the first pad; the second's none is 0 (value_or( 0 ))");
+  assert.deepEqual(xs(L.layers.get("F.Paste")), [800_000, 1_000_000], "the rule's -0.1 mm paste; none falls back to the board's 0");
+});

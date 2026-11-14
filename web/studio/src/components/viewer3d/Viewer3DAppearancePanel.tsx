@@ -19,7 +19,7 @@ import { useViewerColors } from "./useViewerColors";
 import { viewer3dProbe } from "./viewer3dProbe";
 import { useViewer3DRows } from "./useViewer3DRows";
 import { setViewer3DPresets, useViewer3DUserSettings } from "../../state/viewer3dUserSettings";
-import { FOLLOW_PCB, FOLLOW_PLOT_SETTINGS, afterVisibilityChange, applyPreset, colorsOf, deletePreset, deleteViewport, matchingPreset, presetEntries, savePreset, saveViewport, viewportFromJson, visibleSnapshot, type Viewport3D } from "../../kicad-port/viewer3dSettings";
+import { FOLLOW_PCB, FOLLOW_PLOT_SETTINGS, afterVisibilityChange, applyPreset, colorsOf, deletePreset, deleteViewport, matchingPreset, presetEntries, savePreset, saveViewport, viewFromKicadMatrix, viewportFromJson, visibleSnapshot, type Viewport3D } from "../../kicad-port/viewer3dSettings";
 import { sameView } from "../../kicad-port/camera3d";
 import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
 import { MessageDialog, NameDialog, PickDialog } from "../panels/appearance/shared";
@@ -104,7 +104,7 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
     if (!viewport || !api) return;
     const t = setInterval(() => {
       const vp = viewports.find((v) => v.name === viewport);
-      if (!vp || !sameView(api.getCamera(), vp.camera)) setViewport("");
+      if (!vp || !vp.camera || !sameView(api.getCamera(), vp.camera)) setViewport("");
       setTick((n) => n + 1);
     }, 500);
     return () => clearInterval(t);
@@ -275,7 +275,11 @@ export function Viewer3DAppearancePanel({ api }: { api: Viewer3DApi | null }) {
                 // `doApplyViewport`.
                 const vp = viewports.find((x) => x.name === v.slice(2));
                 if (vp && api) {
-                  api.setCamera(vp.camera);
+                  // a KiCad project's viewport is its matrix alone: `CAMERA::SetViewMatrix` on the camera as it is (kept with the viewport while the page is open)
+                  const camera = vp.camera ?? (vp.matrix ? viewFromKicadMatrix(vp.matrix, boardSpanMm(state.board), api.getCamera()) : null);
+                  if (!camera) return;
+                  if (!vp.camera) setViewports(viewports.map((x) => (x === vp ? { ...x, camera } : x)));
+                  api.setCamera(camera);
                   setViewport(vp.name);
                 }
               }

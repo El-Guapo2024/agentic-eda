@@ -10,6 +10,8 @@
 import type { BoardTextBox, CmdTextBox, TextBoxHAlign, TextBoxVAlign } from "../api/pcbItemTypes";
 import type { BoardState, PointXY, Nm } from "../api/types";
 import { inferBold, isBackLayer, lineThicknessNm, textStyleOf } from "./layerDefaults";
+import { layoutKicadText, lineAdvance, resolveFont, type KicadFont, type KicadTextLayout, type KicadTextSpec } from "./kicadText";
+import { textBoxSpec } from "./textSpecs";
 
 export type P = [number, number];
 /** How wide a line of text is, micrometres. */
@@ -415,3 +417,16 @@ export function newTextBox(board: Pick<BoardState, "board_rules">, layer: string
 }
 
 export type { Nm };
+
+/**
+ * A text box's text as `FONT::Draw` lays it out (`PCB_TEXTBOX::GetShownText` wrapped to the column in its face, at `GetDrawPos( flipped )`): what the canvas paints and the 3D view
+ * draws (`BOARD_ADAPTER::addText` of the box).
+ */
+export function textBoxKicadLayout(b: BoardTextBox, flipped = false): { font: KicadFont; layout: KicadTextLayout; spec: KicadTextSpec } {
+  const font = resolveFont(b.face, b.bold, b.italic);
+  const size: [number, number] = [b.width || b.size, b.size];
+  const lines = linebreakText(shownTextOf(b), columnWidthNm(b), b.size, b.thickness_auto ? 0 : b.thickness, (text) => lineAdvance(text, font, size, b.italic));
+  const own = textBoxSpec(b, lines.join("\n"), drawPos(b, flipped)).spec;
+  const spec = flipped ? { ...own, mirror: !own.mirror } : own;
+  return { font, layout: layoutKicadText(spec, font), spec };
+}
