@@ -80,7 +80,7 @@ import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixe
 import { zonesToRefill } from "../kicad-port/autoRefill";
 import { LOCKED_ITEMS_FILTERED } from "../kicad-port/overrideLocks";
 import { withSchLockOverride } from "../kicad-port/schLock";
-import { isViaDrcMessage } from "../kicad-port/viaDrcInfoBar";
+import { isViaDrcMessage, viaDrcInfoBarText } from "../kicad-port/viaDrcInfoBar";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -830,7 +830,12 @@ export interface StudioState {
   /** E / a double-click on a pad of the board: the id (`REF.NUM[#k]`) of the pad whose Pad Properties dialog is open (null = closed) -- components/BoardPadPropertiesDialog.tsx. */
   boardPadPropertiesId: string | null;
   /** `drc`: a DRC-violation info bar (`WX_INFOBAR::MESSAGE_TYPE::DRC_VIOLATION`), which a clean via placement dismisses. */
-  toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed"; drc?: boolean } | null;
+  toast: { message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" } | null;
+  /**
+   * The board editor's info bar over the canvas (`WX_INFOBAR`, components/PcbInfoBar.tsx): Draw Via's "Via location violates DRC." (`VIA_PLACER::PlaceItem`'s
+   * `ShowInfoBarError( .., true, WX_INFOBAR::MESSAGE_TYPE::DRC_VIOLATION )`) -- no timer, a close button, replaced by the next message, dismissed by a clean via.
+   */
+  pcbInfoBar: { message: string; kind: "error" | "warning" | "info"; type: "drc" | "generic" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
   cursorNm: { x: number; y: number } | null;
@@ -1091,6 +1096,7 @@ const initialState: StudioState = {
   itemPropertiesId: null,
   boardPadPropertiesId: null,
   toast: null,
+  pcbInfoBar: null,
   cursorNm: null,
   moveOriginNm: null,
   schWirePick: null,
@@ -1196,7 +1202,9 @@ export type Action =
   | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
   | { type: "SET_BOARD_PAD_PROPERTIES_ID"; id: string | null }
   /** `ms`: how long it stays (`WX_INFOBAR::ShowMessageFor`), else the kind's own; `dontShowAgain`: the info bar's "Don't show again" link, which sets that common option. */
-  | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed"; drc?: boolean }
+  | { type: "TOAST"; message: string; kind: "error" | "info"; ms?: number; dontShowAgain?: "zoneFillWarningDismissed" }
+  | { type: "SHOW_PCB_INFOBAR"; message: string; kind: "error" | "warning" | "info"; infoType?: "drc" | "generic" }
+  | { type: "DISMISS_PCB_INFOBAR" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null; frameDeg?: number; gridCarry?: boolean }
@@ -1615,9 +1623,13 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_BOARD_PAD_PROPERTIES_ID":
       return { ...state, boardPadPropertiesId: action.id };
     case "TOAST":
-      return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain, drc: action.drc } };
+      return { ...state, toast: { message: action.message, kind: action.kind, ms: action.ms, dontShowAgain: action.dontShowAgain } };
     case "TOAST_CLEAR":
       return { ...state, toast: null };
+    case "SHOW_PCB_INFOBAR":
+      return { ...state, pcbInfoBar: { message: action.message, kind: action.kind, type: action.infoType ?? "generic" } };
+    case "DISMISS_PCB_INFOBAR":
+      return { ...state, pcbInfoBar: null };
     case "SET_CURSOR":
       return { ...state, cursorNm: action.at };
     case "SET_MOVE_ORIGIN":
@@ -2307,14 +2319,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
       const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
-      // a refused via's "Via location violates DRC." is `PlaceItem`'s DRC info bar, which stays until closed (kicad-port/viaPlacer.ts `isViaDrcMessage`, UI-LEFT-3 P3-32)
-      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error", drc: isViaDrcMessage(cmd.op, reply.message) || undefined });
+      // a refused via's "Via location violates DRC." is `PlaceItem`'s DRC info bar over the canvas, which stays until closed (kicad-port/viaDrcInfoBar.ts
+      // `isViaDrcMessage`, components/PcbInfoBar.tsx; UI-LEFT-3 P3-32); any other refusal is a toast
+      if (!reply.ok && isViaDrcMessage(cmd.op, reply.message)) dispatch({ type: "SHOW_PCB_INFOBAR", message: viaDrcInfoBarText(reply.message), kind: "error", infoType: "drc" });
+      else if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // what KiCad says once the command worked (`ShowInfoBarMsg`, `wxLogMessage`): "Some of the polygons could not be merged.", ...
       if (reply.ok && reply.info) dispatch({ type: "TOAST", message: reply.info, kind: "info" });
       // `VIA_PLACER::PlaceItem`: "Via location violates DRC." shown even as Allow DRC violations places the via (`ShowInfoBarError( .., DRC_VIOLATION )`), and a
       // clean placement dismisses such a bar (`if( infobar->GetMessageType() == DRC_VIOLATION ) infobar->Dismiss()`)
-      if (reply.ok && reply.drc_violation) dispatch({ type: "TOAST", message: reply.drc_violation, kind: "error", drc: true });
-      else if (reply.ok && cmd.op === "place_via" && stateRef.current.toast?.drc) dispatch({ type: "TOAST_CLEAR" });
+      if (reply.ok && reply.drc_violation) dispatch({ type: "SHOW_PCB_INFOBAR", message: viaDrcInfoBarText(reply.drc_violation), kind: "error", infoType: "drc" });
+      else if (reply.ok && cmd.op === "place_via" && stateRef.current.pcbInfoBar?.type === "drc") dispatch({ type: "DISMISS_PCB_INFOBAR" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
         const source = repeatSource(cmd);

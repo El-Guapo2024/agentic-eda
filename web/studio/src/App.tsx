@@ -101,6 +101,7 @@ import { useEdaTestHook } from "./actions/useEdaTestHook";
 import { useAppearanceSync } from "./components/panels/appearance/useAppearanceSync";
 import { useSnapOrigin } from "./actions/useSnapOrigin";
 import { HotkeyCyclePopup } from "./components/HotkeyCyclePopup";
+import { PcbInfoBar } from "./components/PcbInfoBar";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -109,9 +110,7 @@ function Toast() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   useEffect(() => {
-    // Draw Via's DRC message is KiCad's info bar, which stays until it is closed or a clean via dismisses it (`ShowInfoBarError( .., true, DRC_VIOLATION )`,
-    // UI-LEFT-3 P3-32): no timer
-    if (!state.toast || state.toast.drc) return;
+    if (!state.toast) return;
     const t = setTimeout(() => dispatch({ type: "TOAST_CLEAR" }), state.toast.ms ?? (state.toast.kind === "info" ? 2500 : 6000));
     return () => clearTimeout(t);
   }, [state.toast, dispatch]);
@@ -134,19 +133,6 @@ function Toast() {
       }}
     >
       {state.toast.message}
-      {state.toast.drc && (
-        // the info bar's close button (`ShowInfoBarError( aMessage, true /* aShowCloseButton */, .. )`)
-        <button
-          type="button"
-          data-testid="toast-close"
-          aria-label="Close"
-          title="Close"
-          style={{ marginLeft: 12, background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, padding: 0 }}
-          onClick={() => dispatch({ type: "TOAST_CLEAR" })}
-        >
-          ×
-        </button>
-      )}
       {state.toast.dontShowAgain && (
         // The info bar's `wxHyperlinkCtrl( infobar, wxID_ANY, _( "Don't show again" ), .. )`: sets the option and dismisses the bar.
         <a
@@ -252,6 +238,8 @@ function StudioFrame() {
         )}
         <div className="canvas-col">
           {state.tab === "pcb" && <Canvas />}
+          {/* the board editor's info bar over the canvas (`WX_INFOBAR`: Draw Via's DRC message, UI-LEFT-3 P3-32) */}
+          {state.tab === "pcb" && <PcbInfoBar />}
           {/* the questions a board tool asks (Drag Anyway to a locked item) go through the same yes/no bus the library editors use: it needs a host on this tab too */}
           {(state.tab === "pcb" || state.tab === "schematic") && <LibraryDialogHost />}
           {state.tab === "schematic" && <SchematicView />}
