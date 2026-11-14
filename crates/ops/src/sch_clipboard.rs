@@ -102,16 +102,15 @@ impl<'a> Board<'a> {
             let in_cache = self.design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some_and(|s| s.published)) || self.places_lib_id(lib_id);
             // (a clipboard copy that draws just as the library's is the library's: nothing to publish)
             let library = self.design_symbol(lib_id);
-            let same_as_library = library.as_ref().is_some_and(|l| provided.iter().filter(|t| t.lib_id == lib_id).all(|t| serde_json::to_value(t.to_engine_symbol()).ok() == serde_json::to_value(l).ok()));
+            // (a power symbol's kind is not its library symbol's: `SCH_SCREEN::Append` caches the other kind under a renamed entry of the same id, UI-LEFT-3 S3-12)
+            let same_as_library = library.as_ref().is_some_and(|l| provided.iter().filter(|t| t.lib_id == lib_id).all(|t| serde_json::to_value(power_of_kind(t, l).to_engine_symbol()).ok() == serde_json::to_value(l).ok()));
             let known = if in_cache || same_as_library { library } else { None };
             if let Some(known) = known {
                 // The design's own wins -- unless the definition that comes with the items draws its pins elsewhere (a file this project wrote bakes a
                 // library symbol shifted to its box's corner, under the library's name): the items' wires end where THEIR pins are, so they bring
-                // their definition, under a name the design does not use. Or unless it is another kind of power symbol (`clipLibSymbol->IsLocalPower()
-                // != it->second->IsLocalPower() || .. IsGlobalPower() ..`: the clipboard's copy).
-                let cached = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).filter(|s| s.published).cloned().unwrap_or_else(|| LibrarySymbol::from_engine_symbol(&known));
-                let power_kind = |s: &LibrarySymbol| (s.power && s.power_local, s.power && !s.power_local);
-                if !provided.iter().any(|t| t.lib_id == lib_id && (!same_pins(t, &known) || power_kind(t) != power_kind(&cached))) {
+                // their definition, under a name the design does not use. Another kind of power symbol is the same library symbol: the paste caches
+                // it under a renamed entry of the sheet (`Board::paste_sch_in`, `SCH_SCREEN::Append`; UI-LEFT-3 S3-12).
+                if !provided.iter().any(|t| t.lib_id == lib_id && !same_pins(t, &known)) {
                     lib_name.insert(lib_id.to_string(), lib_id.to_string());
                     engine_of.insert(lib_id.to_string(), known);
                     continue;
@@ -290,11 +289,24 @@ impl<'a> Board<'a> {
             .zip(symbol_refs)
             .filter_map(|(s, new)| src.user_fields.get(&s.id).map(|f| (new.clone(), f.clone())))
             .collect();
+        // each pasted power symbol's kind on the clipboard (its renamed entry's, else its id's entry's) and the design's library kind of what it is pasted as
+        let power_kinds: Vec<(bool, Option<bool>)> = src
+            .power_symbols
+            .iter()
+            .map(|p| {
+                let clip_lib = fragment.lib_symbol(&p.lib_id).filter(|l| l.power).map(|l| l.power_local);
+                let clip_local = src.extras.power_lib_names.get(&p.id).map(|e| e.local).unwrap_or_else(|| src.extras.power_is_local(&p.lib_id, clip_lib));
+                let target = lib_name.get(&p.lib_id).cloned().unwrap_or_else(|| p.lib_id.clone());
+                let lib_local = engine_of.get(&p.lib_id).cloned().or_else(|| self.design_symbol(&target)).filter(|l| l.power).map(|l| l.connectivity.power_local);
+                (clip_local, lib_local)
+            })
+            .collect();
         let sch: &mut SchematicSection = self.schematic_mut_or_create();
         let (first_wire, first_nc, first_entry, first_line, first_graphic) = (sch.wires.len(), sch.no_connects.len(), sch.bus_entries.len(), sch.lines.len(), sch.extras.graphics.len());
         let junctions_before: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
         sch.symbols.extend(new_symbols);
         sch.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
+        let first_power = sch.power_symbols.len();
         sch.power_symbols.extend(new_powers);
         sch.wires.extend(new_wires);
         let first_label = sch.labels.len();
@@ -322,27 +334,19 @@ impl<'a> Board<'a> {
         for (s, new) in src.symbols.iter().zip(symbol_refs) {
             remap.insert(s.id.clone(), new.clone());
         }
-        // the renamed cache entries the pasted power symbols are drawn from (`(lib_name "GND_1")`, `SchExtras::power_lib_names`): a name the sheet already gives
-        // an entry of another library id or kind is numbered on (`SCH_SCREEN::Append`'s `newName`, `<name>_<n>`)
-        let mut entry_names: BTreeMap<String, String> = BTreeMap::new();
-        for (p, new) in src.power_symbols.iter().zip(power_refs) {
-            let Some(entry) = src.extras.power_lib_names.get(&p.id) else { continue };
-            let lib_id_of = |sch: &eda_model::ir::SchematicSection, id: &str| sch.power_symbols.iter().find(|q| q.id == id).map(|q| q.lib_id.clone());
-            let name = match entry_names.get(&entry.name) {
-                Some(n) => n.clone(),
-                None => {
-                    let clashes = |n: &str| sch.extras.power_lib_names.iter().any(|(id, e)| e.name == n && (e.local != entry.local || lib_id_of(sch, id).as_deref() != Some(p.lib_id.as_str())));
-                    let mut name = entry.name.clone();
-                    let mut k = 2;
-                    while clashes(&name) {
-                        name = format!("{}_{k}", entry.name);
-                        k += 1;
-                    }
-                    entry_names.insert(entry.name.clone(), name.clone());
-                    name
-                }
-            };
-            sch.extras.power_lib_names.insert(new.clone(), eda_model::sch_extras::PowerLibName { name, local: entry.local });
+        // `SCH_SCREEN::Append` of each pasted power symbol, with the clipboard's copy of its library symbol (`ChoosePasteLibSymbol`: the clipboard's entry
+        // of its `(lib_name ..)`, else of its id, wins over the sheet's): of the clipboard's kind, looked up by that name, so a copy of the other kind is
+        // drawn from a renamed entry of the same library id (`+5V_1`), not a library symbol of its own (UI-LEFT-3 S3-12, PARITY-sch §82)
+        let pasted_powers = sch.power_symbols.split_off(first_power);
+        for ((p, kinds), q) in src.power_symbols.iter().zip(&power_kinds).zip(pasted_powers) {
+            sch.power_symbols.push(q);
+            let index = sch.power_symbols.len() - 1;
+            let (clip_local, lib_local) = *kinds;
+            let name = src.extras.power_lib_names.get(&p.id).map(|e| e.name.clone());
+            // (no power symbol in the design's library: drawn from what it is)
+            if let Some(lib_local) = lib_local {
+                crate::sch_power_kind::cache_power_symbol_named(sch, index, clip_local, lib_local, name.as_deref());
+            }
         }
         for (p, new) in src.power_symbols.iter().zip(power_refs) {
             remap.insert(p.id.clone(), new.clone());
@@ -591,6 +595,26 @@ pub(crate) struct LibMerge {
     pub engine_of: BTreeMap<String, LibSymbol>,
     /// The entries the design does not have yet.
     pub publish: Vec<LibrarySymbol>,
+}
+
+/// `t`, a clipboard's copy of the library symbol `library`, as the library's kind of power symbol: the kind it was pasted as is the sheet's cache's
+/// ([`crate::sch_power_kind::cache_power_symbol_named`]), and a global one made local reads "local power" / "local label" (`PlaceSymbol`,
+/// `LibSymbol::power_texts`), which the library's does not (UI-LEFT-3 S3-11, S3-12).
+fn power_of_kind(t: &LibrarySymbol, library: &LibSymbol) -> LibrarySymbol {
+    let mut t = t.clone();
+    if t.power && library.power && t.power_local != library.connectivity.power_local {
+        if t.power_local {
+            let (keywords, description) = library.power_texts(true);
+            if t.keywords == keywords {
+                t.keywords = library.connectivity.keywords.clone();
+            }
+            if t.description == description {
+                t.description = library.description.clone();
+            }
+        }
+        t.power_local = library.connectivity.power_local;
+    }
+    t
 }
 
 /// Do the two draw their pins in the same places (number, unit, place, direction, length -- the normal body style)? That, not the artwork, is what a

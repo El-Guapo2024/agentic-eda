@@ -287,3 +287,42 @@ fn a_copy_on_a_second_placement_writes_that_paths_reference() {
     let on_a = write_clipboard(&CopyInput { design: &design, model: &model, section: &sch, project: "demo", sheet_path: &["sheet_a".to_string()] }, &ids).unwrap().text;
     assert!(on_a.contains(&format!("(property \"Reference\" \"{}\"", sym.id)), "{on_a}");
 }
+
+/// UI-LEFT-3 S3-12 (`SaveSelection` writes the screen's cache entries; `saveSymbol`'s `(lib_name ..)`; `ChoosePasteLibSymbol` looks the clipboard's entry up
+/// by it): a copy of a sheet's global `power:VCC` and of a local one drawn from the renamed entry `VCC_1` writes both entries with their kinds -- the local one
+/// with "local power" / "local label" (`PlaceSymbol`, S3-11) -- and the local one's `(lib_name "VCC_1")`; read back, the fragment keeps the renamed entry. Two
+/// unannotated `#PWR?` of one clipboard are two power symbols, each with its own entry.
+#[test]
+fn a_copy_of_a_power_symbol_of_the_other_kind_writes_its_renamed_entry() {
+    let mut vcc = eda_model::symbol::builtin("power:VCC").unwrap();
+    vcc.description = "Power symbol creates a global label with name \"VCC\"".into();
+    vcc.connectivity.keywords = "global power".into();
+    let model = ConstraintModel { symbols: vec![vcc], ..Default::default() };
+    let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+    let mut sch = design.schematic.clone().unwrap_or_default();
+    let rail = |id: &str, x: f64| eda_model::ir::PowerSymbol { id: id.into(), lib_id: "power:VCC".into(), at: eda_model::ir::Point { x: eda_model::units::mm(x), y: eda_model::units::mm(20.0) }, rot: 0, net: "VCC".into(), pin: String::new() };
+    sch.power_symbols = vec![rail("#PWR01", 10.0), rail("#PWR02", 30.0)];
+    sch.extras.power_lib_names.insert("#PWR02".into(), eda_model::sch_extras::PowerLibName { name: "VCC_1".into(), local: true });
+    let ids = vec!["#PWR01".to_string(), "#PWR02".to_string()];
+    let text = write_clipboard(&CopyInput { design: &design, model: &model, section: &sch, project: "demo", sheet_path: &[] }, &ids).unwrap().text;
+    assert!(text.contains("(lib_name \"VCC_1\")"), "{text}");
+    assert!(text.contains("(symbol \"VCC_1\"") && text.contains("(symbol \"power:VCC\""), "both entries: {text}");
+    let entry = |name: &str| text.split(&format!("(symbol \"{name}\"")).nth(1).unwrap().split("(symbol \"").next().unwrap().to_string();
+    assert!(entry("VCC_1").contains("(power local)") && entry("VCC_1").contains("local label") && entry("VCC_1").contains("\"local power\""), "{}", entry("VCC_1"));
+    assert!(!entry("power:VCC").contains("(power local)") && entry("power:VCC").contains("global label"), "{}", entry("power:VCC"));
+    let fragment = parse_clipboard(&text).unwrap();
+    let back = &fragment.section;
+    assert_eq!(back.power_symbols.len(), 2);
+    let local_one = back.power_symbols.iter().find(|p| back.extras.power_lib_names.contains_key(&p.id)).expect("the renamed entry is kept");
+    assert_eq!(back.extras.power_lib_names[&local_one.id].name, "VCC_1");
+    assert!(back.extras.power_lib_names[&local_one.id].local);
+
+    // two unannotated power symbols of one clipboard, of the two kinds
+    let unannotated = text.replace("(reference \"#PWR01\")", "(reference \"#PWR?\")").replace("(reference \"#PWR02\")", "(reference \"#PWR?\")").replace("\"Reference\" \"#PWR01\"", "\"Reference\" \"#PWR?\"").replace("\"Reference\" \"#PWR02\"", "\"Reference\" \"#PWR?\"");
+    let fragment = parse_clipboard(&unannotated).unwrap();
+    let back = &fragment.section;
+    let ids: std::collections::BTreeSet<&str> = back.power_symbols.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids.len(), 2, "two power symbols, two ids: {:?}", back.power_symbols);
+    assert!(ids.iter().all(|id| eda_model::annotate::shown_reference(id) == "#PWR?"), "{ids:?}");
+    assert_eq!(back.extras.power_lib_names.len(), 1, "only the local one is drawn from `VCC_1`: {:?}", back.extras.power_lib_names);
+}

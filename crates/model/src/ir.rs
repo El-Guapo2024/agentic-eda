@@ -5369,7 +5369,8 @@ impl LibrarySymbol {
             lib_id: sym.lib_id.clone(),
             reference_prefix: sym.reference_prefix.clone(),
             description: sym.description.clone(),
-            keywords: String::new(),
+            // (the keywords the engine's symbol keeps, `LibConnectivity::keywords`, which `to_engine_symbol` gives back)
+            keywords: sym.connectivity.keywords.clone(),
             datasheet: sym.datasheet.clone(),
             power: sym.power,
             in_bom: sym.in_bom,

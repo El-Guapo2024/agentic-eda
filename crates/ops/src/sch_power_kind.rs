@@ -17,8 +17,9 @@
 //! (`SCH_SCREEN::Remove`), so a symbol placed where its id's entry is gone makes it anew, of its own kind. The port keeps the id's entry's kind as before
 //! (`SchExtras::local_power` / `global_power`, where it disagrees with the design's library symbol) and the renamed entries by symbol
 //! (`SchExtras::power_lib_names`); `add_power_symbol` caches the library's kind ([`Board::cache_placed_power_symbol`]), and this verb caches the converted one.
-//! (PARITY-sch §82; before it the other kind was refused.) **Differs**: the library symbol's keywords and description are not rewritten ("global power" ->
-//! "local power", "global label" -> "local label"): the port writes a power symbol's cache entry without them.
+//! (PARITY-sch §82; before it the other kind was refused.) The library symbol's keywords and description of a copy made local read "local power" and
+//! "local label" (`PlaceSymbol`'s "Adjust the KiCad library default fields"): the writer derives them from the copy's kind (`LibSymbol::power_texts`,
+//! UI-LEFT-3 S3-11), in the cache entry and the instance's Description.
 
 use crate::{Board, CheckResult};
 
@@ -59,8 +60,16 @@ impl<'m> Board<'m> {
 }
 
 /// `SCH_SCREEN::Append` (`aUpdateLibSymbol`) of the power symbol at `index` of `sch`, whose copy of its library symbol is local or global as `local` says
-/// (`lib_local`: the design's library symbol's kind, against which the screen's own kind for the id is kept).
-fn cache_power_symbol(sch: &mut eda_model::ir::SchematicSection, index: usize, local: bool, lib_local: bool) {
+/// (`lib_local`: the design's library symbol's kind, against which the screen's own kind for the id is kept). It is looked up by its library id's name.
+pub(crate) fn cache_power_symbol(sch: &mut eda_model::ir::SchematicSection, index: usize, local: bool, lib_local: bool) {
+    cache_power_symbol_named(sch, index, local, lib_local, None);
+}
+
+/// [`cache_power_symbol`] of a symbol looked up by the cache name `name` (`symbol->GetSchSymbolLibraryName()`: a pasted symbol's `(lib_name ..)`, UI-LEFT-3
+/// S3-12); `None` (or its library id) is the id's entry. `m_libSymbols.find( name )`: no entry of that name, the symbol's copy is it; one it equals (the same
+/// library id and kind), it is drawn from it; one that differs, `getLibSymbolNameMatches` -- the id's entry, then every `<name>_<number>` -- for one it equals,
+/// else a new `<name>_<n>`.
+pub(crate) fn cache_power_symbol_named(sch: &mut eda_model::ir::SchematicSection, index: usize, local: bool, lib_local: bool, name: Option<&str>) {
     let (id, lib_id) = {
         let p = &sch.power_symbols[index];
         (p.id.clone(), p.lib_id.clone())
@@ -68,32 +77,49 @@ fn cache_power_symbol(sch: &mut eda_model::ir::SchematicSection, index: usize, l
     // (cached again: the entry it was given before is not its own any more)
     sch.extras.power_lib_names.remove(&id);
     let names_own = |sch: &eda_model::ir::SchematicSection| sch.power_symbols.iter().enumerate().any(|(i, p)| i != index && p.lib_id == lib_id && !sch.extras.power_lib_names.contains_key(&p.id));
-    // `it == m_libSymbols.end()`: no symbol names the id's entry, so the symbol's own copy is it
-    if !names_own(sch) {
-        if local {
-            sch.extras.global_power.remove(&lib_id);
-            if !lib_local {
-                sch.extras.local_power.insert(lib_id.clone());
-            }
-        } else {
-            sch.extras.local_power.remove(&lib_id);
-            if lib_local {
-                sch.extras.global_power.insert(lib_id.clone());
-            }
-        }
-        return;
-    }
-    // `*foundSymbol != *symbol->GetLibSymbolRef()`: the entry is of the other kind
-    if sch.extras.power_is_local(&lib_id, Some(lib_local)) == local {
-        return;
-    }
-    let item = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
-    // the renamed entries of the screen (`m_libSymbols`, a map by name): the first `<item>_<number>` of this library symbol and this kind is the one
+    // the renamed entries of the screen (`m_libSymbols`, a map by name): name -> (library id, kind)
     let entries: std::collections::BTreeMap<String, (String, bool)> = sch
         .power_symbols
         .iter()
         .filter_map(|p| sch.extras.power_lib_names.get(&p.id).map(|e| (e.name.clone(), (p.lib_id.clone(), e.local))))
         .collect();
+    let id_entry_local = sch.extras.power_is_local(&lib_id, Some(lib_local));
+    match name.filter(|n| *n != lib_id) {
+        // `it == m_libSymbols.end()`: no symbol names the id's entry, so the symbol's own copy is it
+        None if !names_own(sch) => {
+            if local {
+                sch.extras.global_power.remove(&lib_id);
+                if !lib_local {
+                    sch.extras.local_power.insert(lib_id.clone());
+                }
+            } else {
+                sch.extras.local_power.remove(&lib_id);
+                if lib_local {
+                    sch.extras.global_power.insert(lib_id.clone());
+                }
+            }
+            return;
+        }
+        None => {}
+        Some(n) => match entries.get(n) {
+            // no entry of that name (and no library id of the sheet goes by it): the copy is cached under it
+            None if !sch.power_symbols.iter().any(|p| p.lib_id == n) && !sch.symbols.iter().any(|s| s.lib_id == n) => {
+                sch.extras.power_lib_names.insert(id, eda_model::sch_extras::PowerLibName { name: n.to_string(), local });
+                return;
+            }
+            Some((l, k)) if *l == lib_id && *k == local => {
+                sch.extras.power_lib_names.insert(id, eda_model::sch_extras::PowerLibName { name: n.to_string(), local });
+                return;
+            }
+            _ => {}
+        },
+    }
+    // `getLibSymbolNameMatches`: the id's entry first -- one of this kind draws the symbol (`*foundSymbol == *symbol->GetLibSymbolRef()`) ..
+    if names_own(sch) && id_entry_local == local {
+        return;
+    }
+    let item = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
+    // .. then the first `<item>_<number>` of this library symbol and this kind
     let is_match = |name: &str| name.strip_prefix(item.as_str()).and_then(|r| r.strip_prefix('_')).is_some_and(|n| n.parse::<i64>().is_ok());
     let found = entries.iter().find(|(name, (l, k))| is_match(name) && *l == lib_id && *k == local).map(|(name, _)| name.clone());
     let name = found.unwrap_or_else(|| {

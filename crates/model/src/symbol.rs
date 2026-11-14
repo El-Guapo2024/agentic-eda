@@ -447,7 +447,26 @@ impl LibConnectivity {
     }
 }
 
+/// `SCH_DRAWING_TOOLS::PlaceSymbol`'s rewrite of a power symbol's keywords and description when it makes a global one local ([`LibSymbol::power_texts`]):
+/// every "global power" becomes "local power", every "global label" "local label".
+pub fn made_local_power_texts(keywords: &str, description: &str) -> (String, String) {
+    (keywords.replace("global power", "local power"), description.replace("global label", "local label"))
+}
+
 impl LibSymbol {
+    /// The keywords and the description of this power symbol's copy of the kind `local` (UI-LEFT-3 S3-11). KiCad 8303b2ad / 25ec2335
+    /// `SCH_DRAWING_TOOLS::PlaceSymbol` (`eeschema/tools/sch_drawing_tools.cpp`): a power symbol that is not local, placed with the preference Local
+    /// (`SetLocalPower()`), has "Adjust the KiCad library default fields to match the new power symbol type": every "global power" of its keywords becomes
+    /// "local power", every "global label" of its description "local label" (`wxString::Replace`, all of them). One made global from a local one keeps
+    /// both ("We do not currently have local power symbols in the KiCad library, so don't update any fields"), as does a copy of its own kind.
+    pub fn power_texts(&self, local: bool) -> (String, String) {
+        let (keywords, description) = (self.connectivity.keywords.clone(), self.description.clone());
+        if !(self.power && local && !self.connectivity.power_local) {
+            return (keywords, description);
+        }
+        made_local_power_texts(&keywords, &description)
+    }
+
     /// `SCH_SYMBOL::SubReference( aUnit, false )` (KiCad 25ec2335, `sch_symbol.cpp`): "A custom unit display name overrides the default A/B/C (or numeric)
     /// suffix", else the unit's letters (`LIB_SYMBOL::LetterSubReference( aUnit, 'A' )`), with KiCad's default unit notation (no separator, letters from A); [`Self::sub_reference_in`] takes a project's.
     pub fn sub_reference(&self, unit: u32) -> String {
