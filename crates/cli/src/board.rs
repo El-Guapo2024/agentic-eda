@@ -5833,6 +5833,19 @@ pub(crate) mod tests {
         assert_eq!(all["current_rank"], json!(0));
         assert_eq!(call(json!({ "search": { "find": "10k" }, "all_sheets": true, "sheet": "s1" }))["current_rank"], json!(1), "a Find with no cursor starts on the sheet in view");
 
+        // every sheet's ERC markers, each found on its own sheet; a marker that names no sheet is of the sheet in view (UI-LEFT-3 S3-34)
+        let markers = json!([
+            { "key": "erc:0", "text": "Pin not connected", "at": [1000, 2000], "sheet": "" },
+            { "key": "erc:1", "text": "Pin not connected", "at": [3000, 4000], "sheet": "s1" },
+            { "key": "erc:2", "text": "Pin not connected", "at": [5000, 6000] },
+        ]);
+        let found = call(json!({ "search": { "find": "not connected" }, "all_sheets": true, "markers": markers, "sheet": "s1" }));
+        let sheet_of = |key: &str| found["matches"].as_array().unwrap().iter().find(|m| m["key"].as_str().is_some_and(|k| k.contains(key))).map(|m| m["sheet"].clone());
+        assert_eq!((sheet_of("erc:0"), sheet_of("erc:1"), sheet_of("erc:2")), (Some(json!([])), Some(json!(["s1"])), Some(json!(["s1"]))), "{found}");
+        let here = call(json!({ "search": { "find": "not connected" }, "markers": markers }));
+        let keys: Vec<&str> = here["matches"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+        assert_eq!(keys, vec!["erc:0", "erc:2"], "the sheet in view's alone: the root's and the one naming none, not the sub-sheet's");
+
         // a search restricted to the selection stays on the sheet in view
         let selected = call(json!({ "search": { "find": "10k" }, "all_sheets": true, "scope": ["R1"] }));
         assert_eq!(selected["matches"].as_array().unwrap().len(), 2, "R1's Reference and Value");

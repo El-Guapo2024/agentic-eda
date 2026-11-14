@@ -4440,6 +4440,8 @@ export interface FindMarker {
   key: string;
   text: string;
   at: [number, number];
+  /** The sheet the marker is on, `"id/id"` from the root (`""` the root); none: the sheet in view. */
+  sheet?: string;
 }
 
 export interface FindMatch {

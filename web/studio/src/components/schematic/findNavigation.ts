@@ -24,7 +24,11 @@ import { fitTransform } from "../canvas/view";
 import { WRAP_CURSOR, endReachedMessage, findStartCursor, pickMatch, scopeFromSelection, searchesAllSheets } from "../../kicad-port/schFind";
 import { samePath } from "../../kicad-port/sheetPages";
 import type { Action, StudioApi } from "../../state/store";
-import { ercFindMarkers, ercMarkerIndex } from "../../kicad-port/schFindMarkers";
+import { ercFindMarkers, ercFindMarkersOfSheets, ercMarkerIndex } from "../../kicad-port/schFindMarkers";
+import { fetchSchematic } from "../../api/client";
+import { fetchHierarchy } from "../../api/schControlClient";
+import type { ErcViolation, FindMarker, Schematic } from "../../api/types";
+import type { StudioState } from "../../state/store";
 
 /**
  * Go to the sheet of a match and select + pan to it (the `FindNext` success path). With "Search the current selection only" the selection is
@@ -77,8 +81,8 @@ export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, 
     return null;
   }
   // `nextMatch`: with "Search the current selection only", the items of the selection (`for( EDA_ITEM* item : m_selectionTool->GetSelection() )`)
-  // the sheet's ERC markers are items Find walks too (`SCH_MARKER::Matches`, UI-LEFT-2 SS10)
-  const markers = ercFindMarkers(state.erc?.violations, state.schematic);
+  // the sheets' ERC markers are items Find walks too (`SCH_MARKER::Matches`, UI-LEFT-2 SS10): every sheet's in a search over every sheet (UI-LEFT-3 S3-34)
+  const markers = await findMarkers(state, allSheets && !selectedOnly);
   const reply = await fetchSchFind({ ...search, search_and_replace: false }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath, allSheets, markers);
   if (!reply.ok) {
     dispatch({ type: "SET_SCH_FIND", find: { status: reply.message ?? "Find failed." } });
@@ -101,3 +105,29 @@ export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, 
 
 /** When the last Find reported the end (ms), for the 4 s wrap window; null when it did not. */
 let wrapArmedAt: number | null = null;
+
+/** The sheets' schematics the last Find over every sheet read, for the report and design revision it read them for. */
+let sheetCache: { version: string | null; violations: readonly ErcViolation[]; sheets: { path: string[]; sch: Schematic }[] } | null = null;
+
+/**
+ * The ERC markers a Find walks: those the canvas draws on the sheet in view, or with `allSheets` those of every sheet path of the hierarchy, each sheet's
+ * schematic read once per design revision (and only when the report has markers at all).
+ */
+export async function findMarkers(state: StudioState, allSheets: boolean): Promise<FindMarker[]> {
+  const violations = state.erc?.violations;
+  if (!allSheets || !violations || violations.length === 0) return ercFindMarkers(violations, state.schematic);
+  try {
+    if (!sheetCache || sheetCache.version !== state.version || sheetCache.violations !== violations) {
+      const here = state.currentSheetPath.join("/");
+      const sheets: { path: string[]; sch: Schematic }[] = [];
+      for (const e of await fetchHierarchy()) {
+        const sch = e.path.join("/") === here && state.schematic ? state.schematic : await fetchSchematic(e.path);
+        sheets.push({ path: e.path, sch });
+      }
+      sheetCache = { version: state.version, violations, sheets };
+    }
+    return ercFindMarkersOfSheets(violations, sheetCache.sheets);
+  } catch {
+    return ercFindMarkers(violations, state.schematic);
+  }
+}
