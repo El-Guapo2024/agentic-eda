@@ -2847,6 +2847,14 @@ export interface DiffPairPreview {
   /** `shove` mode: the tracks and vias the head would push aside. */
   displaced?: RouteDisplacedLine[];
   displaced_vias?: RouteDisplacedVia[];
+  /** `ROUTER::movePlacing`'s `Clearance( item, nullptr )` of each line and via of the pair and `updateView`'s of what the shove moved (UI-LEFT-3 P3-6 for a
+   * pair): P's head and legs, N's, the head's vias (in `vias`' order), the fixed legs' vias, the moved lines and vias. Absent from an older server. */
+  clearance_a?: Nm | null;
+  clearance_b?: Nm | null;
+  via_clearances?: Nm[] | null;
+  fixed_via_clearances?: Nm[] | null;
+  displaced_clearances?: Nm[] | null;
+  displaced_via_clearances?: Nm[] | null;
   /** `POST /api/route/dp_continue_from_end` only (Route From Other End): the pair fixed so far was committed, so the board changed. */
   committed?: boolean;
   /** `POST /api/route/dp_continue_from_end` only: the far end of the connection, where the new pair starts. */

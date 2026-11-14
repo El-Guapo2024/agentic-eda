@@ -830,6 +830,7 @@ fn dp_via_json(router: &Router, v: &eda_pns::dp_placer::PreviewVia) -> Value {
 /// not fit as drawn.
 fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPreview) -> Value {
     let (net_a, net_b) = router.diff_pair_nets().unwrap_or((None, None));
+    let c = router.diff_pair_clearances(preview);
     let layer_name = router.layer_name(preview.layer);
     json!({
         "ok": true,
@@ -849,6 +850,14 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPrevie
         "fixed_vias": preview.fixed_vias.iter().map(|v| dp_via_json(router, v)).collect::<Vec<_>>(),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "width": d.line.width, "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
         "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
+        // `ROUTER::movePlacing`'s `Clearance( item, nullptr )` of each line and via of the pair, and `updateView`'s of what the shove moved: their clearance
+        // outlines (Display Options' "Tracks:" mode, UI-LEFT-3 P3-6 for a pair)
+        "clearance_a": c.as_ref().map(|c| c.line_a),
+        "clearance_b": c.as_ref().map(|c| c.line_b),
+        "via_clearances": c.as_ref().map(|c| c.vias.clone()),
+        "fixed_via_clearances": c.as_ref().map(|c| c.fixed_vias.clone()),
+        "displaced_clearances": c.as_ref().map(|c| c.displaced.clone()),
+        "displaced_via_clearances": c.as_ref().map(|c| c.displaced_vias.clone()),
     })
 }
 
@@ -1811,6 +1820,9 @@ mod tests {
         let apart = ((la.x - lb.x).area(la.x - lb.x) + (la.y - lb.y).area(la.y - lb.y)) as f64;
         let apart = apart.sqrt();
         assert!(apart >= pitch.as_f64() - 1.0 && apart <= pitch.as_f64() + 3.0, "they end a pitch ({pitch}) apart: {apart}");
+        // the pair's preview items carry their own clearances (UI-LEFT-3 P3-6 for a pair: `ROUTER::movePlacing`'s `Clearance( item, nullptr )` of each line)
+        assert_eq!((moved["clearance_a"].clone(), moved["clearance_b"].clone()), (json!(200_000), json!(200_000)), "the Default class's 0.2 mm: {moved}");
+        assert_eq!((moved["via_clearances"].clone(), moved["displaced_clearances"].clone()), (json!([]), json!([])), "{moved}");
         let fixed = dp_fix(&cell, &body(json!({ "x": 12_000_000, "y": 5_500_000 })));
         assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone(), fixed["real_end"].clone()), (json!(true), json!(false), json!(false)), "{fixed}");
         assert_eq!(fixed["preview"]["runs_a"].as_array().unwrap().len(), 1, "one leg fixed: {fixed}");
@@ -1841,6 +1853,8 @@ mod tests {
         assert_eq!(vias.len(), 2, "{moved}");
         assert_eq!((vias[0]["net"].clone(), vias[1]["net"].clone()), (json!("USB_DP"), json!("USB_DN")));
         assert_eq!((vias[0]["from_layer"].clone(), vias[0]["to_layer"].clone()), (json!("F.Cu"), json!("B.Cu")));
+        assert_eq!(moved["via_clearances"].as_array().map(Vec::len), Some(2), "one clearance per via of the head: {moved}");
+        assert!(moved["via_clearances"].as_array().unwrap().iter().all(|c| c.as_i64().is_some_and(|c| c >= 200_000)), "{moved}");
         let (la, lb) = (pts_of(&moved, "head_a").pop().unwrap(), pts_of(&moved, "head_b").pop().unwrap());
         assert_eq!((la, lb), (p_json(&vias[0]["x"], &vias[0]["y"]), p_json(&vias[1]["x"], &vias[1]["y"])), "each line ends in its via");
         let fixed = dp_fix(&cell, &at);

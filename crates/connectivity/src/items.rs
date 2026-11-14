@@ -101,6 +101,9 @@ pub struct CnItem {
     /// ends of its drill that it keeps), and the shape it has there to another item -- its hole (`GetEffectiveShape( layer, NEVER_FLASHED )`), as
     /// `CN_VISITOR::operator()` collides it. `None` for an item that has its copper on every layer it spans.
     pub never_flashed: Option<(Vec<i32>, ItemShape)>,
+    /// A via whose padstack is not a normal one (UI-LEFT-3 P3-15): its copper on the layers where its diameter is not the front's (`PCB_VIA::GetEffectiveShape(
+    /// layer )`, a circle of `GetWidth( layer )`), each run of layers of one diameter with its circle. [`Self::shape`] is the front's. Empty for every other item.
+    pub layer_shapes: Vec<(Vec<i32>, ItemShape)>,
 }
 
 impl CnItem {
@@ -108,8 +111,28 @@ impl CnItem {
     pub fn shape_on(&self, layer: i32) -> &ItemShape {
         match &self.never_flashed {
             Some((layers, hole)) if layers.contains(&layer) => hole,
-            _ => &self.shape,
+            _ => self.flashed_shape_on(layer),
         }
+    }
+
+    /// The item's copper on `layer` flashed (`GetEffectiveShape( layer, FLASHING::ALWAYS_FLASHED )`, what `checkZoneItemConnection` collides a zone's island
+    /// with): a padstack via's circle of that layer's diameter ([`Self::layer_shapes`]), else [`Self::shape`].
+    pub fn flashed_shape_on(&self, layer: i32) -> &ItemShape {
+        self.layer_shapes.iter().find(|(layers, _)| layers.contains(&layer)).map_or(&self.shape, |(_, s)| s)
+    }
+
+    /// Which of its shapes the item has on `layer`: 0 [`Self::shape`], 1 its hole, 2 and up a run of [`Self::layer_shapes`]. Two layers of the same key collide
+    /// alike.
+    pub fn shape_key(&self, layer: i32) -> usize {
+        if self.is_hole_on(layer) {
+            return 1;
+        }
+        self.layer_shapes.iter().position(|(layers, _)| layers.contains(&layer)).map_or(0, |k| k + 2)
+    }
+
+    /// Whether the item's copper is the same shape on every layer it spans.
+    pub fn one_shape(&self) -> bool {
+        self.never_flashed.is_none() && self.layer_shapes.is_empty()
     }
 
     /// Whether the item is its hole on `layer` ([`CnItem::shape_on`]).
@@ -263,6 +286,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                                 connected: Vec::new(),
                                 pad_piece_of: piece_of,
                                 never_flashed,
+                                layer_shapes: Vec::new(),
                             });
                             k = end + 1;
                         }
@@ -285,7 +309,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 let (hw, hh) = (pad.size.0 / 2, pad.size.1 / 2);
                 let bbox = (pad.center.x - hw, pad.center.y - hh, pad.center.x + hw, pad.center.y + hh);
                 let anchors = vec![pad.center];
-                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new(), pad_piece_of: None, never_flashed });
+                items.push(CnItem { item: ItemRef::Pad { reference: fp.id.clone(), number: pad.number.clone() }, net, can_change_net: false, layer_lo, layer_hi, anchors, shape: ItemShape::Pad(pad), bbox, connected: Vec::new(), pad_piece_of: None, never_flashed, layer_shapes: Vec::new() });
             }
         }
     }
@@ -312,6 +336,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     connected: Vec::new(),
                     pad_piece_of: None,
                     never_flashed: None,
+                    layer_shapes: Vec::new(),
                 });
                 continue;
             }
@@ -330,6 +355,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                     connected: Vec::new(),
                     pad_piece_of: None,
                     never_flashed: None,
+                    layer_shapes: Vec::new(),
                 });
             }
         }
@@ -340,12 +366,31 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 (a.min(b), a.max(b))
             };
             let radius = v.diameter.as_f64() / 2.0;
-            let margin = (v.diameter / 2).max(Nm::ZERO);
+            let extra = design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|x| x.id == v.id));
+            // `PCB_VIA::GetEffectiveShape( layer )`: a circle of `GetWidth( layer )`, the padstack's diameter on the layer (`PADSTACK::Size( aLayer )`), UI-LEFT-3 P3-15
+            let mut layer_shapes: Vec<(Vec<i32>, ItemShape)> = Vec::new();
+            let mut widest = v.diameter;
+            if let Some(stack) = extra.and_then(|x| x.padstack()) {
+                for l in lo..=hi {
+                    let Some(name) = layers.get(l as usize) else { continue };
+                    let d = stack.size_on(name, v.diameter);
+                    widest = widest.max(d);
+                    if d == v.diameter {
+                        continue;
+                    }
+                    let r = d.as_f64() / 2.0;
+                    match layer_shapes.iter_mut().find(|(_, s)| matches!(s, ItemShape::Via { radius, .. } if *radius == r)) {
+                        Some((ls, _)) => ls.push(l),
+                        None => layer_shapes.push((vec![l], ItemShape::Via { center: v.at, radius: r })),
+                    }
+                }
+            }
+            let margin = (widest / 2).max(Nm::ZERO);
             let bbox = (v.at.x - margin, v.at.y - margin, v.at.x + margin, v.at.y + margin);
-            let mode = design.drawings.as_ref().and_then(|d| d.via_extras.iter().find(|x| x.id == v.id)).map(|x| x.unconnected_layers()).unwrap_or_default();
+            let mode = extra.map(|x| x.unconnected_layers()).unwrap_or_default();
             let flashed_off = conditionally_flashed(mode, lo, hi);
             let never_flashed = (!flashed_off.is_empty()).then(|| (flashed_off, ItemShape::Via { center: v.at, radius: v.drill.as_f64() / 2.0 }));
-            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None, never_flashed });
+            items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new(), pad_piece_of: None, never_flashed, layer_shapes });
         }
 
         if !rt.zones.is_empty() {
@@ -376,6 +421,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                             connected: Vec::new(),
                             pad_piece_of: None,
                             never_flashed: None,
+                            layer_shapes: Vec::new(),
                         });
                     }
                 }
@@ -392,7 +438,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
             if !layers.iter().any(|l| l == s.layer()) {
                 continue;
             }
-            let Some((anchors, pieces, position)) = shape_copper(s, max_error) else { continue };
+            let Some((anchors, pieces, position)) = shape_copper(s, dr.board_items.holes_of(s.id()), max_error) else { continue };
             let layer = layer_index(layers, s.layer());
             let net = dr.board_items.style_of(s.id()).and_then(|st| st.net.clone()).unwrap_or_default();
             let (x0, y0, x1, y1) = pieces.iter().map(|q| q.bbox()).fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)));
@@ -419,6 +465,7 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
                 connected: Vec::new(),
                 pad_piece_of: None,
                 never_flashed: None,
+                layer_shapes: Vec::new(),
             });
         }
     }
@@ -430,7 +477,11 @@ pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper
 /// segment's and a curve's ends, a polygon's corners, a rectangle's four corners) and its copper (`GetEffectiveShape`: the stroke of its outline at its width, and the
 /// area of a filled one), `max_error` the arcs' and curves' tessellation, and its position (`EDA_SHAPE::getPosition`: an arc's centre, a polygon's first corner, else
 /// its start, a circle's centre). `None` for a shape with no copper.
-fn shape_copper(s: &eda_model::ir::Shape, max_error: f64) -> Option<(Vec<Point>, Vec<eda_model::pad_geom::PadPiece>, Point)> {
+///
+/// A polygon with holes is its fractured outline (`EDA_SHAPE::SetPolyShape` keeps it fractured, [`crate::copper_shapes::fractured_ring`]): its fill leaves the
+/// holes out and its stroke runs round them (UI-LEFT-3 P3-16); its anchors are the outline's corners (`GetConnectionPoints`: `Outline( 0 )`'s points, the
+/// fractured chain's).
+fn shape_copper(s: &eda_model::ir::Shape, holes: &[Vec<Point>], max_error: f64) -> Option<(Vec<Point>, Vec<eda_model::pad_geom::PadPiece>, Point)> {
     use eda_model::ir::Shape;
     use eda_model::pad_geom::PadPiece;
     let f = |p: Point| (p.x.as_f64(), p.y.as_f64());
@@ -454,7 +505,10 @@ fn shape_copper(s: &eda_model::ir::Shape, max_error: f64) -> Option<(Vec<Point>,
             let corners = vec![*start, Point { x: end.x, y: start.y }, *end, Point { x: start.x, y: end.y }];
             (corners.clone(), true, corners)
         }
-        Shape::Polygon { pts, .. } => (pts.clone(), true, pts.clone()),
+        Shape::Polygon { pts, .. } => {
+            let ring = crate::copper_shapes::fractured_ring(pts, holes);
+            (ring.clone(), true, ring)
+        }
         Shape::Circle { center, end, .. } => {
             let radius = eda_model::outline::circle_radius(*center, *end);
             let quad = |dx: Nm, dy: Nm| Point { x: center.x + dx, y: center.y + dy };

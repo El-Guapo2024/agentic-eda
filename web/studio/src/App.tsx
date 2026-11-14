@@ -108,7 +108,9 @@ function Toast() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   useEffect(() => {
-    if (!state.toast) return;
+    // Draw Via's DRC message is KiCad's info bar, which stays until it is closed or a clean via dismisses it (`ShowInfoBarError( .., true, DRC_VIOLATION )`,
+    // UI-LEFT-3 P3-32): no timer
+    if (!state.toast || state.toast.drc) return;
     const t = setTimeout(() => dispatch({ type: "TOAST_CLEAR" }), state.toast.ms ?? (state.toast.kind === "info" ? 2500 : 6000));
     return () => clearTimeout(t);
   }, [state.toast, dispatch]);
@@ -131,6 +133,19 @@ function Toast() {
       }}
     >
       {state.toast.message}
+      {state.toast.drc && (
+        // the info bar's close button (`ShowInfoBarError( aMessage, true /* aShowCloseButton */, .. )`)
+        <button
+          type="button"
+          data-testid="toast-close"
+          aria-label="Close"
+          title="Close"
+          style={{ marginLeft: 12, background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 14, padding: 0 }}
+          onClick={() => dispatch({ type: "TOAST_CLEAR" })}
+        >
+          ×
+        </button>
+      )}
       {state.toast.dontShowAgain && (
         // The info bar's `wxHyperlinkCtrl( infobar, wxID_ANY, _( "Don't show again" ), .. )`: sets the option and dismisses the bar.
         <a

@@ -33,6 +33,7 @@
 pub mod algo;
 pub mod cleanup;
 pub mod cleanup_filter;
+pub mod copper_shapes;
 pub mod dangling;
 pub mod delaunay;
 pub mod delaunay_port;
@@ -169,6 +170,28 @@ mod tests {
         let report = analyze(&design, &model, &ZoneCopper::default());
         assert_eq!(report.ratsnest.len(), 2, "the line is a third piece of N1");
         assert!(report.ratsnest.iter().any(|e| RatsnestEdge::item_id(&e.from_item) == "shp_a" || RatsnestEdge::item_id(&e.to_item) == "shp_a"));
+    }
+
+    /// UI-LEFT-3 P3-16: a filled copper polygon with a hole is its fractured outline (`EDA_SHAPE::SetPolyShape` fractures it, `makeEffectiveShapes` takes that
+    /// outline): a pad of its net standing in the hole, clear of its edge, is not joined by it; without the hole it is.
+    #[test]
+    fn a_copper_polygons_hole_is_cut_from_its_fill() {
+        use eda_model::ir::{DrawingsSection, Point, Shape};
+        use eda_model::pcb_items::ShapeStyle;
+        let (mut design, model) = two_pad_model();
+        let a = pad_center(&design, &model, "R1", "1");
+        let p = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let poly = Shape::Polygon { id: "shp_p".into(), layer: "F.Cu".into(), stroke_width: eda_model::units::Nm::ZERO, filled: true, pts: vec![p(0.0, 0.0), p(20.0, 0.0), p(20.0, 10.0), p(0.0, 10.0)] };
+        let hole = vec![Point { x: a.x - mm(1.5), y: a.y - mm(1.5) }, Point { x: a.x + mm(1.5), y: a.y - mm(1.5) }, Point { x: a.x + mm(1.5), y: a.y + mm(1.5) }, Point { x: a.x - mm(1.5), y: a.y + mm(1.5) }];
+        let mut dr = DrawingsSection { shapes: vec![poly], ..Default::default() };
+        dr.board_items.shape_styles = vec![ShapeStyle { net: Some("N1".into()), ..ShapeStyle::empty("shp_p") }];
+        design.drawings = Some(dr.clone());
+        assert!(analyze(&design, &model, &ZoneCopper::default()).ratsnest.is_empty(), "the polygon covers both pads");
+        dr.board_items.set_holes("shp_p", vec![hole]);
+        design.drawings = Some(dr);
+        let report = analyze(&design, &model, &ZoneCopper::default());
+        assert_eq!(report.ratsnest.len(), 1, "R1.1 stands in the hole: the polygon joins R2.1 alone");
+        assert!(report.ratsnest.iter().any(|e| RatsnestEdge::item_id(&e.from_item) == "R1.1" || RatsnestEdge::item_id(&e.to_item) == "R1.1"));
     }
 
     #[test]

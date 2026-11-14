@@ -359,3 +359,75 @@ fn kicad_cli_crossing_fills_join_only_by_a_vertex_inside() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// kicad-cli's `unconnected_items` and ours for a board of hand-written copper (`text`), as `kicad_cli_crossing_fills_join_only_by_a_vertex_inside` compares them.
+fn unconnected_both(cli: &Path, dir: &Path, name: &str, text: &str) -> (usize, usize) {
+    let pcb = dir.join(format!("{name}.kicad_pcb"));
+    std::fs::write(&pcb, text).unwrap();
+    let report_path = pcb.with_extension("drc.json");
+    let out = Command::new(cli).args(["pcb", "drc", "--format", "json", "--severity-all", "--output"]).arg(&report_path).arg(&pcb).output().expect("run kicad-cli pcb drc");
+    assert!(report_path.exists(), "kicad-cli wrote no report: {}", String::from_utf8_lossy(&out.stderr));
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+    let theirs = report.get("unconnected_items").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+    let (design, model, notes) = import_kicad_pcb(text).unwrap_or_else(|e| panic!("import {name}: {e:?}"));
+    let entries = eda_kicad::zone_fills::entries_of_imported_file(&design, notes.zone_fills.clone());
+    let copper = eda_kicad::zone_fills::KicadFills::new("import".into(), String::new(), 0, entries).copper(&design);
+    let ours = analyze(&design, &model, &copper).ratsnest.len();
+    eprintln!("{name}: kicad-cli {theirs} unconnected, ours {ours}");
+    (theirs, ours)
+}
+
+/// UI-LEFT-3 P3-15 and P3-16, against kicad-cli's connectivity (`unconnected_items`):
+/// - a via whose padstack is front/inner/back touches a track on In1.Cu by its inner diameter (`CN_VISITOR`: `GetEffectiveShape( layer )`): a 1.2 mm inner ring
+///   reaches a track ending 0.5 mm from its centre, a 0.6 mm front ring does not reach the same track on F.Cu;
+/// - a filled copper polygon of a net with a hole (written fractured, as KiCad keeps it: `EDA_SHAPE::SetPolyShape`) does not join a pad of its net standing in
+///   the hole; without the hole it does.
+/// Slow tier: `EDA_SLOW_TESTS=1`.
+#[test]
+fn kicad_cli_padstack_vias_and_polygon_holes_join_as_ours() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let head = |layers: &str| format!("(kicad_pcb (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\")\n  (general (thickness 1.6) (legacy_teardrops no))\n  (paper \"A4\")\n  (layers {layers} (25 \"Edge.Cuts\" user))\n  (setup (pad_to_mask_clearance 0))\n  (net 0 \"\")\n  (net 1 \"N1\")\n  (gr_rect (start 95 95) (end 140 115) (stroke (width 0.1) (type default)) (fill no) (layer \"Edge.Cuts\") (uuid \"33333333-0000-0000-0000-000000000099\"))\n");
+    let dir = std::env::temp_dir().join(format!("eda_conn_p315_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // P3-15
+    let vias = |track_layer: &str| {
+        let mut s = head(r#"(0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal)"#);
+        s += "  (via (at 120 100) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (padstack (mode front_inner_back) (layer \"Inner\" (size 1.2)) (layer \"B.Cu\" (size 0.6))) (net 1) (uuid \"33333333-0000-0000-0000-000000000001\"))\n";
+        s += "  (via (at 130 100) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 1) (uuid \"33333333-0000-0000-0000-000000000002\"))\n";
+        s += &format!("  (segment (start 120.5 100) (end 130 100) (width 0.2) (layer \"{track_layer}\") (net 1) (uuid \"33333333-0000-0000-0000-000000000003\"))\n");
+        s + ")\n"
+    };
+    for (layer, expected) in [("In1.Cu", 0usize), ("F.Cu", 1)] {
+        let (theirs, ours) = unconnected_both(&cli, &dir, &format!("via_{layer}"), &vias(layer));
+        assert_eq!(theirs, expected, "kicad-cli, the track on {layer}");
+        assert_eq!(ours, theirs, "ours, the track on {layer}");
+    }
+    // P3-16
+    let polygon = |hole: bool| {
+        let mut s = head(r#"(0 "F.Cu" signal) (2 "B.Cu" signal)"#);
+        for (n, at) in [(1, "105 105"), (2, "125 105")] {
+            s += &format!("  (footprint \"T:P\" (layer \"F.Cu\") (uuid \"44444444-0000-0000-0000-00000000000{n}\") (at {at})\n    (property \"Reference\" \"P{n}\" (at 0 -2 0) (layer \"F.SilkS\") (hide yes) (uuid \"44444444-0000-0000-0000-0000000000{n}1\") (effects (font (size 1 1) (thickness 0.15))))\n    (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"N1\") (uuid \"44444444-0000-0000-0000-0000000000{n}3\")))\n");
+        }
+        // the outline (100, 100) - (130, 110); the hole round P1, bridged in from the outline's first corner as the fracture leaves it
+        let pts = if hole {
+            "(xy 100 100) (xy 103 103) (xy 103 107) (xy 107 107) (xy 107 103) (xy 103 103) (xy 100 100) (xy 130 100) (xy 130 110) (xy 100 110)"
+        } else {
+            "(xy 100 100) (xy 130 100) (xy 130 110) (xy 100 110)"
+        };
+        s += &format!("  (gr_poly (pts {pts}) (stroke (width 0) (type solid)) (fill yes) (layer \"F.Cu\") (net 1) (uuid \"44444444-0000-0000-0000-000000000009\"))\n");
+        s + ")\n"
+    };
+    for (hole, expected) in [(true, 1usize), (false, 0)] {
+        let (theirs, ours) = unconnected_both(&cli, &dir, &format!("poly_{hole}"), &polygon(hole));
+        assert_eq!(theirs, expected, "kicad-cli, hole {hole}");
+        assert_eq!(ours, theirs, "ours, hole {hole}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

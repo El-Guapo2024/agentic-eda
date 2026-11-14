@@ -48,7 +48,7 @@ fn drc(dir: &Path, name: &str, text: &str) -> String {
 /// Draw Via of an N2 through via at (`x`, 15) mm, 0.6 mm, on the board `text`: whether it was refused, and kicad-cli's report of the board with it placed.
 fn place(dir: &Path, name: &str, text: &str, x: f64) -> (bool, String) {
     let (design, model, _) = import_kicad_pcb(text).expect("read the board");
-    let cmd = |allow: bool| Cmd::PlaceVia { net: "N2".into(), x: mm(x), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: allow, hidden_layers: Vec::new() };
+    let cmd = |allow: bool| Cmd::PlaceVia { net: "N2".into(), x: mm(x), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: allow, hidden_layers: Vec::new(), barcode_shapes: Default::default() };
     let mut b = Board::new(design.clone(), &model, mm(0.1), mm(0.3));
     let refused = match b.apply(&cmd(false)) {
         Ok(()) => false,

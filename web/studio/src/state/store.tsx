@@ -78,6 +78,7 @@ import { withBoardImagePixels, withSheetImagePixels } from "../actions/imagePixe
 import { zonesToRefill } from "../kicad-port/autoRefill";
 import { LOCKED_ITEMS_FILTERED } from "../kicad-port/overrideLocks";
 import { withSchLockOverride } from "../kicad-port/schLock";
+import { isViaDrcMessage } from "../kicad-port/viaDrcInfoBar";
 
 /** A router session this studio is drawing: a route, a pair or a drag (R7-R1). */
 const isRouterDraw = (d: { kind: string } | null | undefined): boolean => d?.kind === "route" || d?.kind === "diffpair" || d?.kind === "drag";
@@ -378,6 +379,8 @@ export type DrawState =
       /** Shove mode: other tracks/vias the pair would push aside. */
       displaced?: { layer: string; pts: [Nm, Nm][] }[];
       displacedVias?: { source_via: string; x: Nm; y: Nm }[];
+      /** The clearances of the pair's items, for their clearance outlines: see kicad-port/dpTool.ts `dpClearancesOf`. */
+      clearances?: import("../kicad-port/dpTool").DpClearances;
       /** The active layer when the pair started: see kicad-port/dpTool.ts. */
       originalActiveLayer?: string;
       /** The message panel's sizes: see kicad-port/dpTool.ts. */
@@ -2292,7 +2295,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
       const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
-      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+      // a refused via's "Via location violates DRC." is `PlaceItem`'s DRC info bar, which stays until closed (kicad-port/viaPlacer.ts `isViaDrcMessage`, UI-LEFT-3 P3-32)
+      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error", drc: isViaDrcMessage(cmd.op, reply.message) || undefined });
       // what KiCad says once the command worked (`ShowInfoBarMsg`, `wxLogMessage`): "Some of the polygons could not be merged.", ...
       if (reply.ok && reply.info) dispatch({ type: "TOAST", message: reply.info, kind: "info" });
       // `VIA_PLACER::PlaceItem`: "Via location violates DRC." shown even as Allow DRC violations places the via (`ShowInfoBarError( .., DRC_VIOLATION )`), and a

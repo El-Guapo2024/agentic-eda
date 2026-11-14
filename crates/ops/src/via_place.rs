@@ -8,8 +8,9 @@
 //!   and the message still said (the reply's `drc_violation`): [`via_violates_drc`].
 //! - The track the via landed on is split there (`track->SetEnd( viaPos ); newTrack->SetStart( viaPos )`), unless the via is on one of its ends or off its line
 //!   (`trackSeg.Contains( viaPos )`). The studio's track is a polyline, a `PCB_TRACK` per segment: the polyline is cut at the via inside the segment that
-//!   contains it, the first part keeping the track's id and the second a new one (`Clone()`, `ResetUuidDirect()`), as locked as the first. An arc track is not
-//!   cut: KiCad's `SetEnd` on a `PCB_ARC` keeps its mid and bends it, and the via sits on its chord, not on it.
+//!   contains it, the first part keeping the track's id and the second a new one (`Clone()`, `ResetUuidDirect()`), as locked as the first. An arc track is cut
+//!   as KiCad cuts it (UI-LEFT-3 P3-32): `SetEnd` and `SetStart` on a `PCB_ARC` keep its mid, so with the via on its chord (where `SnapItem` puts it,
+//!   `AlignToSegment` on the chord) each half is the arc through the via's place and the old mid.
 //! - One undo step for the via and the split (`doInteractiveItemPlacement`'s `commit.Push( "Place via" )`).
 
 use super::Board;
@@ -20,6 +21,10 @@ use eda_drc::rule_board::RuleBoard;
 use eda_model::ir::{Design, Point, Track, Via};
 use eda_model::units::Nm;
 use eda_model::{CheckResult, ConstraintModel};
+use eda_connectivity::copper_shapes::{barcode_box_shapes, board_text_effective_shape, dimension_effective_shapes, table_effective_shape};
+use eda_model::via_extra::PadDrillProps;
+use eda_model::Stackup;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -32,6 +37,141 @@ const DRC_EPSILON: Nm = Nm::new(500);
 /// `sub_e( aClearance )`: the clearance less the DRC epsilon, never below zero.
 fn sub_e(clearance: Nm) -> Nm {
     (clearance - DRC_EPSILON).max(Nm::ZERO)
+}
+
+/// What the via check reads beyond the board itself: the board's stackup (`GetStackupDescriptor`, how deep a post-machining reaches:
+/// `BOARD_STACKUP::GetLayerDistance`) and the polygons of its barcodes on copper (`PCB_BARCODE::GetEffectiveShape`, from kicad-cli's plot: [`Cmd::PlaceVia`]'s
+/// `barcode_shapes`).
+#[derive(Default)]
+pub struct ViaCheck<'a> {
+    pub stackup: Option<&'a Stackup>,
+    pub barcode_shapes: Option<&'a BTreeMap<String, Vec<Vec<Point>>>>,
+}
+
+impl ViaCheck<'_> {
+    fn barcode(&self) -> &BTreeMap<String, Vec<Vec<Point>>> {
+        static NONE: BTreeMap<String, Vec<Vec<Point>>> = BTreeMap::new();
+        self.barcode_shapes.unwrap_or(&NONE)
+    }
+}
+
+/// `SHAPE_POLY_SET::Collide( SHAPE_CIRCLE( c, r ) )` of a barcode's polygon `contours` (its plot's, filled even-odd): the centre inside it, or an edge within `r`.
+fn contours_collide_circle(contours: &[Vec<Point>], c: Point, r: Nm) -> bool {
+    let near = contours.iter().filter(|k| k.len() >= 2).any(|k| (0..k.len()).any(|i| eda_drc::kimath::Seg::new(k[i], k[(i + 1) % k.len()]).sq_distance_to_point(c) < r.get() as i128 * r.get() as i128));
+    if near {
+        return true;
+    }
+    let (px, py) = (c.x.as_f64(), c.y.as_f64());
+    let mut inside = false;
+    for k in contours.iter().filter(|k| k.len() >= 3) {
+        for i in 0..k.len() {
+            let (a, b) = (k[i], k[(i + 1) % k.len()]);
+            let (ax, ay, bx, by) = (a.x.as_f64(), a.y.as_f64(), b.x.as_f64(), b.y.as_f64());
+            if (ay > py) != (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
+/// The drill a [`DrcPad`](eda_drc::board::DrcPad) has (`GetDrillSize().x`): its round drill, else its slot's width.
+fn pad_drill_of(pad: &eda_drc::board::DrcPad) -> Nm {
+    pad.drill_round.or_else(|| pad.drill_slot.map(|(w, h)| w.min(h))).unwrap_or(Nm::ZERO)
+}
+
+/// Each pad's backdrill and post-machining, in [`DrcBoard::pads`]' order: the board's pad edit's (`PadEdit::drill_props`), else what its board file's tokens said
+/// (`PadMaskInfo::tokens`).
+fn pad_drill_props(design: &Design, model: &ConstraintModel) -> Vec<PadDrillProps> {
+    let mut out = Vec::new();
+    for fp in design.placement.iter().flat_map(|pl| pl.footprints.iter()) {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        for (i, lp) in footprint.pads.iter().enumerate() {
+            let nth = {
+                let n = seen.entry(lp.number.as_str()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            let edit = design.footprint_edit(&fp.id).and_then(|e| e.pad(&lp.number, nth)).and_then(|e| e.drill_props.clone());
+            let tokens: &[String] = design.pad_mask_info(&fp.id, i, footprint.pads.len()).map(|m| m.tokens.as_slice()).unwrap_or_default();
+            out.push(edit.unwrap_or_else(|| PadDrillProps::from_tokens(tokens)));
+        }
+    }
+    out
+}
+
+/// `PAD::IsBackdrilledOrPostMachined( aLayer )` / `PCB_VIA::IsBackdrilledOrPostMachined( aLayer )` and the hole `GetEffectiveShape( aLayer )` takes there: the
+/// diameter of the larger of the front and back post-machining and the backdrill (`SecondaryDrill`), else the drill, on a copper layer `layer` a backdrill
+/// (`SecondaryDrill`, `TertiaryDrill`) spans or a post-machining reaches (`GetPostMachiningKnockout( aLayer ) > 0`); `None` elsewhere. A pad's span is
+/// measured in `IsBackdrilledOrPostMachined`'s layer ordinals (`pad_ordinals`: F.Cu 0, B.Cu the last, another layer `id / 2 + 1`, a start or end on B.Cu or F.Cu
+/// as its formula has it), a via's by `LAYER_RANGE`.
+fn drill_knockout(d: &PadDrillProps, drill: Nm, layer: &str, copper: &[String], stackup: Option<&Stackup>, pad_ordinals: bool) -> Option<Nm> {
+    if !copper.iter().any(|l| l == layer) {
+        return None;
+    }
+    let count = copper.len() as i64;
+    let id = |l: &str| eda_model::layers::pcb_layer_id(l).map(|i| i as i64);
+    let enabled = |l: &str| copper.iter().any(|c| c == l);
+    // `startOrdinal`, `endOrdinal`, `layerOrdinal` of `PAD::IsBackdrilledOrPostMachined`
+    let start_ord = |l: &str| if !enabled(l) { -1 } else if l == "F.Cu" { 0 } else { id(l).map_or(-1, |i| i / 2 + 1) };
+    let end_ord = |l: &str| if !enabled(l) { -1 } else if l == "B.Cu" { count - 1 } else { id(l).map_or(-1, |i| i / 2 + 1) };
+    let layer_ord = |l: &str| if !enabled(l) { -1 } else if l == "F.Cu" { 0 } else if l == "B.Cu" { count - 1 } else { id(l).map_or(-1, |i| i / 2 + 1) };
+    let spans = |b: &eda_model::via_extra::ViaDrillProps| -> bool {
+        if b.size <= Nm::ZERO || b.start.is_empty() || b.end.is_empty() {
+            return false;
+        }
+        if pad_ordinals {
+            let (mut s, mut e, l) = (start_ord(&b.start), end_ord(&b.end), layer_ord(layer));
+            if l < 0 || s < 0 || e < 0 {
+                return false;
+            }
+            if s > e {
+                std::mem::swap(&mut s, &mut e);
+            }
+            l >= s && l <= e
+        } else {
+            layer_span(copper, &b.start, &b.end).iter().any(|l| l == layer)
+        }
+    };
+    let drilled = d.backdrill.as_ref().is_some_and(spans) || d.tertiary_drill.as_ref().is_some_and(spans) || post_machining_knockout(d, layer, copper, stackup) > Nm::ZERO;
+    if !drilled {
+        return None;
+    }
+    // "Return the larger of the backdrill or post-machining hole"
+    let mut hole = Nm::ZERO;
+    for pm in [&d.front_post_machining, &d.back_post_machining].into_iter().flatten() {
+        hole = hole.max(pm.size);
+    }
+    if let Some(b) = d.backdrill.as_ref().filter(|b| !b.start.is_empty() && !b.end.is_empty()) {
+        hole = hole.max(b.size);
+    }
+    Some(if hole > Nm::ZERO { hole } else { drill })
+}
+
+/// `GetPostMachiningKnockout( aLayer )`: the diameter a front (from F.Cu) or back (from B.Cu) counterbore or countersink still has at `layer`, when the layer is
+/// closer to its side than its depth (`stackup.GetLayerDistance`; a countersink without a depth reaches `( size / 2 ) / tan( angle / 2 )`, and narrows
+/// with depth); 0 when neither reaches it.
+fn post_machining_knockout(d: &PadDrillProps, layer: &str, copper: &[String], stackup: Option<&Stackup>) -> Nm {
+    use eda_model::via_extra::PostMachiningMode;
+    for (pm, side) in [(&d.front_post_machining, "F.Cu"), (&d.back_post_machining, "B.Cu")] {
+        let Some(pm) = pm.as_ref().filter(|pm| pm.size > Nm::ZERO) else { continue };
+        let half_angle = (pm.angle_ddeg as f64 / 10.0).to_radians() / 2.0;
+        let countersink = pm.mode == PostMachiningMode::Countersink && pm.angle_ddeg > 0;
+        let mut depth = pm.depth.get();
+        if depth <= 0 && countersink {
+            depth = ((pm.size.as_f64() / 2.0) / half_angle.tan()) as i64;
+        }
+        if depth <= 0 {
+            continue;
+        }
+        let dist = stackup.map_or(Nm::ZERO, |s| crate::drill_chart::layer_distance_nm(s, copper, side, layer)).get();
+        if dist < depth {
+            return if countersink { Nm::new((pm.size.get() - (2.0 * dist as f64 * half_angle.tan()) as i64).max(0)) } else { pm.size };
+        }
+    }
+    Nm::ZERO
 }
 
 /// `VIA_PLACER::checkDRCViolation` for `via`, as it would sit on the board: whether it breaks a clearance or a hole clearance to an item of another net, or
@@ -52,14 +192,16 @@ fn sub_e(clearance: Nm) -> Nm {
 /// diameter (`PCB_VIA::GetWidth( layer )`, a padstack that is not a normal one), or its drill's on a layer it does not flash; a track's, a graphic's;
 /// a board text's and a footprint text's strokes (a knockout text: its bounding rectangle, R7-4); a table's outline and its borders
 /// (`PCB_TABLE::GetEffectiveShape`); a dimension's label strokes and its lines and circles (`PCB_DIMENSION_BASE::GetEffectiveShape`: zero-width
-/// segments, solid circles); a barcode's box and its printed text's box (round 6 C6-5). Not judged: a pad's own clearance override beyond what the rules
-/// give; a backdrilled or post-machined layer's larger hole (`IsBackdrilledOrPostMachined`); a footprint's own tables and dimensions. **Differs:** a
-/// barcode is its symbol's box (`m_poly`, the symbol's modules, is the zint library's: not modelled here).
+/// segments, solid circles); a barcode's polygon (`PCB_BARCODE::GetEffectiveShape`, `m_poly`: zint's modules and the text under them, the plot kicad-cli
+/// makes of it, [`ViaCheck::barcode_shapes`]; its box and its text's box when there is none, round 6 C6-5). The board's and every footprint's tables,
+/// dimensions and barcodes (`checkDRCViolation` skips a footprint itself and checks its children). On a layer a pad or via is backdrilled or post-machined
+/// on (`IsBackdrilledOrPostMachined`), its copper is the larger hole there ([`drill_knockout`], UI-LEFT-3 P3-32). An item's own clearance (a pad's, its
+/// footprint's) is the rules' (`EvalRules`' local overrides: `RuleBoard`'s items carry them).
 ///
 /// `hidden_layers` are the layers the Appearance panel hides: `checkDRCViolation` takes its candidates from `view->Query`, which skips the view layers that are
 /// not shown (round 6 C6-1), so an item none of whose layers is shown is not judged. A via (its hole layers) and a plated pad (the plated-hole layers) are
 /// always shown; a track, an SMD or NPTH pad, a graphic, a text, a table, a dimension and a barcode by their copper layers.
-pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hidden_layers: &[String]) -> bool {
+pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hidden_layers: &[String], check: &ViaCheck) -> bool {
     let shown = |layers: &[&str]| layers.iter().any(|l| !hidden_layers.iter().any(|h| h == l));
     let board: DrcBoard = eda_drc::board::build(design, model);
     let rules = &model.board;
@@ -86,6 +228,8 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hid
         }
     }
 
+    // Each pad's backdrill and post-machining (`PADSTACK::SecondaryDrill` ..): its edit's, else its board file's tokens, in `board.pads`' order.
+    let pad_drills = pad_drill_props(design, model);
     // Pads: each copper layer the pad has copper on (its shape, or its hole where a plated pad does not flash), then its hole.
     let (first, last) = (copper.first().cloned().unwrap_or_default(), copper.last().cloned().unwrap_or_default());
     for (i, pad) in board.pads.iter().enumerate() {
@@ -98,8 +242,16 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hid
         }
         let Some(item) = rb.pad_item_at(i) else { continue };
         let kept = flashed.as_ref().and_then(|f| f.pads.get(&pad.id));
+        let drills = pad_drills.get(i).cloned().unwrap_or_default();
         for layer in &copper {
             let Some(shape) = pad.copper_on(layer) else { continue };
+            // `PAD::GetEffectiveShape( layer )`: "Check if this layer has copper removed by backdrill or post-machining" before anything else
+            if let Some(d) = pad.hole.as_ref().and(drill_knockout(&drills, pad_drill_of(pad), layer, &copper, check.stackup, true)) {
+                if collides_on(layer, &Shape::Circle { c: pad.center, r: d / 2 }, eval(CType::Clearance, &item, Some(layer))) {
+                    return true;
+                }
+                continue;
+            }
             let flash = match pad.flash(layer, &first, &last) {
                 eda_model::padstack::Flash::Always => true,
                 eda_model::padstack::Flash::Never => false,
@@ -138,8 +290,14 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hid
         }
         let item = rb.via_item_at(i);
         let kept = flashed.as_ref().and_then(|f| f.vias.get(&v.id));
+        let drills = design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)).map(|e| e.props()).map(|p| PadDrillProps { backdrill: p.backdrill, tertiary_drill: p.tertiary_drill, front_post_machining: p.front_post_machining, back_post_machining: p.back_post_machining }).unwrap_or_default();
         for layer in &layer_span(&copper, &v.from_layer, &v.to_layer) {
-            let shape = if flashes(kept, layer) { v.shape_on(layer) } else { v.hole() };
+            // `PCB_VIA::GetEffectiveShape( layer )`: the backdrill's or post-machining's hole where it takes the copper away
+            let shape = match drill_knockout(&drills, v.drill, layer, &copper, check.stackup, false) {
+                Some(d) => Shape::Circle { c: v.at, r: d / 2 },
+                None if flashes(kept, layer) => v.shape_on(layer),
+                None => v.hole(),
+            };
             if collides_on(layer, &shape, eval(CType::Clearance, &item, Some(layer))) {
                 return true;
             }
@@ -184,29 +342,51 @@ pub fn via_violates_drc(design: &Design, model: &ConstraintModel, via: &Via, hid
             }
         }
     }
-    // Tables, dimensions and barcodes on copper: items of no net (`PCB_TABLE`, `PCB_DIMENSION_BASE`, `PCB_BARCODE` are no `BOARD_CONNECTED_ITEM`).
+    // Tables, dimensions and barcodes on copper: items of no net (`PCB_TABLE`, `PCB_DIMENSION_BASE`, `PCB_BARCODE` are no `BOARD_CONNECTED_ITEM`), the board's
+    // and each footprint's ("check against children, but not against footprint itself").
+    let mut sets: Vec<eda_model::fp_items::FootprintItems> = Vec::new();
     if let Some(d) = design.drawings.as_ref() {
-        let judged = |id: &str, layer: &str, class: eda_drc::rule_item::Class, type_name: &str, shapes: &[Shape]| -> bool {
-            if !copper.iter().any(|l| l == layer) || !shown(&[layer]) || shapes.is_empty() {
-                return false;
-            }
-            let item = Rc::new(other_item(id, layer, class, type_name));
-            let clearance = eval(CType::Clearance, &item, Some(layer));
-            shapes.iter().any(|shape| collides_on(layer, shape, clearance))
-        };
-        for t in &d.tables {
+        sets.push(eda_model::fp_items::FootprintItems { tables: d.tables.clone(), dimensions: d.dimensions.clone(), barcodes: d.barcodes.clone(), ..Default::default() });
+    }
+    for fp in design.placement.iter().flat_map(|pl| pl.footprints.iter()) {
+        let Some(items) = model.part(&fp.id).and_then(|part| eda_model::fp_items_place::items_of(design, model, part)) else { continue };
+        sets.push(eda_model::fp_items_place::placed(items, fp));
+    }
+    let judged_by = |id: &str, layer: &str, class: eda_drc::rule_item::Class, type_name: &str, hit: &dyn Fn(Nm) -> bool| -> bool {
+        if !copper.iter().any(|l| l == layer) || !shown(&[layer]) {
+            return false;
+        }
+        let item = Rc::new(other_item(id, layer, class, type_name));
+        hit(eval(CType::Clearance, &item, Some(layer)))
+    };
+    let judged = |id: &str, layer: &str, class: eda_drc::rule_item::Class, type_name: &str, shapes: &[Shape]| -> bool {
+        !shapes.is_empty() && judged_by(id, layer, class, type_name, &|clearance| shapes.iter().any(|shape| collides_on(layer, shape, clearance)))
+    };
+    for set in &sets {
+        for t in &set.tables {
             if judged(&t.id, &t.layer, eda_drc::rule_item::Class::Shape, "Table", &[table_effective_shape(t)]) {
                 return true;
             }
         }
-        for dim in &d.dimensions {
+        for dim in &set.dimensions {
             let class = if matches!(dim.kind, eda_model::ir::DimensionKind::Leader) { eda_drc::rule_item::Class::Leader } else { eda_drc::rule_item::Class::Dimension };
             if judged(&dim.id, &dim.layer, class, class.type_name(), &dimension_effective_shapes(dim)) {
                 return true;
             }
         }
-        for b in &d.barcodes {
-            if judged(&b.id, &b.layer, eda_drc::rule_item::Class::Shape, "Barcode", &barcode_effective_shapes(b)) {
+        for b in &set.barcodes {
+            let hit = match check.barcode().get(&b.id) {
+                // `SHAPE_POLY_SET::Collide`: the via's copper on the barcode's layer within the clearance of the polygon (inside it, or near an edge)
+                Some(contours) => {
+                    let (c, r) = match via_shape_on(&b.layer) {
+                        Shape::Circle { c, r } => (c, r),
+                        _ => (via.at, via.diameter / 2),
+                    };
+                    judged_by(&b.id, &b.layer, eda_drc::rule_item::Class::Shape, "Barcode", &|clearance| clearance >= Nm::ZERO && contours_collide_circle(contours, c, r + sub_e(clearance)))
+                }
+                None => judged(&b.id, &b.layer, eda_drc::rule_item::Class::Shape, "Barcode", &barcode_box_shapes(b)),
+            };
+            if hit {
                 return true;
             }
         }
@@ -241,114 +421,6 @@ fn other_item(id: &str, layer: &str, class: eda_drc::rule_item::Class, type_name
     it
 }
 
-/// `PCB_TABLE::GetEffectiveShape`: the polygon of the table's outer corners and, for the borders it draws, their strokes (`DrawBorders`'s segments of the
-/// stroke's width). The outline's sides stand for every border here, at the widest stroke the table draws (an inner separator lies inside the polygon).
-fn table_effective_shape(t: &eda_model::table::Table) -> Shape {
-    let (w, h) = t.local_size();
-    let corners: Vec<Point> = [(Nm::ZERO, Nm::ZERO), (w, Nm::ZERO), (w, h), (Nm::ZERO, h)].iter().map(|&c| t.to_world(c)).collect();
-    let sep = if t.separators.rows || t.separators.cols { t.separators.stroke.width_nm / 2 } else { Nm::ZERO };
-    let border = if t.border.external || t.border.header { t.border.stroke.width_nm / 2 } else { Nm::ZERO };
-    let gap = sep.max(border);
-    if gap <= Nm::ZERO {
-        return Shape::Polygon { pts: corners };
-    }
-    let ring: Vec<eda_drc::kimath::Seg> = (0..4).map(|k| eda_drc::kimath::Seg::new(corners[k], corners[(k + 1) % 4])).collect();
-    Shape::Compound { parts: vec![Shape::Polygon { pts: corners }, Shape::Strokes { segs: ring, r: gap }] }
-}
-
-/// `PCB_DIMENSION_BASE::GetEffectiveShape`: `GetEffectiveTextShape()` (the label's strokes, its pen wide) and every shape of `GetShapes()` -- the lines as
-/// `SHAPE_SEGMENT`s of no width, a leader's circle frame as a solid `SHAPE_CIRCLE`.
-fn dimension_effective_shapes(dim: &eda_model::ir::Dimension) -> Vec<Shape> {
-    let g = eda_connectivity::dimension::compute_dimension_geometry(dim);
-    let mut out: Vec<Shape> = g.lines.iter().map(|&(a, b)| Shape::Stadium { a, b, r: Nm::ZERO }).collect();
-    out.extend(g.circles.iter().map(|&(c, r)| Shape::Circle { c, r }));
-    if !g.text.is_empty() {
-        let size = (dim.text_size_nm, dim.text_size_nm);
-        let thickness = dim.text_thickness_nm.unwrap_or_else(|| Nm::kiround(dim.text_size_nm.as_f64() * 0.15));
-        let pen = eda_drc::stroke_font::effective_pen_width(thickness, size, false);
-        let rot = (g.text_angle as f64 / 1000.0).rem_euclid(360.0);
-        let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &g.text, pos: g.text_at, size, thickness, angle_deg: rot, mirror: false, halign: 0, valign: 0 });
-        if !segs.is_empty() {
-            out.push(Shape::Strokes { segs, r: pen / 2 });
-        }
-    }
-    out
-}
-
-/// `PCB_BARCODE::GetEffectiveShape`, as far as the model knows the barcode: the box of its symbol (the barcode's width and height about its centre, turned
-/// by its angle) and, when the text is shown, the box of the printed text under it.
-fn barcode_effective_shapes(b: &eda_model::barcode::Barcode) -> Vec<Shape> {
-    let (hw, hh) = (b.width_nm.as_f64() / 2.0, b.height_nm.as_f64() / 2.0);
-    // `RotatePoint( corner, m_pos, m_angle )`: counter-clockwise on the screen, y down
-    let (sin, cos) = (b.angle as f64 / 1000.0).to_radians().sin_cos();
-    let corner = |x: f64, y: f64| Point { x: b.at.x + Nm::kiround(x * cos + y * sin), y: b.at.y + Nm::kiround(-x * sin + y * cos) };
-    let mut out = vec![Shape::Polygon { pts: vec![corner(-hw, -hh), corner(hw, -hh), corner(hw, hh), corner(-hw, hh)] }];
-    if b.show_text && !b.text.is_empty() {
-        let h = b.text_height_nm.max(Nm::new(1));
-        let pen = Nm::kiround(h.as_f64() / 8.0).max(Nm::new(1));
-        let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &b.text, pos: Point { x: Nm::ZERO, y: Nm::ZERO }, size: (h, h), thickness: pen, angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
-        let r = pen / 2;
-        if let (Some(x0), Some(x1), Some(y0), Some(y1)) = (segs.iter().flat_map(|s| [s.a.x, s.b.x]).min(), segs.iter().flat_map(|s| [s.a.x, s.b.x]).max(), segs.iter().flat_map(|s| [s.a.y, s.b.y]).min(), segs.iter().flat_map(|s| [s.a.y, s.b.y]).max()) {
-            let (tw, th) = ((x1 - x0 + r * 2).as_f64(), (y1 - y0 + r * 2).as_f64());
-            // centred under the symbol, its top 1 mm below the symbol's bottom (`ComputeTextPoly`)
-            let top = hh + 1_000_000.0;
-            out.push(Shape::Polygon { pts: vec![corner(-tw / 2.0, top), corner(tw / 2.0, top), corner(tw / 2.0, top + th), corner(-tw / 2.0, top + th)] });
-        }
-    }
-    out
-}
-
-/// `PCB_TEXT::GetEffectiveShape` of a board text, with what its extras say (round 6 C6-3): the glyph width (`width_nm`, else square), the vertical
-/// justification, bold (the automatic pen of a text with no thickness), and for a knockout text `TransformTextToPolySet`'s
-/// `buildBoundingHull( &finalPoly, textShape, margin )` (R7-4): the strokes turned back by the draw rotation about the text's position
-/// (`poly.Rotate( -GetDrawRotation(), GetDrawPos() )`), their box (`BBox( aClearance )`) grown by `GetKnockoutTextMargin( size, penWidth )` =
-/// `max( KiROUND( penWidth / 2.0 ), KiROUND( size.y / 9.0 ) )`, its four corners turned forward again (`RotatePoint( corner, GetDrawPos(),
-/// GetDrawRotation() )`). The glyphs it then subtracts are inside the rectangle and no via fits in one.
-pub(crate) fn board_text_effective_shape(t: &eda_model::ir::Text, extra: Option<&eda_model::board_text::TextExtra>) -> Option<Shape> {
-    let default = eda_model::board_text::TextExtra::default();
-    let x = extra.unwrap_or(&default);
-    let size = (x.width_nm.unwrap_or(t.size_nm), t.size_nm);
-    let thickness = if x.auto_thickness { Nm::ZERO } else { t.stroke_width };
-    let pen = eda_drc::stroke_font::effective_pen_width(thickness, size, x.bold);
-    let halign = match t.justify {
-        eda_model::ir::TextJustify::Left => -1,
-        eda_model::ir::TextJustify::Center => 0,
-        eda_model::ir::TextJustify::Right => 1,
-    };
-    let valign = match x.valign {
-        eda_model::ir::TextVAlign::Top => -1,
-        eda_model::ir::TextVAlign::Center => 0,
-        eda_model::ir::TextVAlign::Bottom => 1,
-    };
-    let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
-    let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: rot, mirror: t.mirror, halign, valign });
-    if segs.is_empty() {
-        return None;
-    }
-    if !x.knockout {
-        return Some(Shape::Strokes { segs, r: pen / 2 });
-    }
-    let margin = Nm::kiround(pen.as_f64() / 2.0).max(Nm::kiround(size.1.as_f64() / 9.0));
-    // `RotatePoint( p, centre, angle )` with y down: x' = x cos + y sin, y' = -x sin + y cos (relative to the centre)
-    let (sin, cos) = rot.to_radians().sin_cos();
-    let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn(((p.x - t.at.x).as_f64(), (p.y - t.at.y).as_f64()), -sin);
-        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
-    }
-    // the rendered text's own box is its strokes' with half the pen, then the margin
-    let grow = (pen.get() / 2 + margin.get()) as f64;
-    let pts = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)]
-        .into_iter()
-        .map(|c| {
-            let q = turn(c, sin);
-            Point { x: t.at.x + Nm::kiround(q.0), y: t.at.y + Nm::kiround(q.1) }
-        })
-        .collect();
-    Some(Shape::Polygon { pts })
-}
-
 /// The copper layers from `a` to `b`, either way round (all of them when one is unknown).
 fn layer_span(copper: &[String], a: &str, b: &str) -> Vec<String> {
     match (copper.iter().position(|l| l == a), copper.iter().position(|l| l == b)) {
@@ -367,19 +439,30 @@ fn seg_contains(a: Point, b: Point, p: Point) -> bool {
     qx * qx + qy * qy <= 3.0
 }
 
-/// Where `track`'s polyline is cut by a via at `at`: the index of the segment that contains it, unless the via is on an end of that segment (a joint).
-fn split_index(track: &Track, at: Point) -> Option<usize> {
-    if track.arc().is_some() {
-        return None;
+/// Where a via at `at` cuts a track ([`split_at`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Split {
+    /// The polyline's `k`-th segment contains it.
+    Segment(usize),
+    /// A track arc (`PCB_ARC`) whose chord contains it: its start, mid and end.
+    Arc(Point, Point, Point),
+}
+
+/// Where `track` is cut by a via at `at` (`PlaceItem`: `if( viaPos == trackStart || viaPos == trackEnd ) return true; if( !trackSeg.Contains( viaPos ) ) return
+/// true;`): a polyline at the segment that contains it, unless the via is on an end of that segment (a joint); an arc where its chord (`SEG( GetStart(),
+/// GetEnd() )`) contains it and it is on neither end.
+fn split_at(track: &Track, at: Point) -> Option<Split> {
+    if let Some((start, mid, end)) = track.arc() {
+        return (at != start && at != end && seg_contains(start, end, at)).then_some(Split::Arc(start, mid, end));
     }
     let k = track.pts.windows(2).position(|w| seg_contains(w[0], w[1], at))?;
-    (track.pts[k] != at && track.pts[k + 1] != at).then_some(k)
+    (track.pts[k] != at && track.pts[k + 1] != at).then_some(Split::Segment(k))
 }
 
 impl Board<'_> {
     /// `Cmd::PlaceVia`: `VIA_PLACER::PlaceItem` with the net chosen ([`self`](crate::via_place) module doc).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool, hidden_layers: &[String]) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool, hidden_layers: &[String], barcode_shapes: &BTreeMap<String, Vec<Vec<Point>>>) -> Result<(), Vec<CheckResult>> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
@@ -396,7 +479,8 @@ impl Board<'_> {
         // `PlaceItem`: `if( checkDRCViolation( via ) ) { ShowInfoBarError( _( "Via location violates DRC." ), true, DRC_VIOLATION ); if( !m_allowDRCViolations )
         // return false; }` -- the message shows whether or not the via goes down (round 6 C6-6): refused, or placed with it said
         // ([`crate::notice::note_drc_violation`]); a clean placement dismisses a standing one (the studio's toast, `infobar->Dismiss()`).
-        if via_violates_drc(&self.design, self.model, &via, hidden_layers) {
+        let (_, stackup) = self.effective_stackup();
+        if via_violates_drc(&self.design, self.model, &via, hidden_layers, &ViaCheck { stackup: Some(&stackup), barcode_shapes: Some(barcode_shapes) }) {
             if !allow_drc_violations {
                 return Err(vec![CheckResult::fail("ops_via_drc", net, VIA_VIOLATES_DRC)]);
             }
@@ -406,7 +490,7 @@ impl Board<'_> {
         let split = match split_track {
             Some(id) => {
                 let t = self.design.routing.as_ref().and_then(|rt| rt.tracks.iter().find(|t| t.id == id)).ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")])?;
-                split_index(t, at).map(|k| (t.clone(), k))
+                split_at(t, at).map(|k| (t.clone(), k))
             }
             None => None,
         };
@@ -415,16 +499,29 @@ impl Board<'_> {
         rt.vias.push(via);
         let mut new_track_seed = None;
         if let Some((t, k)) = split {
-            let mut first: Vec<Point> = t.pts[..=k].to_vec();
-            first.push(at);
-            let mut second = vec![at];
-            second.extend_from_slice(&t.pts[k + 1..]);
+            // `track->SetEnd( viaPos ); newTrack->SetStart( viaPos )`: a polyline is cut in two; an arc's `SetEnd` and `SetStart` keep its mid (`PCB_ARC::m_Mid`), so
+            // each half is the arc through the via's place and the old mid (UI-LEFT-3 P3-32)
+            let (head, tail) = match k {
+                Split::Segment(k) => {
+                    let mut first: Vec<Point> = t.pts[..=k].to_vec();
+                    first.push(at);
+                    let mut second = vec![at];
+                    second.extend_from_slice(&t.pts[k + 1..]);
+                    let tail = Track { id: String::new(), net: t.net.clone(), pins: Vec::new(), layer: t.layer.clone(), width: t.width, pts: second, arc_mid_offset: None };
+                    ((first, None), tail)
+                }
+                Split::Arc(start, mid, end) => {
+                    let first = Track::new_arc(t.net.clone(), t.layer.clone(), t.width, start, mid, at);
+                    let tail = Track::new_arc(t.net.clone(), t.layer.clone(), t.width, at, mid, end);
+                    ((first.pts, first.arc_mid_offset), tail)
+                }
+            };
             if let Some(orig) = rt.tracks.iter_mut().find(|x| x.id == t.id) {
-                orig.pts = first;
+                orig.pts = head.0;
+                orig.arc_mid_offset = head.1;
                 orig.pins.clear();
             }
-            let tail = Track { id: String::new(), net: t.net.clone(), pins: Vec::new(), layer: t.layer.clone(), width: t.width, pts: second.clone(), arc_mid_offset: None };
-            new_track_seed = Some(second);
+            new_track_seed = Some(tail.pts.clone());
             rt.tracks.push(tail);
         }
         rt.assign_missing_ids();
@@ -466,7 +563,7 @@ mod tests {
     }
 
     fn place(net: &str, x: f64, y: f64, split: Option<String>, allow: bool) -> Cmd {
-        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow, hidden_layers: Vec::new() }
+        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow, hidden_layers: Vec::new(), barcode_shapes: Default::default() }
     }
 
     fn track(net: &str, a: (f64, f64), b: (f64, f64)) -> Cmd {
@@ -526,7 +623,7 @@ mod tests {
         b.apply(&track("VCC", (0.0, 5.0), (10.0, 5.0))).unwrap();
         assert!(b.apply(&place("GND", 5.0, 5.45, None, false)).is_err());
         let Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, .. } = place("GND", 5.0, 5.45, None, false) else { unreachable!() };
-        b.apply(&Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers: vec!["F.Cu".into()] }).unwrap();
+        b.apply(&Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers: vec!["F.Cu".into()], barcode_shapes: Default::default() }).unwrap();
     }
 
     /// Round 6 C6-3: a board text is judged by `GetEffectiveShape` with its own attributes: the Text tool's bottom-justified text sits above its anchor, and a
@@ -710,5 +807,106 @@ mod tests {
         let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
         assert_eq!(b.apply(&place("", 25.0, 25.0, None, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC));
         b.apply(&place("", 35.0, 25.0, None, false)).unwrap();
+    }
+
+    /// UI-LEFT-3 P3-32: a pad's own clearance (`PAD::GetClearanceOverrides`, Pad Properties' Clearance) refuses a via the rules alone let in, as `EvalRules` takes
+    /// a local override over the rules; so does its footprint's.
+    #[test]
+    fn a_pads_own_clearance_refuses_a_via_the_rules_let_in() {
+        let m = four_layer_model();
+        // U1.1 (GND, a 0.6 mm pad) at (28.5, 19.4) mm; a VCC via 1.0 mm away is 0.4 mm clear of it, over the 0.2 mm clearance
+        let at = (29.5, 19.4);
+        crate::pcb_transform_tests::board(&m).apply(&place_vcc(at.0, at.1, false)).unwrap();
+        let overrides = |clearance: f64| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(mm(clearance)) };
+        let mut b = crate::pcb_transform_tests::board(&m);
+        b.apply(&overrides(0.5)).unwrap();
+        assert_eq!(b.apply(&place_vcc(at.0, at.1, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "0.4 mm from a pad that asks 0.5 mm");
+        let mut b = crate::pcb_transform_tests::board(&m);
+        b.apply(&Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: None, clearance: Some(mm(0.5)) }).unwrap();
+        assert_eq!(b.apply(&place_vcc(at.0, at.1, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "its footprint asks 0.5 mm");
+    }
+
+    /// UI-LEFT-3 P3-32, `PCB_VIA::GetEffectiveShape( layer )` with `IsBackdrilledOrPostMachined( layer )`: on the layers a backdrill takes the copper from, another
+    /// net's via is the backdrill's hole -- a 0.8 mm backdrill from F.Cu to In1.Cu is wider than its 0.6 mm ring there, and refuses a via the ring lets in; a
+    /// counterbore from the front deeper than the board's first dielectric does the same.
+    #[test]
+    fn a_backdrilled_or_post_machined_layer_is_the_larger_hole() {
+        use eda_model::via_extra::{PostMachiningMode, PostMachiningProps, ViaDrillProps, ViaProps};
+        let m = four_layer_model();
+        // 0.85 mm from `via_a`'s centre: 0.25 mm clear of its 0.6 mm ring, 0.15 mm from a 0.8 mm hole
+        let at = (20.85, 50.0);
+        crate::pcb_transform_tests::board(&m).apply(&place_vcc(at.0, at.1, false)).unwrap();
+        let with = |props: ViaProps| {
+            let mut b = crate::pcb_transform_tests::board(&m);
+            b.apply(&Cmd::SetViaProps { id: "via_a".into(), props }).unwrap();
+            b
+        };
+        let backdrill = ViaProps { backdrill: Some(ViaDrillProps { size: mm(0.8), start: "F.Cu".into(), end: "In1.Cu".into() }), ..Default::default() };
+        assert_eq!(with(backdrill).apply(&place_vcc(at.0, at.1, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC));
+        let counterbore = |depth: f64| ViaProps { front_post_machining: Some(PostMachiningProps { mode: PostMachiningMode::Counterbore, size: mm(0.8), depth: mm(depth), angle_ddeg: 0 }), ..Default::default() };
+        assert_eq!(with(counterbore(0.3)).apply(&place_vcc(at.0, at.1, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "it reaches In1.Cu");
+        // a counterbore that does not reach past F.Cu (`GetLayerDistance( F_Cu, F_Cu )` is 0, under any depth): F.Cu alone is the hole, and F.Cu is enough
+        assert!(with(counterbore(0.01)).apply(&place_vcc(at.0, at.1, false)).is_err(), "F.Cu itself is post-machined");
+    }
+
+    /// UI-LEFT-3 P3-32: `checkDRCViolation` checks a footprint's children, its own dimensions and tables among them (`FootprintExtra::items`, placed with it).
+    #[test]
+    fn a_footprints_own_dimension_on_copper_refuses_a_via() {
+        let m = four_layer_model();
+        let mut d = crate::pcb_transform_tests::design();
+        // a dimension on F.Cu in U1's frame, U1 at (30, 20) mm: its crossbar 2 mm below the points
+        let mut dim = crate::pcb_transform_tests::dimension("dim_fp", eda_model::ir::DimensionKind::Aligned { height: mm(-2.0) }, Point { x: mm(-10.0), y: mm(10.0) }, Point { x: mm(0.0), y: mm(10.0) });
+        dim.layer = "F.Cu".into();
+        let mut items = eda_model::fp_items::FootprintItems::default();
+        items.dimensions.push(dim);
+        d.drawings.as_mut().unwrap().footprint_extras.push(eda_model::ir::FootprintExtra { id: "U1".into(), items: items.clone(), ..Default::default() });
+        let fp = d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+        let placed = eda_model::fp_items_place::placed(&items, &fp);
+        let g = eda_connectivity::dimension::compute_dimension_geometry(&placed.dimensions[0]);
+        let bar = g.crossbar.expect("a crossbar");
+        let on_bar = ((bar.0.x.as_f64() + bar.1.x.as_f64()) / 2.0e6 - 3.0, bar.0.y.as_f64() / 1.0e6);
+        assert_eq!(Board::new(d.clone(), &m, mm(0.1), mm(0.3)).apply(&place_vcc(on_bar.0, on_bar.1, false)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC));
+        Board::new(d, &m, mm(0.1), mm(0.3)).apply(&place_vcc(on_bar.0, on_bar.1 + 3.0, false)).unwrap();
+    }
+
+    /// UI-LEFT-3 P3-32, `PCB_BARCODE::GetEffectiveShape` (`m_poly`): a barcode is judged by its polygon when the board directory handed one over -- a via in a
+    /// light module of the code, clear of the dark ones, goes down -- and by its box when it did not.
+    #[test]
+    fn a_barcode_is_judged_by_its_polygon_when_it_has_one() {
+        let m = four_layer_model();
+        let mut d = crate::pcb_transform_tests::design();
+        let b = eda_model::barcode::Barcode { id: "bar_1".into(), at: Point { x: mm(60.0), y: mm(60.0) }, angle: 0, layer: "F.Cu".into(), width_nm: mm(10.0), height_nm: mm(10.0), text: "X".into(), text_height_nm: mm(1.0), kind: Default::default(), ecc: Default::default(), show_text: false, knockout: false, margin_x_nm: Nm::ZERO, margin_y_nm: Nm::ZERO };
+        d.drawings.as_mut().unwrap().barcodes.push(b);
+        let pt = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        // the plot: a frame 1 mm wide round the symbol, the inside light
+        let shapes: BTreeMap<String, Vec<Vec<Point>>> = [("bar_1".to_string(), vec![vec![pt(55.0, 55.0), pt(65.0, 55.0), pt(65.0, 65.0), pt(55.0, 65.0)], vec![pt(56.0, 56.0), pt(64.0, 56.0), pt(64.0, 64.0), pt(56.0, 64.0)]])].into();
+        let with_shapes = |x: f64, y: f64, shapes: BTreeMap<String, Vec<Vec<Point>>>| {
+            let Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } = place_vcc(x, y, false) else { unreachable!() };
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes: shapes }
+        };
+        assert_eq!(Board::new(d.clone(), &m, mm(0.1), mm(0.3)).apply(&with_shapes(60.0, 60.0, BTreeMap::new())).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "its box");
+        Board::new(d.clone(), &m, mm(0.1), mm(0.3)).apply(&with_shapes(60.0, 60.0, shapes.clone())).unwrap();
+        assert_eq!(Board::new(d, &m, mm(0.1), mm(0.3)).apply(&with_shapes(60.0, 56.3, shapes)).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "near the frame");
+    }
+
+    /// UI-LEFT-3 P3-32, `PlaceItem`'s split of a `PCB_ARC`: `SetEnd( viaPos )` and the clone's `SetStart( viaPos )` keep the arc's mid, so a via on the arc's chord
+    /// cuts it into the two arcs through the via's place and the old mid; a via on an end cuts nothing.
+    #[test]
+    fn a_via_on_an_arcs_chord_cuts_it_as_kicad_does() {
+        let m = model();
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+        let (start, mid, end) = (Point { x: mm(10.0), y: mm(10.0) }, Point { x: mm(15.0), y: mm(5.0) }, Point { x: mm(20.0), y: mm(10.0) });
+        let arc = Track::new_arc("GND".into(), "F.Cu".into(), mm(0.2), start, mid, end);
+        b.routing_mut().tracks.push(arc);
+        b.routing_mut().assign_missing_ids();
+        let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+        b.apply(&place("GND", 14.0, 10.0, Some(id.clone()), false)).unwrap();
+        let rt = b.design().routing.as_ref().unwrap();
+        assert_eq!(rt.tracks.len(), 2);
+        let at = Point { x: mm(14.0), y: mm(10.0) };
+        assert_eq!(rt.tracks.iter().find(|t| t.id == id).and_then(|t| t.arc()), Some((start, mid, at)), "the first keeps the id, from the start through the old mid");
+        assert_eq!(rt.tracks.iter().find(|t| t.id != id).and_then(|t| t.arc()), Some((at, mid, end)));
+        b.apply(&place("GND", 20.0, 10.0, Some(id), false)).unwrap();
+        assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 2, "on an end: no cut");
     }
 }
