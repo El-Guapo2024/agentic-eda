@@ -37,6 +37,8 @@ import { escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolName
 import { unescapeString } from "../../kicad-port/schNetName";
 import { symbolPropertiesQuestions } from "../../kicad-port/symUnits";
 import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
+import { globalTemplateRows, withoutEmptyTemplateRows } from "../../kicad-port/symEditorDefaults";
+import { useStudioState } from "../../state/store";
 import { bodyStyleChoiceRefusal, bodyStyleCountOf, bodyStyleModeOf, jumperRowsOf, resizeUnitNameRows, unitNameRowsOf, unitsAndBodyStylesProblem, type BodyStyleMode } from "../../kicad-port/symBodyStyles";
 import { letterSubReference } from "../../kicad-port/unitLetter";
 import { PinNumbers } from "../../kicad-port/pinNumbersSummary";
@@ -138,6 +140,9 @@ export function LibrarySymbolPropertiesDialog() {
   const [unitCountText, setUnitCountText] = useState<string | null>(null);
   const [filtersText, setFiltersText] = useState("");
   const [rows, setRows] = useState<GridRow[]>([]);
+  /** The global templates' rows the dialog added (`m_addedTemplateFields`): one still empty at OK is not kept. */
+  const [addedTemplates, setAddedTemplates] = useState<ReadonlySet<string>>(new Set());
+  const studioPrefs = useStudioState().prefs;
   const [parent, setParent] = useState("");
   const [candidates, setCandidates] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -170,7 +175,14 @@ export function LibrarySymbolPropertiesDialog() {
     setFiltersText(subject.footprint_filters.join(" "));
     setError(null);
     setParent(subject.extends ?? "");
-    setRows(gridRowsFor(subject, null));
+    // "Add in any template fieldnames not yet defined": a row for each global template (Preferences > Schematic Editor > Field Name Templates) the symbol lacks
+    const withTemplates = (base: GridRow[]) => {
+      let key = base.reduce((m, r) => Math.max(m, r.key), 0);
+      const t = globalTemplateRows(base, studioPrefs.schGlobalFieldNames, () => ++key);
+      setAddedTemplates(t.added);
+      return [...base, ...t.rows];
+    };
+    setRows(withTemplates(gridRowsFor(subject, null)));
     setUnitRows(unitNameRowsOf(subject));
     const styles = bodyStyleModeOf(subject);
     setBodyMode(styles.mode);
@@ -180,7 +192,7 @@ export function LibrarySymbolPropertiesDialog() {
     if (subject.extends) {
       // the parent's own fields join the grid as inherited rows (`addInheritedFields`)
       void fetchLibrarySymbolFlat(subject.extends)
-        .then((flat) => !stopped && setRows(gridRowsFor(subject, flat)))
+        .then((flat) => !stopped && setRows(withTemplates(gridRowsFor(subject, flat))))
         .catch(() => undefined);
       // the symbols it can derive from (`m_inheritanceSelectCombo`)
       void fetchSymbolEditorNames()
@@ -283,7 +295,7 @@ export function LibrarySymbolPropertiesDialog() {
         jumper_rows: jumperRows,
       });
     }
-    cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(out).map(wireField) });
+    cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(withoutEmptyTemplateRows(out, addedTemplates)).map(wireField) });
     // a renamed field keeps its face, colour and pen (KiCad's are on the `SCH_FIELD`; UI-LEFT-3 Y3-3)
     cmds.push(...renamedFieldLooksCmds(target, subject, renamedFields(out)));
     setBusy(true);

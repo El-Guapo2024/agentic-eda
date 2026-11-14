@@ -48,6 +48,7 @@ import { distToSegment } from "../canvas/itemHitTest";
 import { symbolGraphicDistance } from "../../kicad-port/libEditorHit";
 import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
 import { newPinFromClick } from "../../kicad-port/symPinTemplate";
+import { newTextSizeMm, pinTemplateWithDefaults } from "../../kicad-port/symEditorDefaults";
 import { pinShown } from "../../kicad-port/symPinText";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useActionRunner } from "../../actions/useActionRunner";
@@ -510,7 +511,10 @@ export function SymbolEditorCanvas() {
     if (state.activeTool === "pin" && sym) {
       // `SYMBOL_EDITOR_PIN_TOOL::CreatePin`: the click makes the pin (the sticky defaults at that place, no name and no number) and Pin
       // Properties asks for its properties before it is added -- OK adds it, Cancel drops it.
-      dispatch({ type: "SET_PENDING_PIN", pin: newPinFromClick(state.pinTemplate, state.activeUnit, state.activeBodyStyle, nmPointToMm(sx, sy)) });
+      // (the first pin takes its length and text sizes from Preferences > Symbol Editor > Editing Options: `GetLastPinLength`'s delayed initialization)
+      const template = pinTemplateWithDefaults(state.pinTemplate, studioPrefs);
+      if (template !== state.pinTemplate) dispatch({ type: "SET_PIN_TEMPLATE", pin: template });
+      dispatch({ type: "SET_PENDING_PIN", pin: newPinFromClick(template, state.activeUnit, state.activeBodyStyle, nmPointToMm(sx, sy)) });
       return;
     }
 
@@ -539,7 +543,8 @@ export function SymbolEditorCanvas() {
         if (shapeKind === "textbox") {
           // `doDrawShape`: the box the two clicks made is shown to `DIALOG_TEXT_PROPERTIES`, which adds it on OK and drops it on Cancel
           const target = drawTarget(state);
-          dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: null, box: newTextBox(pts[0]!, pts[1]!, target.unit, target.bodyStyle, state.lastTextBox) } });
+          // (its text the size of Preferences > Symbol Editor > Editing Options' "Default text size:", `textbox->SetTextSize( .. m_Defaults.text_size .. )`)
+          dispatch({ type: "SET_TEXT_BOX_DIALOG", dialog: { id: null, box: { ...newTextBox(pts[0]!, pts[1]!, target.unit, target.bodyStyle, state.lastTextBox), size_mm: newTextSizeMm(studioPrefs) } } });
           return;
         }
         const target = drawTarget(state);

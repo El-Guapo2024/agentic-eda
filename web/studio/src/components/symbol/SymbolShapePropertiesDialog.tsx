@@ -11,9 +11,12 @@ import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
 import { graphicLooksCmd, graphicStateOf, LINE_STYLE_CHOICES } from "../../kicad-port/symLooks";
 import { ColorSwatch } from "../TextLookControls";
 import type { Cmd } from "../../api/types";
+import { borderOnWidthMm } from "../../kicad-port/symEditorDefaults";
+import { useStudioState } from "../../state/store";
 
 export function SymbolShapePropertiesDialog() {
   const state = useSymState();
+  const studioPrefs = useStudioState().prefs;
   const dispatch = useSymDispatch();
   const api = useSymApi();
   const id = state.shapeDialogId;
@@ -34,6 +37,8 @@ export function SymbolShapePropertiesDialog() {
   if (!id || !shape || !symbol || !form) return null;
   const readOnly = !!state.derivedOwn;
   const set = <K extends keyof ShapeForm>(key: K, value: ShapeForm[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  // `onBorderChecked`: a border switched on from "no border" takes Preferences > Symbol Editor > Editing Options' "Default line width:"
+  const setBorder = (on: boolean) => setForm((f) => (f ? { ...f, border: on, ...(on && shape !== undefined && shape.stroke_mm < 0 ? { widthMm: borderOnWidthMm(studioPrefs) } : {}) } : f));
   const close = () => dispatch({ type: "SET_SHAPE_DIALOG_ID", id: null });
   const ok = async () => {
     const before = graphicStateOf(symbol, id);
@@ -56,7 +61,7 @@ export function SymbolShapePropertiesDialog() {
           <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr" }}>
             <span>Border</span>
             <span>
-              <input type="checkbox" checked={form.border} onChange={(e) => set("border", e.target.checked)} data-testid="shape-border" aria-label="Border" />
+              <input type="checkbox" checked={form.border} onChange={(e) => setBorder(e.target.checked)} data-testid="shape-border" aria-label="Border" />
               <span style={{ marginLeft: 8, opacity: form.border ? 1 : 0.5 }}>
                 Width:{" "}
                 <input
