@@ -14,6 +14,7 @@
 //
 // Pure: the pages (components/FpDefaultsPages.tsx) and the Footprint Editor's New Footprint (state/footprintEditorStore.tsx) call these.
 import type { CmdText, FieldLayoutCmd, TextGraphicsDefaults } from "../api/types";
+import type { TextLook } from "../api/fpEditorTypes";
 import { textStyleOf } from "./layerDefaults";
 import { TECH_LAYER_NAMES } from "./layerPresets";
 import { userLayerName, userLayerNumber } from "./boardLayers";
@@ -99,15 +100,20 @@ export interface NewFootprintTexts {
   reference: { text: string; layout: FieldLayoutCmd };
   value: { text: string; layout: FieldLayoutCmd };
   texts: CmdText[];
+  /** Each of `texts`' looks beyond `CmdText` (`fp_item set_text`'s `look`): its layer class's glyph width, italic and keep-upright (UI-LEFT-3 F3-6). */
+  looks: TextLook[];
 }
+
+/** A text's look as the backend makes one with none of its own (`TextLook`'s defaults: upright, the width its height). */
+export const PLAIN_TEXT_LOOK: TextLook = { bold: false, italic: false, valign: 0, width_nm: null, knockout: false, keep_upright: true };
 
 /**
  * `PCB_BASE_FRAME::CreateNewFootprint`: the Reference from the first item, the Value from the second, a text for each other item; `default_pos` starts at the
  * origin, a text goes half its layer's text height further down (the Reference half a height up), and the next one starts a whole height below it; each text takes
  * its layer class's size, thickness, italic and keep-upright (`RunOnChildren`: `SetTextThickness( GetTextThickness( layer ) )` ...). An empty Reference or Value
  * shows the footprint's name (`if( footprint->GetReference().IsEmpty() ) footprint->SetReference( aFootprintName )`). A text item's visibility is the item's for the
- * two fields; the other texts are made shown (`PCB_TEXT`'s default). Differs: the studio's text model has no italic and no keep-upright for a footprint's own
- * text, so those two are the fields' only. Nothing is mirrored: `CreateNewFootprint` only sets each text's layer.
+ * two fields; the other texts are made shown (`PCB_TEXT`'s default). A text's glyph width, italic and keep-upright are its look (`looks`, UI-LEFT-3 F3-6; they
+ * were the fields' only). Nothing is mirrored: `CreateNewFootprint` only sets each text's layer.
  */
 export function newFootprintTexts(items: readonly FpTextItem[], graphics: TextGraphicsDefaults | null, name: string): NewFootprintTexts {
   const all = items.length >= 2 ? items : [...items, ...DEFAULT_FP_TEXT_ITEMS.slice(items.length, 2)];
@@ -127,13 +133,16 @@ export function newFootprintTexts(items: readonly FpTextItem[], graphics: TextGr
   const value = { text: val.text === "" ? name : val.text, layout: layoutOf(val, y) };
   y += height(val.layer);
   const texts: CmdText[] = [];
+  const looks: TextLook[] = [];
   for (const item of all.slice(2)) {
     y += height(item.layer) / 2;
     const s = textStyleOf(graphics ?? undefined, item.layer);
     texts.push({ content: item.text, at: { x: 0, y }, angle: 0, layer: item.layer, size_nm: s.heightNm, stroke_width: s.thicknessNm, justify: "center", mirror: false });
+    // `SetTextSize( settings.GetTextSize( layer ) )`, `SetItalic( GetTextItalic( layer ) )`, `SetKeepUpright( GetTextUpright( layer ) )`
+    looks.push({ ...PLAIN_TEXT_LOOK, width_nm: s.widthNm === s.heightNm ? null : s.widthNm, italic: s.italic, keep_upright: s.upright });
     y += height(item.layer);
   }
-  return { reference, value, texts };
+  return { reference, value, texts, looks };
 }
 
 /** True when the new footprint the backend makes (KiCad's default items in KiCad's factory sizes, crates/model fp_edit.rs) is already what the settings ask for. */

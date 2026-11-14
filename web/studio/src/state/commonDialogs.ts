@@ -80,6 +80,9 @@ export interface SaveFootprintAsRequest {
   name: string;
   loaded: boolean;
   again?: { name: string; lib: string };
+  /** Called once the dialog is done with: the id the footprint was stored under, or null when it was cancelled (the read-only info bar's link goes on after
+   *  `SaveFootprintAs` whatever it did, UI-LEFT-3 F3-5). Not called when New Library... shows the dialog again (the request goes on). */
+  onEnd?: (saved: string | null) => void;
 }
 
 export function setSaveFootprintAs(request: SaveFootprintAsRequest | null): void {

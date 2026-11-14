@@ -11,8 +11,11 @@
 //     Footprint Editor's Appearance panel lists the first so many user layers and every named one, a named one by its name.
 //
 // The rules are kicad-port/fpFieldDefaults.ts'; the settings are the studio's preferences (`fpDefaultTextItems`, `fpUserLayerCount`, `fpUserLayerNames`), kept per
-// person as KiCad keeps them in fpedit.json. A grid's cells are inputs and choices here (KiCad's are a `wxGrid`'s editors); Delete takes the rows checked on the left.
-import { useEffect, useState, type CSSProperties } from "react";
+// person as KiCad keeps them in fpedit.json. A grid's cells are inputs and choices here (KiCad's are a `wxGrid`'s editors); its rows are picked as a
+// `wxGridSelectRows` grid's are -- a click on a row's cell selects the row, Ctrl and Shift add to it -- and Delete takes the selected rows, else the cursor's
+// (kicad-port/wxGridRows.ts, UI-LEFT-3 F3-6; they were picked by a check box).
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { addedGridRow, clickGridRow, deleteGridRows, NO_GRID_ROWS, withoutRows, type GridRows } from "../kicad-port/wxGridRows";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { layerDisplayName } from "../kicad-port/boardLayers";
 import {
@@ -53,17 +56,32 @@ function LayerChoice({ value, layers, onChange, label }: { value: string; layers
   );
 }
 
-/** The rows checked for Delete (the grid's row selection). */
-function useRowSelection(): [ReadonlySet<number>, (row: number, on: boolean) => void, () => void] {
-  const [rows, setRows] = useState<ReadonlySet<number>>(new Set());
-  const toggle = (row: number, on: boolean) =>
-    setRows((s) => {
-      const next = new Set(s);
-      if (on) next.add(row);
-      else next.delete(row);
-      return next;
-    });
-  return [rows, toggle, () => setRows(new Set())];
+/**
+ * A `wxGridSelectRows` grid's rows (`WX_GRID`): the selection and the cursor, a row's mouse-down handler and look, Add's cursor on the new row with its first cell being
+ * edited (`OnAddRow`: `EnableCellEditControl`), and Delete (`OnDeleteRows`).
+ */
+function useGridRows() {
+  const [grid, setGrid] = useState<GridRows>(NO_GRID_ROWS);
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const rowProps = (row: number) => ({
+    "aria-selected": grid.selected.has(row),
+    "data-grid-row": row,
+    onMouseDown: (e: ReactMouseEvent) => setGrid((g) => clickGridRow(g, row, { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey })),
+    style: grid.selected.has(row) ? { background: "var(--chrome-selected-bg)", color: "var(--chrome-selected-text)" } : undefined,
+  });
+  const added = (row: number) => {
+    setGrid(addedGridRow(row));
+    // the new row's first cell edited (`ShowCellEditControl`)
+    requestAnimationFrame(() => tableRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>(`tr[data-grid-row="${row}"] input:not([type=checkbox]), tr[data-grid-row="${row}"] select`)?.focus());
+  };
+  /** `OnDeleteRows` over a grid of `count` rows: `drop` takes the rows out (highest first); none to take, nothing happens. */
+  const remove = (count: number, drop: (rows: number[]) => void) => {
+    const d = deleteGridRows(grid, count);
+    if (d.rows.length === 0) return;
+    drop(d.rows);
+    setGrid(d.after);
+  };
+  return { grid, setGrid, tableRef, rowProps, added, remove, clear: () => setGrid(NO_GRID_ROWS) };
 }
 
 /** `PANEL_FP_EDITOR_FIELD_DEFAULTS`. */
@@ -84,7 +102,8 @@ export function useFpFieldDefaultsPage(open: boolean, shown: boolean): Preferenc
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const [page, setPage] = useState<FieldDefaultsPage>(() => loadFieldDefaults(fpTextItemsOf(state.prefs.fpDefaultTextItems)));
-  const [selected, toggle, clearSelected] = useRowSelection();
+  const rows = useGridRows();
+  const clearSelected = rows.clear;
   const seen = useSeen(open, shown);
   // `TransferDataToWindow` when the dialog opens: the settings as they are
   useEffect(() => {
@@ -128,20 +147,16 @@ export function useFpFieldDefaultsPage(open: boolean, shown: boolean): Preferenc
         </tbody>
       </table>
       {heading("Default Text Items for New Footprints")}
-      <table style={{ borderCollapse: "collapse" }} data-testid="fp-defaults-texts">
+      <table style={{ borderCollapse: "collapse" }} data-testid="fp-defaults-texts" ref={rows.tableRef}>
         <thead>
           <tr>
-            <th style={head} />
             <th style={head}>Text Items</th>
             <th style={head}>Layer</th>
           </tr>
         </thead>
         <tbody>
           {page.texts.map((t, i) => (
-            <tr key={i}>
-              <td style={cell}>
-                <input type="checkbox" aria-label={`Select text item ${i + 1}`} checked={selected.has(i)} onChange={(e) => toggle(i, e.target.checked)} />
-              </td>
+            <tr key={i} {...rows.rowProps(i)}>
               <td style={cell}>
                 <input aria-label={`Text item ${i + 1}`} value={t.text} onChange={(e) => setText(i, { text: e.target.value })} />
               </td>
@@ -153,18 +168,17 @@ export function useFpFieldDefaultsPage(open: boolean, shown: boolean): Preferenc
         </tbody>
       </table>
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-        <button aria-label="Add Text Item" title="Add text item" onClick={() => setPage(addTextItemRow)}>
-          +
-        </button>
         <button
-          aria-label="Delete Text Item"
-          title="Delete text item"
-          disabled={selected.size === 0}
+          aria-label="Add Text Item"
+          title="Add text item"
           onClick={() => {
-            setPage((p) => deleteTextItemRows(p, selected));
-            clearSelected();
+            rows.added(page.texts.length);
+            setPage(addTextItemRow);
           }}
         >
+          +
+        </button>
+        <button aria-label="Delete Text Item" title="Delete text item" onClick={() => rows.remove(page.texts.length, (gone) => setPage((p) => deleteTextItemRows(p, new Set(gone))))}>
           −
         </button>
       </div>
@@ -191,7 +205,8 @@ export function useFpLayerNamesPage(open: boolean, shown: boolean): PreferencesP
   const [count, setCount] = useState(state.prefs.fpUserLayerCount);
   const [rows, setRows] = useState<LayerNameRow[]>(() => loadLayerNames(state.prefs.fpUserLayerNames));
   const [error, setError] = useState<string | null>(null);
-  const [selected, toggle, clearSelected] = useRowSelection();
+  const grid = useGridRows();
+  const clearSelected = grid.clear;
   const seen = useSeen(open, shown);
   useEffect(() => {
     if (open) {
@@ -222,20 +237,16 @@ export function useFpLayerNamesPage(open: boolean, shown: boolean): PreferencesP
         </select>
       </div>
       {heading("User Layer Names")}
-      <table style={{ borderCollapse: "collapse" }} data-testid="fp-layer-names">
+      <table style={{ borderCollapse: "collapse" }} data-testid="fp-layer-names" ref={grid.tableRef}>
         <thead>
           <tr>
-            <th style={head} />
             <th style={head}>Layer</th>
             <th style={head}>Name</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>
-              <td style={cell}>
-                <input type="checkbox" aria-label={`Select layer name ${i + 1}`} checked={selected.has(i)} onChange={(e) => toggle(i, e.target.checked)} />
-              </td>
+            <tr key={i} {...grid.rowProps(i)}>
               <td style={cell}>
                 <LayerChoice label={`Layer name ${i + 1} layer`} value={r.layer} layers={USER_NAME_LAYERS} onChange={(layer) => change(i, { layer })} />
               </td>
@@ -247,16 +258,22 @@ export function useFpLayerNamesPage(open: boolean, shown: boolean): PreferencesP
         </tbody>
       </table>
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-        <button aria-label="Add Layer Name" title="Add layer name" onClick={() => setRows(addLayerNameRow)}>
+        <button
+          aria-label="Add Layer Name"
+          title="Add layer name"
+          onClick={() => {
+            // (`AppendRows` adds nothing once every User.n has a row: the cursor stays)
+            if (addLayerNameRow(rows).length > rows.length) grid.added(rows.length);
+            setRows(addLayerNameRow);
+          }}
+        >
           +
         </button>
         <button
           aria-label="Delete Layer Name"
           title="Delete layer name"
-          disabled={selected.size === 0}
           onClick={() => {
-            setRows((rs) => rs.filter((_, i) => !selected.has(i)));
-            clearSelected();
+            grid.remove(rows.length, (gone) => setRows((rs) => withoutRows(rs, gone)));
             setError(null);
           }}
         >

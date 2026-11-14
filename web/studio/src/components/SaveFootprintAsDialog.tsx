@@ -53,6 +53,11 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
   const libs = useMemo(() => saveAsLibraryRows(tables, pinned, [start.lib, ...(req.again?.lib ? [req.again.lib] : [])]), [tables, pinned, start.lib, req.again]);
 
   const close = () => setSaveFootprintAs(null);
+  /** The dialog ends: `SaveFootprintAs` returns (cancelled: `saved` null), and whoever asked goes on (`req.onEnd`). */
+  const end = (saved: string | null) => {
+    close();
+    req.onEnd?.(saved);
+  };
 
   // `ID_MAKE_NEW_LIBRARY`: the dialog ends, `CreateNewLibrary` makes the library and its row, and the dialog is shown again on it (`libraryName = fn.GetName()`)
   const newLibrary = () => {
@@ -77,10 +82,14 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
       dispatch({ type: "SET_TREE_SELECTION", name: id });
       if (isTableLibrary(lib)) {
         const written = await saveToLibrary({ kind: "footprint", id });
-        if (!written.ok) return dispatch({ type: "TOAST", message: written.error, kind: "error" });
+        if (!written.ok) {
+          dispatch({ type: "TOAST", message: written.error, kind: "error" });
+          return req.onEnd?.(id);
+        }
       }
       // "Footprint '%s' added to '%s'" / "replaced in", the status bar's (`SetStatusText`)
       setLibraryStatusText(savedMessage(lib, name, replacing));
+      req.onEnd?.(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -109,7 +118,7 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
   };
 
   return (
-    <div className="dialog-backdrop" onClick={close}>
+    <div className="dialog-backdrop" onClick={() => end(null)}>
       <div className="dialog" style={{ width: 420 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Save Footprint As">
         <div className="dialog-header">
           <span>Save Footprint As</span>
@@ -129,7 +138,7 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") void save();
-              if (e.key === "Escape") close();
+              if (e.key === "Escape") end(null);
             }}
           />
           <label style={{ display: "block", margin: "10px 0 4px" }}>Save in library:</label>
@@ -172,7 +181,7 @@ function SaveFootprintAsBody({ req }: { req: SaveFootprintAsRequest }) {
               <button onClick={newLibrary} style={{ marginRight: "auto" }}>
                 New Library...
               </button>
-              <button onClick={close}>Cancel</button>
+              <button onClick={() => end(null)}>Cancel</button>
               <button className="primary" disabled={busy} onClick={() => void save()}>
                 Save
               </button>

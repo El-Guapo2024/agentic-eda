@@ -4,6 +4,8 @@
 // kicad-port/padLayers.ts), the fabrication property, the pad-to-die length and delay, the clearance/thermal overrides, and for a plated through-hole pad the
 // padstack (`kicad-port/padStack.ts`: "Padstack mode", "Edit layer").
 import { useEffect, useState } from "react";
+import { fromDisplay, toDisplay, type CoordType } from "../../kicad-port/originTransforms";
+import { useOriginTransforms } from "../../state/originTransforms";
 import type { LibraryPad, PadConnection } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
@@ -74,9 +76,17 @@ export function PadPropertiesDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, defaultMode]);
 
+  // the position's coordinate fields' transforms (`m_posX.SetCoordType( ORIGIN_TRANSFORMS::ABS_X_COORD )`, UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   if ((!defaultMode && !id) || !pad || !form || !shapeForm || !stack) return null;
 
   const set = <K extends keyof LibraryPad>(key: K, value: LibraryPad[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  /** A coordinate field (`UNIT_BINDER` with a coordinate type): shown and read through the origin transforms. */
+  const coord = (valueNm: number, type: CoordType, onChange: (nm: number) => void, width = 80) => (
+    <span>
+      <input type="number" step="any" value={nmTo(toDisplay(xf, valueNm, type), units)} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(fromDisplay(xf, nmFrom(Number(e.target.value), units), type)))} style={{ width }} /> {units}
+    </span>
+  );
   const len = (valueNm: number, onChange: (um: number) => void, width = 80) => (
     <span>
       <input type="number" step="any" value={nmTo(valueNm, units)} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(nmFrom(Number(e.target.value), units)))} style={{ width }} /> {units}
@@ -191,7 +201,8 @@ export function PadPropertiesDialog() {
               <>
                 <span>Position</span>
                 <span>
-                  {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(form.at.y, (y) => set("at", { ...form.at, y }))}
+                  {/* `m_posX.SetCoordType( ABS_X_COORD )`: through the Footprint Editor's Origins & Axes (UI-LEFT-3 F3-8) */}
+                  {coord(form.at.x, "abs_x", (x) => set("at", { ...form.at, x }))} {coord(form.at.y, "abs_y", (y) => set("at", { ...form.at, y }))}
                 </span>
               </>
             )}

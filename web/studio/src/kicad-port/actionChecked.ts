@@ -31,7 +31,7 @@ export interface CheckedContext {
   /** The measure tool is the tool in force. */
   measureArmed?: boolean;
   /** The Footprint Editor's line mode, display modes and Appearance pane (`FOOTPRINT_EDIT_FRAME::setupUIConditions`). */
-  fpView?: { lineMode: "direct" | "45" | "90"; sketchPads: boolean; sketchGraphics: boolean; sketchText: boolean; appearanceShown: boolean };
+  fpView?: { lineMode: "direct" | "45" | "90"; sketchPads: boolean; sketchGraphics: boolean; sketchText: boolean; appearanceShown: boolean; boardFlipped?: boolean };
 }
 
 /** The Footprint Editor's tool-arming actions and the tool each arms (`FpToolId`). */
@@ -147,6 +147,8 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     if (name === "pcbnew.Control.padDisplayMode") return v.sketchPads;
     if (name === "pcbnew.Control.graphicOutlines") return v.sketchGraphics;
     if (name === "pcbnew.Control.textOutlines") return v.sketchText;
+    // `mgr->SetConditions( PCB_ACTIONS::flipBoard, CHECK( boardFlippedCond ) )` (UI-LEFT-3 F3-9)
+    if (name === "pcbnew.Control.flipBoard") return !!v.boardFlipped;
   }
   if (c.tab === "footprint" && name in FP_TOOL_OF_ACTION) return c.fpTool === FP_TOOL_OF_ACTION[name];
   if (c.tab === "symbol" && name in SYM_TOOL_OF_ACTION) return c.symTool === SYM_TOOL_OF_ACTION[name];

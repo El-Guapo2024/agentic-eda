@@ -1125,6 +1125,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `Collide`'s contact point; the Properties pane (`PCB_PROPERTIES_PANEL` as a library editor lists it, tested against the PCB registration table). Left: the Grids, Colors, Toolbars, Footprint Defaults and User
   Layer Names preference pages; the arc editing mode is not read by the point editor; Duplicate does not copy the kept looks; the board does not get the footprint's own paste margins, private layers or
   jumper groups from Update Footprint on Board.
+- Done 2026-11-14 (`task-v18-fpedit`, UI-LEFT-3 F3-5, F3-6, F3-7, F3-8, F3-9, F3-11, F3-12; `PARITY-fpedit.md` section 30): the read-only bar's Save As clears the modified flag
+  (`POST /api/library/clear_modify`); Footprint Defaults' and User Layer Names' grid rows picked as `wxGridSelectRows`; New Footprint's texts' italic and keep-upright; the Renumber Pads popup at the
+  cursor; Mirror's point message box; the display modes kept; the Footprint Editor's origin transforms everywhere it shows a coordinate; Flip Board View; a group's field through Ctrl+E; zone arcs
+  following their zone (board and footprint), teardrop and segment-filled footprint zones as items. Found, left: Update Footprint on Board does not restore the board's item uuids
+  (`m_boardFootprintUuids`); a courtyard item kept as text has no place in Ctrl+E's copy.
 - **UI-LEFT Y1-Y5 (2026-11-05, `task-u1-symedit`; PARITY-symedit "Rotate, Mirror, beziers, the Properties pane and the carried items"):** Rotate and Mirror turn every selected item of a symbol
   -- pins, shapes, beziers, texts, text boxes, fields -- about KiCad's pivot (`SYMBOL_EDITOR_EDIT_TOOL::Rotate` / `Mirror` and each class's transform); beziers are graphics
   (`LibrarySymbolGraphic::Bezier`: read, written, drawn, the Draw Bezier Curve tool, a point editor for the curve); a plain text has Text Properties and keeps bold, italic and its justification (an

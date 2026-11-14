@@ -652,7 +652,8 @@ impl Board<'_> {
             }
         }
         // the footprint's zones are the new footprint's (`aNew->Zones()`: the old footprint goes with its own), put where it now is
-        self.set_footprint_zones(reference, library.map(|l| l.zones).unwrap_or_default());
+        let (zones, arcs) = library.map(|l| (l.zones, l.zone_arcs)).unwrap_or_default();
+        self.set_footprint_zones(reference, zones, arcs);
         // the symbol names the footprint the board has
         if change {
             for screen in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {

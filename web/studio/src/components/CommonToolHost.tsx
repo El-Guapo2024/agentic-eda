@@ -27,7 +27,7 @@ import { zoomToAreaView } from "../kicad-port/cursorControl";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { getGridSnapping, getSnapOrigin } from "./canvas/gridHelper";
-import { appendLassoPoint, applyAreaSelection, lassoContained, lassoHits } from "../kicad-port/lasso";
+import { appendLassoPoint, applyAreaSelection, lassoContained, lassoHits, signedArea } from "../kicad-port/lasso";
 
 /** A press that moves less than this many pixels is a click, not the start of a drag (KiCad starts a drag after 8 px of travel on most platforms; a lasso uses the same threshold). */
 const DRAG_THRESHOLD_PX = 8;
@@ -102,7 +102,10 @@ export function CommonToolHost() {
       const poly = [...lasso.pts, ...(a.cursor ? ([[a.cursor.x, a.cursor.y]] as [number, number][]) : [])];
       setLasso(null);
       if (poly.length < 3) return;
-      const hits = lassoHits(a.itemBoxes(), poly, lassoContained(poly));
+      // clockwise = inside, counterclockwise = touching; in a mirrored view the other way round (`SelectPolygonArea`: `if( getView()->IsMirroredX() && shapeArea
+      // != 0 ) isClockwise = !isClockwise`, UI-LEFT-3 F3-9)
+      const contained = lassoContained(poly) !== (a.flipped && signedArea(poly) !== 0);
+      const hits = lassoHits(a.itemBoxes(), poly, contained);
       const mode = lasso.subtractive ? "subtract" : lasso.additive ? "add" : "set";
       a.setSelection(applyAreaSelection([...a.selection], hits, mode));
     };

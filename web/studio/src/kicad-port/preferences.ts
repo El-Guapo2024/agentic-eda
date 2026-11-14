@@ -135,6 +135,11 @@ export interface Preferences {
   fpSelectionFilter: FpSelectionFilter;
   /** `FOOTPRINT_EDITOR_SETTINGS::m_LayerPresets` (`pcb_display.layer_presets`): the person's own layer presets of the Footprint Editor's Appearance manager (UI-LEFT-2 FF5). */
   fpLayerPresets: LayerPreset[];
+  /** `FOOTPRINT_EDITOR_SETTINGS::m_ViewersDisplay` (`pcb_display.pad_fill`, `graphics_fill`, `text_fill`, all on by default): the Footprint Editor's left toolbar's Sketch
+   *  Pads / Sketch Graphic Items / Sketch Text Items, off when the item kind is drawn as outlines -- kept between sessions as KiCad keeps them (UI-LEFT-3 F3-7). */
+  fpPadFill: boolean;
+  fpGraphicsFill: boolean;
+  fpTextFill: boolean;
   /** `PCBNEW_SETTINGS::m_ArcEditMode` ("Arc editing mode:", Preferences > PCB Editor > Editing Options; `cycleArcEditMode` sets it too): how the point editor drags an arc. */
   pcbArcEditMode: ArcEditMode;
   /** `EESCHEMA_SETTINGS::m_Drawing.arc_edit_mode` ("Arc editing mode:", Preferences > Schematic Editor > Editing Options). */
@@ -293,6 +298,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fpUserLayerNames: {},
   fpSelectionFilter: DEFAULT_FP_SELECTION_FILTER,
   fpLayerPresets: [],
+  fpPadFill: true,
+  fpGraphicsFill: true,
+  fpTextFill: true,
   pcbArcEditMode: DEFAULT_ARC_EDIT_MODE,
   schArcEditMode: DEFAULT_ARC_EDIT_MODE,
   escClearsNetHighlight: true,
@@ -482,6 +490,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     fpLayerPresets: Array.isArray(o.fpLayerPresets)
       ? (o.fpLayerPresets as LayerPreset[]).filter((p) => p && typeof p.name === "string" && Array.isArray(p.layers) && Array.isArray(p.renderLayers)).map((p) => ({ ...p, readOnly: false, flipBoard: !!p.flipBoard, activeLayer: typeof p.activeLayer === "string" ? p.activeLayer : null }))
       : d.fpLayerPresets,
+    fpPadFill: bool(o.fpPadFill, d.fpPadFill),
+    fpGraphicsFill: bool(o.fpGraphicsFill, d.fpGraphicsFill),
+    fpTextFill: bool(o.fpTextFill, d.fpTextFill),
     pcbArcEditMode: arcEditMode(o.pcbArcEditMode, d.pcbArcEditMode),
     schArcEditMode: arcEditMode(o.schArcEditMode, d.schArcEditMode),
     escClearsNetHighlight: bool(o.escClearsNetHighlight, d.escClearsNetHighlight),

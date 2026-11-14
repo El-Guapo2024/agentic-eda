@@ -58,6 +58,16 @@ export function pcbOriginTransforms(mode: DisplayOrigin, invertX: boolean, inver
   return { originX: o.x, originY: o.y, invertX, invertY };
 }
 
+/**
+ * The Footprint Editor's transforms (`PCB_ORIGIN_TRANSFORMS` of `FRAME_FOOTPRINT_EDITOR`, UI-LEFT-3 F3-8): `getUserXOrigin()` is `PCB_BASE_FRAME::GetUserOrigin()`, which
+ * reads the board editor's Display Origin (`GetPcbNewSettings()->m_Display.m_DisplayOrigin`) over the editor's own board -- whose drill/place file origin nothing in
+ * the Footprint Editor moves from (0, 0) -- and its grid origin; `invertXAxis()` / `invertYAxis()` are the Footprint Editor's own (`GetFootprintEditorSettings()->
+ * m_DisplayInvertXAxis`).
+ */
+export function fpOriginTransforms(mode: DisplayOrigin, invertX: boolean, invertY: boolean, grid: Pt | null | undefined): OriginTransforms {
+  return pcbOriginTransforms(mode, invertX, invertY, null, grid);
+}
+
 /** `ORIGIN_TRANSFORMS::ToDisplayRel( T, bool )` / `FromDisplayRel` (the same): negated when the axis is inverted, never to -0. */
 function rel(v: number, invert: boolean): number {
   return invert && v !== 0 ? -v : v;

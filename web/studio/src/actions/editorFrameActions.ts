@@ -20,6 +20,7 @@ import { revertFootprint, revertSymbol, saveAllSymbols, saveFootprint, saveSymbo
 import { fpEditTarget, fpHitTest, fpMirrorCmd, fpSelectionTarget, type Snap } from "../kicad-port/fpItems";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
+import { sayPointsNotMirrored } from "../state/footprintEditorStore";
 import { asPickedImage } from "./imageFiles";
 import { fpChooseImage } from "../components/footprint/fpItemTools";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
@@ -145,7 +146,8 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
         return;
       }
       if (st.selection.size === 0) return;
-      void ctx.fpApi.rotateSelection(quarterTurns, gridSnap, step);
+      // `if( frame()->GetCanvas()->GetView()->GetGAL()->IsFlippedX() ) rotateAngle = -rotateAngle;`: in the flipped view the turn runs the other way (UI-LEFT-3 F3-9)
+      void ctx.fpApi.rotateSelection(st.boardFlipped ? -quarterTurns : quarterTurns, gridSnap, step);
     };
     m.set("pcbnew.InteractiveEdit.rotateCcw", rotate(1));
     m.set("pcbnew.InteractiveEdit.rotateCw", rotate(-1));
@@ -162,7 +164,12 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       const id = hoverItem();
       if (!id || !st.name || !st.footprint) return;
       const cmd = fpMirrorCmd(st.footprint, st.name, [id], direction, gridSnap);
-      if (cmd) void ctx.fpApi.cmd(cmd);
+      const fp = st.footprint;
+      // (a hovered point says so too: `BOARD_ITEM::Mirror`'s box, UI-LEFT-3 F3-7)
+      void (async () => {
+        if (cmd) await ctx.fpApi.cmd(cmd);
+        await sayPointsNotMirrored(fp, [id]);
+      })();
     };
     m.set("pcbnew.InteractiveEdit.mirrorHoriontally", mirror("left_right"));
     m.set("pcbnew.InteractiveEdit.mirrorVertically", mirror("top_bottom"));
@@ -289,10 +296,24 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
       if (st.activeTool === "ref_image" && !param) return void ctx.fpApi.setTool("select");
       void ctx.fpApi.setTool("ref_image").then(() => fpChooseImage({ dispatch: ctx.fpDispatch }, asPickedImage(param)));
     });
-    // The display modes of the left toolbar (`PCB_VIEWER_TOOLS::ShowPadNumbers` family: `PadDisplayMode`, `GraphicOutlines`, `TextOutlines`).
-    m.set("pcbnew.Control.padDisplayMode", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchPads: !ctx.fpApi.getState().sketchPads } }));
-    m.set("pcbnew.Control.graphicOutlines", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchGraphics: !ctx.fpApi.getState().sketchGraphics } }));
-    m.set("pcbnew.Control.textOutlines", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { sketchText: !ctx.fpApi.getState().sketchText } }));
+    // The display modes of the left toolbar (`PCB_VIEWER_TOOLS::ShowPadNumbers` family: `PadDisplayMode`, `GraphicOutlines`, `TextOutlines`): each `Flip`s the
+    // editor's settings (`GetViewerSettingsBase()->m_ViewersDisplay`), which KiCad saves (`pcb_display.pad_fill` ...): the person's preferences here (UI-LEFT-3 F3-7),
+    // which components/footprint/FootprintEditorView.tsx hands to the editor.
+    const display = (key: "sketchPads" | "sketchGraphics" | "sketchText", pref: "fpPadFill" | "fpGraphicsFill" | "fpTextFill") => () => {
+      const sketch = !ctx.fpApi.getState()[key];
+      ctx.fpDispatch({ type: "SET_DISPLAY", patch: { [key]: sketch } });
+      ctx.setPrefs?.({ [pref]: !sketch });
+    };
+    // Space (`COMMON_TOOLS::ResetLocalCoords`): the screen's local origin where the cursor is, which the status bar's dx / dy count from (UI-LEFT-3 F3-8)
+    m.set("common.Control.resetLocalCoords", () => {
+      const c = ctx.fpApi.getState().cursorNm;
+      if (c) ctx.fpDispatch({ type: "SET_LOCAL_ORIGIN", at: c });
+    });
+    // View > Flip Board View (`PCB_CONTROL::FlipPcbView`: `m_FlipBoardView` toggled, `SetDisplayOptions` mirrors the view), the Footprint Editor's own (UI-LEFT-3 F3-9)
+    m.set("pcbnew.Control.flipBoard", () => ctx.fpDispatch({ type: "SET_DISPLAY", patch: { boardFlipped: !ctx.fpApi.getState().boardFlipped } }));
+    m.set("pcbnew.Control.padDisplayMode", display("sketchPads", "fpPadFill"));
+    m.set("pcbnew.Control.graphicOutlines", display("sketchGraphics", "fpGraphicsFill"));
+    m.set("pcbnew.Control.textOutlines", display("sketchText", "fpTextFill"));
     // Show Appearance Manager (`FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager`): the frame's Appearance pane.
     m.set("pcbnew.Control.showLayersManager", () => ctx.fpDispatch({ type: "SET_APPEARANCE_SHOWN", shown: !ctx.fpApi.getState().appearanceShown }));
     // Properties (E): `EDIT_TOOL::Properties` -> `FOOTPRINT_EDIT_FRAME::OnEditItemRequest` -- the one selected item's dialog (a pad's, a text's or a field's, a shape's, ...),

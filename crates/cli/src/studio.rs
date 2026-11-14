@@ -896,6 +896,7 @@ fn handle(
         ("POST", "/api/library/save_as") => respond(stream, "200 OK", "application/json", crate::library_save_api::save_library_as(dir, &body).to_string().as_bytes()),
         // UI-LEFT-2 LL1, LL3, LL6: Revert and a reload as one undoable step, the derived symbols Delete takes, the watch on the open item's library
         ("POST", "/api/library/revert") => respond(stream, "200 OK", "application/json", crate::library_save_api::revert(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library/clear_modify") => respond(stream, "200 OK", "application/json", crate::library_save_api::clear_modify(dir, &body).to_string().as_bytes()),
         ("GET", "/api/library/derived") => respond(stream, "200 OK", "application/json", crate::library_save_api::derived(dir, &query_value(target, "id")).to_string().as_bytes()),
         ("GET", "/api/library/watch") => respond(stream, "200 OK", "application/json", crate::library_watch::watch(dir, &query_value(target, "kind"), &query_value(target, "id")).to_string().as_bytes()),
         // The library tables (`crate::library_tables`): KiCad's global ones, read only, and the board's own `sym-lib-table` / `fp-lib-table`, which the Manage Symbol Libraries

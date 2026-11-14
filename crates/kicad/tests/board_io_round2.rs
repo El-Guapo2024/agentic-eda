@@ -533,7 +533,7 @@ fn an_imported_footprint_without_models_stays_without() {
 }
 
 /// r3 F10: a zone outline drawn with arcs (`issue22475`'s GND pour, `issue22826`'s round rule areas) is written back with its arcs, as `format( const ZONE* )` writes
-/// the chain; once the outline is edited, as points.
+/// the chain; moved, the arcs move with it (`ZONE::Move`: `m_Poly->Move`, UI-LEFT-3 F3-12); once the outline is reshaped, as points.
 #[test]
 fn a_zone_outline_keeps_its_arcs() {
     let text = board(
@@ -551,7 +551,12 @@ fn a_zone_outline_keeps_its_arcs() {
     }
     let out = export(&moved, &model);
     let zone = blocks(&out, "zone")[0].to_string();
-    assert!(!zone.contains("(arc ") && zone.contains("(xy 96 95)"), "an edited outline is its points: {zone}");
+    assert!(zone.contains("(arc (start 121 95) (mid 124.535534 96.464466) (end 126 100))") && zone.contains("(xy 96 95)"), "a moved outline keeps its arcs, moved: {zone}");
+    let mut reshaped = moved.clone();
+    reshaped.routing.as_mut().unwrap().zones[0].outline[0].y += eda_model::units::mm(1.0);
+    let out = export(&reshaped, &model);
+    let zone = blocks(&out, "zone")[0].to_string();
+    assert!(!zone.contains("(arc ") && zone.contains("(xy 96 96)"), "a reshaped outline is its points: {zone}");
 }
 
 /// r2 F15: a user field of a file before 20230620 (`(property "Case" "0805")`, no place of its own) is where KiCad's parser leaves it -- a new `PCB_FIELD`, not turned

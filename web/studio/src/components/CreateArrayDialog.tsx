@@ -191,10 +191,9 @@ export function CreateArrayForm({ host }: { host: ArrayHost }) {
   const origin = host.origin;
 
   const [flags, setFlags] = useState<ArrayOptions>(() => remembered);
-  // The spacings and offsets are `REL_*_COORD`, the centre `ABS_*_COORD`: shown and read through the board editor's Origins & Axes (UI-LEFT-2 PP9); the
-  // Footprint Editor's dialog as before (its frame's transforms are not modelled).
-  const boardXf = useOriginTransforms();
-  const xf = host.footprintEditor ? undefined : boardXf;
+  // The spacings and offsets are `REL_*_COORD`, the centre `ABS_*_COORD`: shown and read through the frame's Origins & Axes (UI-LEFT-2 PP9; the Footprint
+  // Editor's own, UI-LEFT-3 F3-8)
+  const xf = useOriginTransforms();
   const [entries, setEntries] = useState<ArrayEntries>(() => entriesOf({ ...remembered, centerX: origin?.[0] ?? remembered.centerX, centerY: origin?.[1] ?? remembered.centerY }, units, xf));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

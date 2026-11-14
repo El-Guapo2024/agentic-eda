@@ -76,6 +76,8 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.Control.textOutlines",
   // Show Appearance Manager (the board's right dock, the footprint editor's `FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager`).
   "pcbnew.Control.showLayersManager",
+  // View > Flip Board View (`PCB_CONTROL::FlipPcbView`, both frames' View menu; the footprint editor's `boardFlippedCond`), UI-LEFT-3 F3-9.
+  "pcbnew.Control.flipBoard",
   // `DRAWING_TOOL`'s tools for the footprint's dimensions, rule areas, text boxes, points, tables, barcodes and reference images (actions/editorFrameActions.ts, UI-LEFT F2).
   "pcbnew.InteractiveDrawing.alignedDimension",
   "pcbnew.InteractiveDrawing.orthogonalDimension",

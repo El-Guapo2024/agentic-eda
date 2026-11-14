@@ -34,6 +34,7 @@ import { trapezoidCorners } from "../../kicad-port/padShape";
 import type { ArcGeom } from "../../kicad-port/arcGeom";
 import type { BezierGeom } from "../../kicad-port/bezierGeom";
 import { drawStrokeText } from "../text/strokeFont";
+import { keptReadableInFlippedView } from "../../kicad-port/flipView";
 import { beginTextRecord, paintKicadText } from "../text/kicadTextPaint";
 import { effectiveTextPenWidth, type KicadTextSpec } from "../../kicad-port/kicadText";
 import { drawAngle } from "../../kicad-port/fpFields";
@@ -197,7 +198,7 @@ function paintCustomPrimitives(ctx: CanvasRenderingContext2D, pad: LibraryPad, c
   }
 }
 
-function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: LibraryPad, opts: { selected: boolean; sketch?: boolean }) {
+function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: LibraryPad, opts: { selected: boolean; sketch?: boolean; flipped?: boolean }) {
   // `PAD::SetOffset`: the copper shape sits at `at + rotate(offset)`
   // (offset is defined in the pad's own, pre-rotation local frame, so it
   // turns with the pad) while the drill stays exactly at `at` -- the two
@@ -274,7 +275,7 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
     // the board's painter works in micrometres (its `MAX_FONT_SIZE` is 10_000), this one in nanometres
     ctx.save();
     ctx.scale(1000, 1000);
-    drawPadNumber(ctx, { x: pad.at.x / 1000, y: pad.at.y / 1000, w: w / 1000, h: h / 1000, num: pad.number }, false, layerColor("pad_netname"));
+    drawPadNumber(ctx, { x: pad.at.x / 1000, y: pad.at.y / 1000, w: w / 1000, h: h / 1000, num: pad.number }, false, layerColor("pad_netname"), !!opts.flipped);
     ctx.restore();
   }
 }
@@ -393,7 +394,7 @@ function cmdShapeAsShape(s: CmdShape): Shape {
  * vertical justification, glyph width, knockout and keep-upright, UI-LEFT F5; the face it is set in), the board's layout (kicad-port/kicadText.ts, UI-LEFT-2 PP1).
  * Sketch Text Items (`m_DisplayTextFill` off): the text in line mode, a pixel wide. A `${REFERENCE}` shows as written: the editor's board is a footprint holder.
  */
-function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false, look?: TextLook, face: string | null = null) {
+function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText, selected: boolean, sketch = false, look?: TextLook, face: string | null = null, viewFlipped = false) {
   const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
   const size: [number, number] = [look?.width_nm ?? t.size_nm, t.size_nm];
   const bold = !!look?.bold;
@@ -410,7 +411,15 @@ function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText
     italic: !!look?.italic,
     bold,
   };
-  paintKicadText(ctx, spec, face, { color, pen: sketch ? hairlineNm(view, 1) : undefined, minPen: hairlineNm(view, 0.5), knockout: look?.knockout ? layerColor("background") : null, record: t.id ? { tag: "fp", id: t.id } : undefined });
+  paintKicadText(ctx, spec, face, {
+    color,
+    pen: sketch ? hairlineNm(view, 1) : undefined,
+    minPen: hairlineNm(view, 0.5),
+    knockout: look?.knockout ? layerColor("background") : null,
+    // Flip Board View: `if( m_gal->IsFlippedX() && !aText->IsSideSpecific() ) attrs.m_Mirrored = !attrs.m_Mirrored` (UI-LEFT-3 F3-9)
+    flippedView: keptReadableInFlippedView(viewFlipped, t.layer),
+    record: t.id ? { tag: "fp", id: t.id } : undefined,
+  });
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
@@ -482,6 +491,8 @@ export interface FpPaintOptions {
   layerOpacity?: Record<string, number>;
   /** The items the clarification menu's row under the pointer stands for, drawn brightened over the footprint (`doSelectionMenu`'s BRIGHTENED, UI-LEFT-3 S3-24). */
   brightened?: readonly string[];
+  /** Flip Board View is on (`m_FlipBoardView`, the canvas draws mirrored): a text not on one side's layer is drawn to read as it did (kicad-port/flipView.ts, UI-LEFT-3 F3-9). */
+  viewFlipped?: boolean;
 }
 
 /**
@@ -547,6 +558,7 @@ export function paintFootprint(
     sketchGraphics: !!opts.sketchGraphics,
     movePreview: opts.movePreview,
     footprint: footprint.name,
+    viewFlipped: !!opts.viewFlipped,
   };
 
   // The zones, tables, dimensions, text boxes, points, barcodes and images of the footprint (kicad-port/fpItems.ts), under the graphics.
@@ -575,7 +587,7 @@ export function paintFootprint(
       ctx.save();
       ctx.globalAlpha *= opacity(t.layer);
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-      withContrast(ctx, opts, t.layer, () => drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id)));
+      withContrast(ctx, opts, t.layer, () => drawText(ctx, view, t, opts.selection.has(t.id ?? ""), !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id), !!opts.viewFlipped));
       ctx.restore();
     }
   }
@@ -590,7 +602,7 @@ export function paintFootprint(
       ctx.save();
       ctx.globalAlpha *= opts.layerOpacity?.["obj:pads"] ?? 1;
       if (mv) ctx.translate(mv.dxNm, mv.dyNm);
-      withContrast(ctx, opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null, () => drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads }));
+      withContrast(ctx, opts, opts.activeLayer && fpPadOnLayer(layers, opts.activeLayer) ? opts.activeLayer : null, () => drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? ""), sketch: !!opts.sketchPads, flipped: opts.viewFlipped }));
       ctx.restore();
     }
   }
@@ -609,9 +621,9 @@ export function paintFootprint(
       }
       const strokeTypes = footprint.kicad?.stroke_types as Record<string, string> | undefined;
       for (const g of footprint.graphics) if (on(g.id) && layerIsVisible(visible, g.layer)) drawGraphic(ctx, view, g, false, !!opts.sketchGraphics, g.id ? strokeTypes?.[g.id] : undefined, g.id ? fpEndingsOf(footprint, g.id) : undefined);
-      for (const t of footprint.texts) if (on(t.id) && layerIsVisible(visible, t.layer) && !isHiddenText(footprint, t.id)) drawText(ctx, view, t, false, !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id));
+      for (const t of footprint.texts) if (on(t.id) && layerIsVisible(visible, t.layer) && !isHiddenText(footprint, t.id)) drawText(ctx, view, t, false, !!opts.sketchText, t.id ? textLookOf(footprint, t.id) : undefined, textFaceOf(footprint, t.id), !!opts.viewFlipped);
       if (footprint.fieldsToDraw) paintFpFields(ctx, view, footprint.fieldsToDraw.filter((f) => on(f.id)), plain);
-      for (const p of footprint.pads) if (on(p.id)) drawPad(ctx, view, p, { selected: false, sketch: !!opts.sketchPads });
+      for (const p of footprint.pads) if (on(p.id)) drawPad(ctx, view, p, { selected: false, sketch: !!opts.sketchPads, flipped: opts.viewFlipped });
     });
   }
 

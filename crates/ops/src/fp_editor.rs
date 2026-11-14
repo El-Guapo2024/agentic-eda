@@ -202,11 +202,13 @@ fn library_forms(fp: &LibraryFootprint) -> Vec<String> {
 
 /// A board footprint's groups (`FootprintExtra::groups`, each member by its place) as the copy's (`FootprintItems::groups`, by the copy's ids, once the copy's items have
 /// theirs): `art:<i>` is the i-th graphic of the copy (`from_engine_footprint` lists the art's shapes in order), `arttext:<i>` its i-th text, `pad:<n>#<k>` the k-th pad
-/// numbered `n`, `item:<id>` the item, `group:<i>` the i-th group (`resolveGroups` creates every group before it resolves the members). A member the copy has no place
-/// for (a field, a courtyard item kept as text) is left out, as KiCad leaves out of a group a member that is gone, and a group left with none is no group. A locked group's
+/// numbered `n`, `field:<name>` the copy's field of that name (`PCB_FIELD` is groupable: `BOARD_ITEM::IsGroupableType`, and the clone keeps the group's field,
+/// UI-LEFT-3 F3-11), `item:<id>` the item, `group:<i>` the i-th group (`resolveGroups` creates every group before it resolves the members). A member the copy has no
+/// place for (a courtyard item kept as text) is left out, as KiCad leaves out of a group a member that is gone, and a group left with none is no group. A locked group's
 /// lock is the copy's kept lock of its id.
 fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootprint) {
     let pad_id = |number: &str, k: usize| fp.pads.iter().filter(|p| p.number == number).nth(k.saturating_sub(1)).map(|p| p.id.clone());
+    let fields = crate::fp_items::live_ids(fp);
     let mut made: Vec<(eda_model::ir::Group, Vec<usize>)> = Vec::new();
     for g in groups {
         let mut members = Vec::new();
@@ -217,6 +219,7 @@ fn copy_groups(groups: &[eda_model::ir::FootprintGroup], fp: &mut LibraryFootpri
                 "art" => rest.parse::<usize>().ok().and_then(|i| fp.graphics.get(i)).map(|s| s.id().to_string()),
                 "arttext" => rest.parse::<usize>().ok().and_then(|i| fp.texts.get(i)).map(|t| t.id.clone()),
                 "pad" => rest.split_once('#').and_then(|(n, k)| pad_id(n, k.parse().ok()?)),
+                "field" => Some(format!("{}{rest}", crate::fp_items::FIELD_PREFIX)).filter(|id| fields.contains(id)),
                 "item" => fp.items.has(rest).then(|| rest.to_string()),
                 "group" => {
                     inner.extend(rest.parse::<usize>().ok());
@@ -269,6 +272,10 @@ fn board_groups(fp: &LibraryFootprint) -> Vec<eda_model::ir::FootprintGroup> {
         }
         if let Some(&g) = index_of_group.get(id) {
             return Some(format!("group:{g}"));
+        }
+        // a field by its name, as the board's reader names it (`field:<name>`, the footprint's `PCB_FIELD`)
+        if let Some(name) = crate::fp_items::field_name(id) {
+            return Some(format!("field:{name}"));
         }
         eda_model::fp_items_place::placed_kinds(&fp.items).has(id).then(|| format!("item:{id}"))
     };
@@ -424,6 +431,12 @@ impl Board<'_> {
         // copy's; and its zones, taken off the board to its frame (UI-LEFT PP14, FF4)
         fp.items = eda_model::fp_items_place::items_of(&self.design, self.model, &part).map(eda_model::fp_items_place::placed_kinds).unwrap_or_default();
         fp.items.zones = self.footprint_zones_in_frame(reference);
+        // the arcs of their outlines (the clone's `m_Poly`, UI-LEFT-3 F3-12): kept by the zone's id, which the copy's zone keeps; they follow it into the frame
+        for z in &fp.items.zones {
+            if let Some(a) = self.design.drawings.as_ref().and_then(|d| d.zone_arcs.iter().find(|a| a.id == z.id)) {
+                fp.kicad.zone_arcs.push(a.clone());
+            }
+        }
         if let Some(e) = &extra {
             fp.kicad.locked.extend(e.locked_items.iter().filter(|id| fp.items.has(id)).cloned());
         }
@@ -648,7 +661,9 @@ impl Board<'_> {
             dr.footprint_extras.sort_by(|a, b| a.id.cmp(&b.id));
         }
         // the copy's zones are the footprint's, put where it is (UI-LEFT PP14, FF4)
-        self.set_footprint_zones(&reference, copy.footprint.items.zones.clone());
+        // (each with the arcs of its outline, UI-LEFT-3 F3-12)
+        let arcs = copy.footprint.items.zones.iter().map(|z| copy.footprint.kicad.zone_arcs.iter().find(|a| a.id == z.id).cloned()).collect();
+        self.set_footprint_zones(&reference, copy.footprint.items.zones.clone(), arcs);
         // a DNP or BOM flag the copy changed reaches the symbol, as an edit of Footprint Properties on the board does
         if bom_changed {
             self.design.sync_symbol_bom_flags(&edits);

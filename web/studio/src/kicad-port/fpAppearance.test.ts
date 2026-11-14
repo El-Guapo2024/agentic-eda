@@ -222,6 +222,13 @@ test("the Footprint Editor's presets: what is on screen as a preset view, the ma
   const out = fpApplyPresetView(universe, {}, front);
   assert.equal(out.visible["B.Cu"] ?? out.visible["b_cu"], false);
   assert.equal(fpMatchingPreset(presets, fpPresetView(universe, { ...st, layerVisible: out.visible })), "Front Layers");
+  // UI-LEFT-3 F3-9: a preset holds the flip -- Back Layers flips the view (`doApplyLayerPreset`), and a flipped view matches no unflipped preset
+  const back = selectPreset(fpPresetView(universe, st), presets.find((p) => p.name === "Back Layers")!, presets);
+  const outBack = fpApplyPresetView(universe, {}, back);
+  assert.equal(outBack.flipped, true);
+  assert.equal(fpMatchingPreset(presets, fpPresetView(universe, { ...st, layerVisible: outBack.visible, boardFlipped: true })), "Back Layers");
+  assert.equal(fpMatchingPreset(presets, fpPresetView(universe, { ...st, boardFlipped: true })), "");
+  assert.equal(out.flipped, false);
   // the filter's rows: a rule area is Rule Areas, a barcode Other items, a locked pad clicked alone passes
   assert.equal(fpPassesFilter({ ...DEFAULT_FP_SELECTION_FILTER, keepouts: false }, "zone", false, true), false);
   assert.equal(fpPassesFilter({ ...DEFAULT_FP_SELECTION_FILTER, keepouts: false }, "zone", false, false), true);

@@ -386,7 +386,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
             moved.holes = z.holes.iter().map(|h| h.iter().map(|p| mv(*p)).collect()).collect();
             let n = if z.is_rule_area { 0 } else { nets.get(z.net.as_str()).copied().unwrap_or(0) };
             let uuid = duid(&format!("clip:zone:{}", z.id));
-            write_zone(&mut text, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
+            write_zone(&mut text, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &[], filled: false, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None, teardrop_as_read: false });
         }
         text
     };
@@ -491,7 +491,7 @@ pub fn export_pcb_clipboard_with(design: &Design, model: &ConstraintModel, ids: 
             None => Vec::new(),
         };
         let filled = current.as_ref().is_some_and(|e| !e.unfilled);
-        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &layer_fills, filled, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None });
+        write_zone(&mut out, &moved, &ZoneArgs { net: n, locked: false, uuid: &uuid, fills: &layer_fills, filled, enabled_layers: None, thieving: None, arc_rings: None, layer_props: None, teardrop_as_read: false });
         written.entry(z.id.clone()).or_default().push(uuid);
     }
     for s in &picked.shapes {

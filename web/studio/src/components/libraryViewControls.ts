@@ -11,6 +11,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, motionPan, type ViewControlSettings } from "../kicad-port/viewControls";
 import { panByWorldDelta, type ViewTransform } from "../kicad-port/view";
+import { flipLocalX, flipPan, panDeltaX } from "../kicad-port/boardControl";
 import { isMac } from "../platform";
 
 type ViewDrag = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean } | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean };
@@ -31,6 +32,9 @@ export interface LibraryViewControlsOptions {
   shown: boolean;
   /** The user moved the view by hand (no fit to the content follows). */
   onUserMoved: () => void;
+  /** The view is mirrored left to right (Flip Board View, the Footprint Editor's: UI-LEFT-3 F3-9): a screen x is the canvas width minus the unmirrored one, and a
+   *  drag's x travel moves the unmirrored view the other way (`WX_VIEW_CONTROLS` through the mirrored matrix). */
+  flipped?: boolean;
 }
 
 export interface LibraryViewControls {
@@ -70,7 +74,7 @@ export function useLibraryViewControls(o: LibraryViewControlsOptions): LibraryVi
       if (!step) return;
       c.onUserMoved();
       autoPanned.current = true;
-      c.setView(panByWorldDelta(c.view, step.x, step.y));
+      c.setView(panByWorldDelta(c.view, panDeltaX(!!c.flipped, step.x), step.y));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -94,7 +98,7 @@ export function useLibraryViewControls(o: LibraryViewControlsOptions): LibraryVi
       if (action === "pan") drag.current = { kind: "pan", button: e.button, startScreen: [e.clientX, e.clientY], startView: [c.view.x, c.view.y], moved: false };
       else if (action === "zoom") {
         const rect = c.containerRef.current!.getBoundingClientRect();
-        drag.current = { kind: "zoom", button: e.button, anchor: { x: e.clientX - rect.left, y: e.clientY - rect.top }, lastY: e.clientY, moved: false };
+        drag.current = { kind: "zoom", button: e.button, anchor: { x: flipLocalX(!!c.flipped, rect.width, e.clientX - rect.left), y: e.clientY - rect.top }, lastY: e.clientY, moved: false };
       } else drag.current = null;
       return true;
     },
@@ -106,13 +110,13 @@ export function useLibraryViewControls(o: LibraryViewControlsOptions): LibraryVi
       metaPanStart.current = meta.start;
       if (meta.view) {
         c.onUserMoved();
-        c.setView(meta.view);
+        c.setView(flipPan(!!c.flipped, c.view, meta.view));
       }
       const d = drag.current;
       if (!d) return false;
       c.onUserMoved();
       if (dragging) d.moved = true;
-      if (d.kind === "pan") c.setView({ ...c.view, x: d.startView[0] + (e.clientX - d.startScreen[0]), y: d.startView[1] + (e.clientY - d.startScreen[1]) });
+      if (d.kind === "pan") c.setView({ ...c.view, x: d.startView[0] + panDeltaX(!!c.flipped, e.clientX - d.startScreen[0]), y: d.startView[1] + (e.clientY - d.startScreen[1]) });
       else {
         c.setView(dragZoomView(c.view, d.anchor, e.clientY - d.lastY, c.zoomSpeed));
         d.lastY = e.clientY;
