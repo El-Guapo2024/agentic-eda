@@ -45,11 +45,11 @@ export function fontFor(face: string | null | undefined, bold = false, italic = 
 setFontResolver(fontFor);
 
 /** What the browser checks read: every face asked for and how it went (`window.__eda` has no font state of its own). */
-export function fontStates(): { face: string; bold: boolean; italic: boolean; state: string; file?: string; style?: string; family?: string; fakeItalic?: boolean; reason?: string }[] {
+export function fontStates(): { face: string; bold: boolean; italic: boolean; state: string; file?: string; style?: string; family?: string; fakeBold?: boolean; fakeItalic?: boolean; reason?: string }[] {
   return [...entries.entries()].map(([k, e]) => {
     const [face, flags = ""] = k.split("\u0000");
     const base = { face: face ?? "", bold: flags.includes("b"), italic: flags.includes("i"), state: e.state };
-    if (e.state === "ready") return { ...base, file: e.file, style: e.style, family: e.face.family, fakeItalic: e.face.fakeItalic };
+    if (e.state === "ready") return { ...base, file: e.file, style: e.style, family: e.face.family, fakeBold: e.face.fakeBold, fakeItalic: e.face.fakeItalic };
     if (e.state === "failed") return { ...base, reason: e.reason };
     return base;
   });
