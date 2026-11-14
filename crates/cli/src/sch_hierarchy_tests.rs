@@ -2769,7 +2769,7 @@ const QA_LEGACY: &[&str] = &[
 /// The QA legacy project `rel` in a scratch folder as kicad-cli can read it: KiCad's own upgraded `.kicad_sch` files left out (kicad-cli and the import
 /// read the `.sch`), and a `.kicad_pro` beside the root when the project has none (kicad-cli reads a `.sch` only inside a project: "Failed to load
 /// schematic" otherwise, which a KiCad that opens the project makes from the `.pro`).
-fn legacy_project(rel: &str, name: &str) -> Option<PathBuf> {
+pub(crate) fn legacy_project(rel: &str, name: &str) -> Option<PathBuf> {
     let src = std::env::var_os("KICAD_SRC_DIR").map(PathBuf::from)?.join("qa/data").join(rel);
     let work = scratch(name);
     let project = work.join("legacy");
@@ -2898,7 +2898,7 @@ fn slow_the_legacy_rescue_writes_a_library_kicad_cli_reads_and_remap_links_to_it
     let (_, names) = crate::rescue_api::legacy_library_list(&dir, "intent");
     assert_eq!(names.first().map(String::as_str), Some("intent-rescue"));
     // Remap: every symbol to the rescue library
-    let r = crate::rescue_api::remap(&dir);
+    let r = crate::rescue_api::remap(&dir, b"{}");
     assert_eq!(r["ok"], true, "{r}");
     let report: Vec<String> = r["report"].as_array().unwrap().iter().map(|l| l["text"].as_str().unwrap().to_string()).collect();
     assert!(report.iter().any(|l| l.ends_with("mapped to symbol library 'intent-rescue'.")) && !report.iter().any(|l| l.starts_with("No symbol")), "{report:#?}");

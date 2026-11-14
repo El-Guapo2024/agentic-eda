@@ -44,9 +44,10 @@ export interface RemapLine {
   text: string;
 }
 
-/** `DIALOG_SYMBOL_REMAP::OnRemapSymbols` on the server: the report, and the command that names each symbol's library (none when nothing was mapped). */
-export async function remapSymbols(): Promise<{ report: RemapLine[]; cmd?: Cmd }> {
-  const j = await postJson<{ ok?: boolean; error?: string; report: RemapLine[]; cmd?: Cmd }>("/api/sch/remap", {});
+/** `DIALOG_SYMBOL_REMAP::OnRemapSymbols` on the server, with the rescue candidates the Project Rescue Helper kept (`requested`; absent, every one): the report,
+ *  and the command that names each symbol's library (none when nothing was mapped). */
+export async function remapSymbols(requested?: readonly string[]): Promise<{ report: RemapLine[]; cmd?: Cmd }> {
+  const j = await postJson<{ ok?: boolean; error?: string; report: RemapLine[]; cmd?: Cmd }>("/api/sch/remap", requested ? { requested } : {});
   if (j.error) throw new ApiError(j.error);
   return j;
 }

@@ -791,7 +791,7 @@ fn handle(
         // A board `eda import-kicad` brought in from a KiCad 5 project with no cache library: Rescue Symbols as it opens (`OpenProjectFiles`, UI-LEFT-3 S3-16)
         ("POST", "/api/sch/rescue/on_open") => respond(stream, "200 OK", "application/json", crate::rescue_api::rescue_on_open(dir).to_string().as_bytes()),
         // Remap Legacy Library Symbols (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`): the backup, the project table made again, the command that names each symbol's library.
-        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir).to_string().as_bytes()),
+        ("POST", "/api/sch/remap") => respond(stream, "200 OK", "application/json", crate::rescue_api::remap(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

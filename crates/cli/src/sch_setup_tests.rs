@@ -544,3 +544,33 @@ fn slow_a_global_labels_connection_type_names_its_class_as_kicad_cli_reads_it() 
         assert!(crate::sch_hierarchy_tests::kicad_classes_of_pin(&dir, &pin).iter().any(|c| c == "Input"), "kicad-cli resolves `${{CONNECTION_TYPE}}` to Input too");
     }
 }
+
+/// UI-LEFT-3 S3-35 (`DIALOG_SYMBOL_REMAP::OnRemapSymbols`: `RESCUER::RescueProject( this, rescuer, false )`, the Project Rescue Helper first): the remap rescues
+/// only the candidates the helper kept -- none kept, no rescue library is written and the symbols are mapped to the project's own libraries, which do not
+/// have them; one kept, the rescue library holds that one alone. Slow: QA pic_programmer's legacy project (`KICAD_SRC_DIR`).
+#[test]
+fn slow_remap_rescues_only_what_the_project_rescue_helper_kept() {
+    if !kicad_cli_ready() || std::env::var_os("KICAD_SRC_DIR").is_none() {
+        return;
+    }
+    for (tag, keep_one) in [("none", false), ("one", true)] {
+        let root = crate::sch_hierarchy_tests::legacy_project("pcbnew/plugins/legacy_demos/pic_programmer/pic_programmer.sch", &format!("remap_helper_{tag}")).unwrap();
+        let dir = crate::sch_hierarchy_tests::scratch(&format!("remap_helper_{tag}_board"));
+        crate::import_kicad::run(&[root.display().to_string(), "-o".into(), dir.display().to_string()]).unwrap();
+        let found = crate::rescue_api::candidates(&dir);
+        let list: Vec<String> = found["candidates"].as_array().unwrap().iter().map(|c| c["requested"].as_str().unwrap().to_string()).collect();
+        assert!(list.len() > 5, "{found}");
+        let kept: Vec<String> = if keep_one { vec![list[0].clone()] } else { vec![] };
+        let r = crate::rescue_api::remap(&dir, serde_json::json!({ "requested": kept }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        let rescue = dir.join("intent-rescue.lib");
+        if keep_one {
+            let text = std::fs::read_to_string(&rescue).expect("the rescue library");
+            assert_eq!(text.matches("\nDEF ").count(), 1, "the kept one alone: {text}");
+        } else {
+            assert!(!rescue.exists(), "nothing kept, nothing rescued");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
+    }
+}

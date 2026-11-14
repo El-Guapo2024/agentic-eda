@@ -25,7 +25,8 @@
 //! The legacy flavour (`LEGACY_RESCUER`: `RESCUE_CASE_CANDIDATE` and `RESCUE_CACHE_CANDIDATE`, for a schematic none of whose symbols names a library,
 //! `SCH_SCREENS::HasNoFullyDefinedLibIds` -- a KiCad 5 `.sch` brought in by `crate::legacy_import`), which writes a legacy `.lib` rescue library and the
 //! project's legacy library list, is `crate::legacy_rescue` (`legacy` in the answer says which flavour the candidates are). Remap Legacy Library Symbols
-//! runs it first, as `OnRemapSymbols` does; **differs**: KiCad shows the Project Rescue Helper there, the studio takes every candidate it offers.
+//! runs it first, as `OnRemapSymbols` does, with the candidates the Project Rescue Helper kept (the studio shows the helper before it asks for the remap,
+//! UI-LEFT-3 S3-35).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -464,18 +465,19 @@ fn backup_project(dir: &Path, project: &str, stamp: &str, report: &mut Vec<Repor
 /// legacy libraries no table names (`createProjectSymbolLibTable`: a row of type Legacy per library found, its nickname the library's name with spaces as
 /// `-` and a number added while a library of that name exists); and each symbol that names no library given the nickname of the first legacy library that
 /// holds its name, found in the tables by its file (`remapSymbolToLibTable`, `FindLibraryByURI`). Returns the report and the identifier changes
-/// (`bare name -> Library:Name`), which the studio applies as one `Cmd::RescueSymbols`. **Differs**: the rescue KiCad runs first (`LEGACY_RESCUER`, a
-/// legacy `.lib` rescue library) is not ported, and the project file's legacy library list is left as it is.
-pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str) -> Result<(Vec<ReportLine>, Vec<(String, String)>, Vec<LibrarySymbol>), String> {
+/// (`bare name -> Library:Name`), which the studio applies as one `Cmd::RescueSymbols`. Between the backup and the table, "one last rescue of legacy symbol
+/// libraries" (`RESCUER::RescueProject( this, rescuer, false )` with a `LEGACY_RESCUER`): the candidates `chosen` names -- the ones the Project Rescue Helper
+/// kept, which the studio shows before it asks for the remap (UI-LEFT-3 S3-35) -- into the legacy `.lib` rescue library put first in the legacy list; `None`
+/// takes every candidate (the command line, which has no helper to show). The project file's legacy library list is left as it is otherwise.
+pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str, chosen: Option<&[String]>) -> Result<(Vec<ReportLine>, Vec<(String, String)>, Vec<LibrarySymbol>), String> {
     let mut report = Vec::new();
     if let Err(e) = backup_project(dir, project, stamp, &mut report) {
         return Err(e);
     }
-    // "one last rescue of legacy symbol libraries before remapping to the symbol library table": `LEGACY_RESCUER`, every candidate the Project Rescue
-    // Helper offers taken as it opens with them all accepted (the module doc's **Differs**)
+    // "one last rescue of legacy symbol libraries before remapping to the symbol library table": `LEGACY_RESCUER`, the candidates the Project Rescue Helper kept
     let libs = crate::legacy_rescue::legacy_libs(dir, project);
     let candidates = crate::legacy_rescue::find_candidates(&crate::legacy_rescue::placed_of(design), &libs);
-    let rescuable: Vec<&crate::legacy_rescue::LegacyCandidate> = candidates.iter().filter(|c| c.source.is_some()).collect();
+    let rescuable: Vec<&crate::legacy_rescue::LegacyCandidate> = candidates.iter().filter(|c| c.source.is_some() && chosen.is_none_or(|kept| kept.contains(&c.requested))).collect();
     let (renames, rescued): (BTreeMap<String, String>, Vec<LibrarySymbol>) = if rescuable.is_empty() {
         (BTreeMap::new(), Vec::new())
     } else {
@@ -556,9 +558,11 @@ pub(crate) fn remap_plan(dir: &Path, design: &Design, project: &str, stamp: &str
     Ok((report, changes.into_iter().collect(), symbols))
 }
 
-/// `POST /api/sch/remap`: [`remap_plan`] for the board in `dir`, `{ok, report: [{severity, text}], cmd}` (no `cmd` when nothing was mapped) or `{error}`.
-/// Refused unless no symbol of the schematic names a library (`remapSymbolsCondition`: `HasNoFullyDefinedLibIds`).
-pub(crate) fn remap(dir: &Path) -> Value {
+/// `POST /api/sch/remap` `{requested?}`: [`remap_plan`] for the board in `dir` with the rescue candidates `requested` names (the Project Rescue Helper's choice;
+/// absent, every one), `{ok, report: [{severity, text}], cmd}` (no `cmd` when nothing was mapped) or `{error}`. Refused unless no symbol of the schematic
+/// names a library (`remapSymbolsCondition`: `HasNoFullyDefinedLibIds`).
+pub(crate) fn remap(dir: &Path, body: &[u8]) -> Value {
+    let chosen: Option<Vec<String>> = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("requested").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()));
     let (meta, design, _) = match board::load(dir) {
         Ok(x) => x,
         Err(e) => return json!({ "error": board::reasons(&e) }),
@@ -567,7 +571,7 @@ pub(crate) fn remap(dir: &Path) -> Value {
         return json!({ "error": "The remapping can only be performed on legacy projects." });
     }
     let stamp = chrono_stamp();
-    match remap_plan(dir, &design, &project_name(&meta), &stamp) {
+    match remap_plan(dir, &design, &project_name(&meta), &stamp, chosen.as_deref()) {
         Ok((report, changes, symbols)) => {
             let mut v = json!({ "ok": true, "report": report.iter().map(|l| json!({ "severity": l.severity, "text": l.text })).collect::<Vec<_>>() });
             if !changes.is_empty() {
@@ -916,7 +920,7 @@ mod tests {
         let before = std::fs::read_to_string(dir.join("sym-lib-table")).unwrap();
         assert!(before.contains("MyParts"));
 
-        let r = remap(&dir);
+        let r = remap(&dir, b"{}");
         assert_eq!(r["ok"], true, "{r}");
         let texts: Vec<String> = r["report"].as_array().unwrap().iter().map(|l| format!("{}: {}", l["severity"].as_str().unwrap(), l["text"].as_str().unwrap())).collect();
         let has = |t: &str| texts.iter().any(|x| x.contains(t));
@@ -936,7 +940,7 @@ mod tests {
         let sch = design.schematic.as_ref().unwrap();
         assert!(sch.symbols.iter().all(|s| s.lib_id == "symbols:R"), "{:?}", sch.symbols.iter().map(|s| &s.lib_id).collect::<Vec<_>>());
         assert_eq!(sch.power_symbols.iter().map(|p| p.lib_id.as_str()).collect::<Vec<_>>(), vec!["symbols:+3.3V", "symbols:GND"]);
-        assert_eq!(remap(&dir)["error"], "The remapping can only be performed on legacy projects.", "a schematic with a library link is not legacy any more");
+        assert_eq!(remap(&dir, b"{}")["error"], "The remapping can only be performed on legacy projects.", "a schematic with a library link is not legacy any more");
         // kicad-cli finds `symbols:R` and `symbols:GND` in the Legacy row of the derived project's table
         board::step(&dir, eda_ops::Cmd::SetErcSeverities { severities: [("lib_symbol_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
         let erc = crate::kicad_engine::erc(&dir).expect("kicad-cli runs ERC");

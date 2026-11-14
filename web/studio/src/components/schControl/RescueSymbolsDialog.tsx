@@ -20,7 +20,12 @@ export const NEVER_SHOW_QUESTION =
 
 const cell = { padding: "2px 6px", borderBottom: "1px solid var(--chrome-border)" } as const;
 
-export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
+/**
+ * `onChosen`: the helper as Remap Legacy Library Symbols runs it (`OnRemapSymbols`: `RESCUER::RescueProject( this, rescuer, false )`, UI-LEFT-3 S3-35): not on
+ * demand (Never Show Again offered, nothing said when there is nothing to rescue), and the candidates kept are handed back for the remap to rescue -- an empty
+ * list after "No symbols were rescued." -- instead of being rescued here.
+ */
+export function RescueSymbolsDialog({ onClose, onChosen }: { onClose: () => void; onChosen?: (chosen: string[]) => void }) {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const [found, setFound] = useState<RescueCandidates | null>(null);
@@ -28,8 +33,12 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
   const [unchecked, setUnchecked] = useState<ReadonlySet<string>>(new Set());
   const [row, setRow] = useState(0);
   const [busy, setBusy] = useState(false);
-  /** Run as a schematic comes in, not on demand (`!aRunningOnDemand`): taken once, when the dialog opens. */
-  const [onLoad] = useState(takeRescueOnLoad);
+  /** Run as a schematic comes in, or by Remap, not on demand (`!aRunningOnDemand`): taken once, when the dialog opens. */
+  const [onLoad] = useState(() => takeRescueOnLoad() || !!onChosen);
+  const close = (chosen: string[]) => {
+    onClose();
+    onChosen?.(chosen);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -39,7 +48,7 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
         // `RescueProject( .., aRunningOnDemand = true )` with no candidate: the message box alone; not on demand, nothing at all
         if (r.candidates.length === 0) {
           if (!onLoad) dispatch({ type: "TOAST", message: NOTHING_TO_RESCUE, kind: "info" });
-          onClose();
+          close([]);
           return;
         }
         setFound(r);
@@ -55,7 +64,7 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
   const selected = candidates[row];
   const skip = () => {
     dispatch({ type: "TOAST", message: NOTHING_RESCUED, kind: "info" });
-    onClose();
+    close([]);
   };
   const submit = async () => {
     const chosen = chosenCandidates(
@@ -65,8 +74,10 @@ export function RescueSymbolsDialog({ onClose }: { onClose: () => void }) {
     const outcome = rescueOutcome(candidates.length, chosen.length);
     if (outcome) {
       dispatch({ type: "TOAST", message: outcome, kind: "info" });
-      return onClose();
+      return close([]);
     }
+    // Remap's helper: the remap rescues what was kept, after the backup
+    if (onChosen) return close(chosen);
     setBusy(true);
     try {
       const done = await rescueSymbols(chosen);
