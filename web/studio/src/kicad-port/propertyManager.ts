@@ -157,6 +157,19 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
     return def;
   }
 
+  /**
+   * Drop the property `name` that `owner` registered (no KiCad counterpart: a panel's dynamic rows -- `INSPECTABLE::GetDynamicProperties` -- are made per object in KiCad,
+   * registered once here; a registry that orders them again takes them out first). Its group stays.
+   */
+  removeProperty(owner: string, name: string): void {
+    const cls = this.getClass(owner);
+    const existing = cls.own.get(name);
+    if (!existing) return;
+    cls.own.delete(name);
+    cls.ownOrder = cls.ownOrder.filter((p) => p !== existing);
+    this.dirty = true;
+  }
+
   /** `ReplaceProperty( base, name, def, group )`: `def` stands in for the property `name` that `base` registered, on `def.owner` and the classes below it. */
   replaceProperty(base: string, name: string, def: PropertyDef<I, C, K>, group = ""): PropertyDef<I, C, K> {
     this.getClass(def.owner).replaced.add(key(base, name));

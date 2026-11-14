@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Cmd, Dimension, Shape, Zone } from "../api/types";
+import type { FieldInfo, BoardState, Cmd, Dimension, Shape, Zone } from "../api/types";
 import { PCB_PROPERTIES, pcbContext, pcbEdit, pcbFriendlyName, pcbGrid, pcbItemOf, pcbItemsOf, pcbRow, shapeWith } from "./pcbProperties";
 
 // ---------------------------------------------------------------------------------------------------------------------------- fixture
@@ -201,6 +201,27 @@ test("a footprint lists FOOTPRINT_DESC's rows: position, side and orientation, t
   ];
   assert.deepEqual(names(board(), ["U1"]), rows);
   assert.deepEqual(names(board(), ["R1"]), rows);
+});
+
+test("a footprint's user fields are rows of Fields after the mandatory ones, sorted by name without regard to case (KiCad 25ec2335 GetDynamicProperties, UI-LEFT-3 P3-36)", () => {
+  const b = board();
+  const field = (name: string, text: string): FieldInfo =>
+    ({ id: `U1:${name}`, name, text, x: 0, y: 0, angle: 0, w: 1_000_000, h: 1_000_000, thickness: 150_000, layer: "F.Fab", visible: false, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false, lx: 0, ly: 0, langle: 0, custom: false }) as FieldInfo;
+  const u1 = b.parts.find((p) => p.ref === "U1")!;
+  const r1 = b.parts.find((p) => p.ref === "R1")!;
+  u1.fields = [field("Reference", "U1"), field("Value", "MCU"), field("supplier", "ACME"), field("MPN", "STM32F1"), field("Color", "red")];
+  r1.fields = [field("Reference", "R1"), field("Value", "10k"), field("MPN", "RC0603")];
+  assert.deepEqual(Object.fromEntries(names(b, ["U1"]))["Fields"], ["Reference", "Value", "Color", "MPN", "supplier"]);
+  // `GetCommonDynamicProperties`: what every selected footprint has; values that differ show as such
+  assert.deepEqual(Object.fromEntries(names(b, ["U1", "R1"]))["Fields"], ["Reference", "Value", "MPN"]);
+  assert.equal(rowOf(b, ["U1", "R1"], "MPN")!.value, null);
+  assert.deepEqual(edit(b, ["U1"], "supplier", "Digi"), [{ op: "edit_board_field", part: "U1", name: "supplier", layout: (edit(b, ["U1"], "supplier", "Digi")[0] as Extract<Cmd, { op: "edit_board_field" }>).layout, text: "Digi" }]);
+  assert.deepEqual(edit(b, ["U1"], "supplier", "ACME"), [], "the same text");
+  // in a design variant: the variant's text, set as the symbol's record of it; a field the symbol lacks is read-only
+  const v: BoardState = { ...b, shown_variant: "Lite", parts: b.parts.map((p) => (p.ref === "U1" ? { ...p, variant: { dnp: false, exclude_from_bom: false, exclude_from_pos_files: false, exclude_from_sim: false, fields: { MPN: "STM32F0" }, symbol_fields: ["MPN"] } } : p)) };
+  assert.equal(rowOf(v, ["U1"], "MPN")!.value, "STM32F0");
+  assert.deepEqual(edit(v, ["U1"], "MPN", "STM32G0"), [{ op: "set_symbol_variant", variant: "Lite", ids: ["U1"], fields: { MPN: "STM32G0" } }]);
+  assert.equal(rowOf(v, ["U1"], "Color")!.writable, false);
 });
 
 test("a footprint's Clearance Override (empty: none) and Zone Connection Style go through set_footprint_zone_connection, each keeping the other", () => {
