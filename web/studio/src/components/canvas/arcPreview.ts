@@ -1,146 +1,79 @@
-// The in-progress "Draw Arc" overlay (KIGFX::PREVIEW::ARC_ASSISTANT, driven by
-// kicad-port/arcGeom.ts's ARC_GEOM_MANAGER port): the radius line(s) of the
-// construction plus the arc as it would be drawn, and the radius/angle readout
-// ARC_ASSISTANT prints. Shared by the board painter and the footprint editor's
-// painter -- both draw the same tool.
-import { ARC_SET_START, arcEndRadiusEnd, arcHasPreview, arcPointIndex, arcStartRadiusEnd, arcSubtended, arcSweep, arcUsesExactEndpoints, type ArcGeom } from "../../kicad-port/arcGeom";
-import { drawStrokeText } from "../text/strokeFont";
-import { formatLength, type LengthUnit } from "../../state/units";
+// The in-progress "Draw Arc" overlay: KiCad 25ec2335's `KIGFX::PREVIEW::ARC_ASSISTANT` (kicad-port/arcAssistant.ts, over kicad-port/arcGeom.ts's ARC_GEOM_MANAGER
+// port) -- its guides and its cursor strings ("r", "θ", "Δθ", "s") next to the cursor with their drop shadows -- in `LAYER_AUX_ITEMS`, and the arc being drawn as
+// the preview item it is (`drawManagedShape` / `DRAWING_TOOL::drawShape`: the shape on its layer at its width, `m_view->Update( &preview )`, [`drawArcItemPreview`]).
+// Shared by every editor's painter.
+import type { ArcGeom } from "../../kicad-port/arcGeom";
+import { arcSessionShape } from "../../kicad-port/arcDrawSession";
+import { arcAssistant, arcAssistantTexts, specialAngleColour } from "../../kicad-port/arcAssistant";
+import { parseColor } from "../../kicad-port/color4d";
+import { paintRuler } from "./rulerPaint";
+import type { LengthUnit } from "../../state/units";
 
 export interface PreviewStyle {
+  /** The assistant's colour (`LAYER_AUX_ITEMS`; the schematic's `LAYER_SCHEMATIC_AUX_ITEMS`). */
   color: string;
   /** `hairlineNm( view, px )`: a width that is `px` screen pixels wide at the current zoom. */
   hair: (px: number) => number;
   units: LengthUnit;
+  /** The canvas background, for `IsBackgroundDark` (the special-angle colour); a light one when not given. */
+  background?: string;
 }
 
-/** `ctx` already carries the view transform (world micrometres); strokes are dashed, like every other not-yet-committed preview. */
+/** `ctx` already carries the view transform (world units). */
 export function drawArcPreview(ctx: CanvasRenderingContext2D, g: ArcGeom, style: PreviewStyle): void {
-  if (arcUsesExactEndpoints(g)) return drawEndpointGuides(ctx, g, style);
-  if (g.step < ARC_SET_START) return;
-  const { color, hair, units } = style;
-  const [ox, oy] = g.origin;
+  const { color, hair } = style;
+  const scale = 1 / (hair(1) || 1);
+  const d = arcAssistant(g, scale, style.units);
+  if (!d) return;
+  const bg = style.background ? parseColor(style.background) : null;
+  const special = specialAngleColour(!!bg && bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.117 < 0.5);
   ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = hair(1.5);
-  ctx.setLineDash([hair(4), hair(3)]);
-  ctx.lineCap = "round";
-
-  const [sx, sy] = arcStartRadiusEnd(g);
-  if (g.step === ARC_SET_START) {
-    // Centre locked, waiting for the start point: the radius line follows the cursor (`setStart` runs on every motion).
+  // `DRAW_CONTEXT::m_lineWidth` 1.0: a hairline
+  ctx.lineWidth = hair(1);
+  for (const l of d.lines) {
+    ctx.strokeStyle = l.special ? special : color;
+    ctx.globalAlpha = l.deemph ? 0.5 : 1;
+    ctx.setLineDash(l.dash ? [l.dash.fill, l.dash.step - l.dash.fill] : []);
     ctx.beginPath();
-    ctx.moveTo(ox, oy);
-    ctx.lineTo(sx, sy);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    centreMark(ctx, ox, oy, hair);
-    if (g.radius > 0) label(ctx, `R ${formatLength(g.radius, units)}`, (ox + sx) / 2, (oy + sy) / 2 - hair(8), style);
-    ctx.restore();
-    return;
-  }
-
-  // Start locked: both radius lines (the start radius and the end radius at the cursor's angle), then the arc.
-  const [ex, ey] = arcEndRadiusEnd(g);
-  ctx.beginPath();
-  ctx.moveTo(sx, sy);
-  ctx.lineTo(ox, oy);
-  ctx.lineTo(ex, ey);
-  ctx.stroke();
-  const sweep = arcSweep(g);
-  if (sweep) {
-    const a0 = (sweep.startAngle * Math.PI) / 180;
-    ctx.beginPath();
-    // `ctx.arc` measures angles clockwise from +x on the y-down board -- the same direction of increasing `atan2` angle the stored arc runs in.
-    ctx.arc(ox, oy, g.radius, a0, a0 + (sweep.sweep * Math.PI) / 180, false);
-    ctx.lineWidth = hair(2);
+    ctx.moveTo(l.a[0], l.a[1]);
+    ctx.lineTo(l.b[0], l.b[1]);
     ctx.stroke();
   }
   ctx.setLineDash([]);
-  centreMark(ctx, ox, oy, hair);
-  // ARC_ASSISTANT's readout: the radius, and the angle swept so far.
-  label(ctx, `R ${formatLength(g.radius, units)}   ${Math.abs(arcSubtended(g)).toFixed(1)}°`, ox, oy - g.radius - hair(14), style);
+  for (const c of d.circles) {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = c.deemph ? 0.5 : 1;
+    ctx.beginPath();
+    ctx.arc(c.center[0], c.center[1], c.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   ctx.restore();
-}
-
-function centreMark(ctx: CanvasRenderingContext2D, x: number, y: number, hair: (px: number) => number): void {
-  ctx.beginPath();
-  ctx.arc(x, y, hair(2.5), 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, style: PreviewStyle): void {
-  drawStrokeText(ctx, text, x, y, { sizeNm: style.hair(12), justify: "center", color: style.color, thicknessNm: style.hair(1.4) });
+  // `DrawTextNextToCursor` on both of `ViewGetLayers`' layers: the drop shadows, then the strings (the browser checks read them as `window.__edaRuler.arcAssistant`)
+  if (d.strings.length > 0) paintRuler(ctx, (shadows) => ({ segs: [], texts: arcAssistantTexts(d, scale, shadows) }), color, "arcAssistant");
 }
 
 /**
- * KiCad 25ec2335's `ARC_ASSISTANT::drawEndpointGuides` for the modes that keep the clicked ends (start-end-mid, start-end-centre, tangent, start-direction-end): the chord
- * the first two clicks fixed (the cursor chasing its end until then) with the bisector guide to the marked mid point or centre and the radii of a centre; or the tangent
- * ray and the line to the cursor (then to the end); the radius and the sweep as a readout. The arc itself is the caller's preview.
+ * The arc being drawn as the preview item KiCad draws it (`ApplyToShape` on the tool's `PCB_SHAPE` / `SCH_SHAPE`, then the painter): solid, in its layer's `color`, `widthNm`
+ * wide (at least a pixel), from start to end through the middle; nothing while the construction has no sweep. (8303b2ad's board tool had no other look either: the
+ * dashed arc this file drew before was the studio's own.)
  */
-function drawEndpointGuides(ctx: CanvasRenderingContext2D, g: ArcGeom, style: PreviewStyle): void {
-  if (!arcHasPreview(g)) return;
-  const index = arcPointIndex(g);
-  // "The first point is only being placed"
-  if (index === 0 || !g.pts) return;
-  const { color, hair, units } = style;
-  const mode = g.mode;
-  const sol = g.solution;
-  const start = g.pts[0];
-  const cursor = g.lastPoint;
+export function drawArcItemPreview(ctx: CanvasRenderingContext2D, g: ArcGeom, color: string, widthNm: number, hair: (px: number) => number): void {
+  const a = arcSessionShape(g);
+  if (!a) return;
+  const [cx, cy] = a.center;
+  const ang = (p: readonly [number, number]) => Math.atan2(p[1] - cy, p[0] - cx);
+  const s0 = ang(a.start);
+  const m0 = ang(a.mid);
+  const e0 = ang(a.end);
+  const tau = 2 * Math.PI;
+  // the way round that passes the middle
+  const ccw = (m0 - s0 + 2 * tau) % tau > (e0 - s0 + 2 * tau) % tau;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = hair(1);
-  const line = (a: readonly [number, number], b: readonly [number, number], dashed: boolean) => {
-    ctx.setLineDash(dashed ? [hair(12), hair(6)] : []);
-    ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.stroke();
-  };
-  // "Long guides, such as the line to a far away center, are cut so the dashes stay bounded"
-  const guide = (a: readonly [number, number], b: readonly [number, number]) => {
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    const len = Math.hypot(dx, dy);
-    const limit = hair(400);
-    line(a, len > limit ? [a[0] + (dx * limit) / len, a[1] + (dy * limit) / len] : b, true);
-  };
-  const readout: string[] = [];
-  if (mode === "start_end_mid" || mode === "start_end_center") {
-    const chordEnd = index === 1 ? cursor : g.pts[1];
-    const mid: [number, number] = [(start[0] + chordEnd[0]) / 2, (start[1] + chordEnd[1]) / 2];
-    line(start, chordEnd, index > 1);
-    if (index > 1 && sol?.valid) {
-      const marked = mode === "start_end_mid" ? sol.mid : sol.center;
-      guide(mid, marked);
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.arc(marked[0], marked[1], hair(4), 0, Math.PI * 2);
-      ctx.stroke();
-      if (mode === "start_end_center") {
-        line(marked, sol.start, true);
-        line(marked, sol.end, true);
-      }
-      readout.push(`r ${formatLength(sol.radius, units)}`);
-    }
-  } else {
-    // "The tangent ray is at least as long as the distance to the cursor so it reads as a direction"
-    const dir = g.dir ?? [0, 0];
-    const len = Math.hypot(dir[0], dir[1]);
-    if (len > 0) {
-      const l = Math.max(len, hair(100));
-      guide(start, [start[0] + (dir[0] * l) / len, start[1] + (dir[1] * l) / len]);
-    }
-    if (index === 1) line(start, cursor, true);
-    else if (sol?.valid) {
-      line(start, sol.end, true);
-      readout.push(`r ${formatLength(sol.radius, units)}`);
-    }
-  }
-  ctx.setLineDash([]);
-  if (readout.length > 0) label(ctx, readout.join("   "), cursor[0], cursor[1] - hair(14), style);
+  ctx.lineWidth = Math.max(widthNm, hair(1));
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(cx, cy, a.radius, s0, e0, ccw);
+  ctx.stroke();
   ctx.restore();
 }

@@ -25,6 +25,7 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 pub mod embedded;
 pub mod extruded_body_io;
 mod barcode_io;
+pub(crate) mod tilde_text;
 mod custom_props_io;
 mod pcb_image;
 mod pcb_items_io;
@@ -1233,7 +1234,8 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                 // a part's later units: the first one's symbol is the footprint's (`GetKIIDs().front()`); their pins join its
                 for pin in part.pins.iter().filter(|p| drawn(&p.number)) {
                     let pin_type = resolve_pin_electrical_type(pin, resolved.as_ref());
-                    let function = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~").map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
+                    // `NETLIST_EXPORTER_XML`: `baseName.IsEmpty() ? num : baseName + "_" + num`, a legacy pin's `~` a name like any other
+                    let function = pin.name.as_deref().filter(|n| !n.is_empty()).map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
                     link.pins.entry(pin.number.clone()).or_insert((function, pin_type));
                     link.units.entry(pin.number.clone()).or_insert_with(|| format!("{reference}{}", resolved.as_ref().map_or_else(|| subpart.sub_reference(sym.unit, true), |r| r.sub_reference_in(sym.unit, &subpart, true))));
                 }
@@ -1260,7 +1262,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                 .iter()
                 .filter(|pin| drawn(&pin.number))
                 .map(|pin| {
-                    let name = pin.name.as_deref().filter(|n| !n.is_empty() && *n != "~");
+                    let name = pin.name.as_deref().filter(|n| !n.is_empty());
                     let function = name.map(|n| format!("{n}_{}", pin.number)).unwrap_or_default();
                     // `+no_connect` when the net has a no-connect flag (`EXPORT_NET::hasNoConnect`: the subgraph's `GetNoConnect()` is a `SCH_NO_CONNECT`).
                     // **Differs** where KiCad's answer hangs on the order of the subgraph's items: `resolveAllDrivers` keeps the last of the flag and a
@@ -1381,10 +1383,12 @@ pub(crate) struct FieldLook {
     /// The font face and colour Symbol Properties' fields grid set (`SchExtras::field_looks`): `(face ..)` first in `(font ..)`, `(color ..)` last.
     face: Option<String>,
     color: Option<eda_model::sch_extras::SchColor>,
+    /// Its own pen (`SchExtras::field_looks`' `thickness_nm`): `(thickness ..)` after the size.
+    thickness_nm: Option<Nm>,
 }
 
 impl FieldLook {
-    const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false, face: None, color: None };
+    const DEFAULT: FieldLook = FieldLook { size_nm: 1_270_000.0, bold: false, italic: false, show_name: false, do_not_autoplace: false, face: None, color: None, thickness_nm: None };
 
     pub(crate) fn of(p: &FieldPlacement) -> FieldLook {
         FieldLook { size_nm: p.text_size_nm().as_f64(), bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace, ..FieldLook::DEFAULT }
@@ -1399,16 +1403,18 @@ impl FieldLook {
         if let Some(l) = sch.extras.field_look(key, name) {
             self.face = l.font.clone();
             self.color = l.color;
+            self.thickness_nm = l.thickness_nm.filter(|t| *t > Nm::ZERO);
         }
         self
     }
 
-    /// `(font (face "F") (size S S) (bold yes) (italic yes) (color R G B A))`, in `EDA_TEXT::Format`'s order.
+    /// `(font (face "F") (size S S) (thickness T) (bold yes) (italic yes) (color R G B A))`, in `EDA_TEXT::Format`'s order.
     fn font(&self) -> String {
         let size = fmt_mm_f(self.size_nm / 1e6);
         let face = self.face.as_deref().map(|f| format!("(face {}) ", sexpr_str(f))).unwrap_or_default();
+        let pen = self.thickness_nm.map(|t| format!(" (thickness {})", fmt_mm_f(t.as_f64() / 1e6))).unwrap_or_default();
         let color = self.color.map(|c| format!(" (color {} {} {} {})", c.r, c.g, c.b, sch_extras_io::alpha_str(c.a))).unwrap_or_default();
-        format!("(font {face}(size {size} {size}){}{}{color})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
+        format!("(font {face}(size {size} {size}){pen}{}{}{color})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
     }
 }
 
@@ -1434,8 +1440,11 @@ pub(crate) fn write_field_text(out: &mut String, key: &str, value: &str, at: (f6
     .unwrap();
 }
 
-/// The schematic file's version this writer gives (`(version 20250114)`): what kicad-cli reads a variant's `in_bom` by.
-const SCH_FILE_VERSION: i64 = 20250114;
+/// The schematic file's version this writer gives (`(version 20250318)`): what kicad-cli reads a variant's `in_bom` by, and the first at which a `~` is the text
+/// `~` (`SEXPR_SCHEMATIC_FILE_VERSION` 20250318, "~ no longer means empty text"): a KiCad 5 legacy pin's name `~`, which KiCad keeps as its name and names a net
+/// by (`Net-(C5-~-Pad1)`), reaches kicad-cli as it is; an empty text is written `""` (`tilde_text`, UI-LEFT-3 S3-35). The versions in between change nothing
+/// else KiCad's parser reads (20250222 hatched fills and 20250227 local power symbols are written as such already).
+const SCH_FILE_VERSION: i64 = 20250318;
 
 /// KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`'s `T_in_bom` of a `(variant ..)`: "The "in_bom" token used in the file format is the
 /// positive logic", but a file before 20260306 ("Variant in_bom semantics corrected") wrote the exclusion itself, and is read that way
@@ -1847,7 +1856,8 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             // the pin written at this place is the one that took it (itself unless Swap Pins moved pins here)
             let pin = pin_wearing_place_of(part, swap_map, pin);
             let etype = resolve_pin_electrical_type(pin, resolved);
-            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            // an unnamed pin is the empty text: `~` is a text from 20250318 on (a KiCad 5 pin's name, `tilde_text`)
+            let name = pin.name.clone().unwrap_or_default();
             // an invisible pin stays one: KiCad's legacy global power pins are the invisible power inputs (`SCH_PIN::IsGlobalPower`)
             let hide = if resolved.and_then(|s| s.nth_pin_by_number(&pin.number, nth)).is_some_and(|rp| rp.hidden) { " (hide yes)" } else { "" };
             writeln!(
@@ -1886,7 +1896,7 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             };
             let pin = pin_wearing_place_of(part, swap_map, pin);
             let etype = resolve_pin_electrical_type(pin, resolved);
-            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            let name = pin.name.clone().unwrap_or_default();
             writeln!(
                 out,
                 "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27)))){}\n\t\t\t\t)",

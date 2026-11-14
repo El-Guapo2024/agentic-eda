@@ -329,7 +329,7 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         toolIdle: sym.activeTool === "select" && !sym.drawState && !sym.movePreview,
         describe: (item) => {
           const pin = symbol?.pins.find((p) => p.id === item.id);
-          if (pin) return `Pin ${pin.number}${pin.name && pin.name !== "~" ? ` ${pin.name}` : ""}`;
+          if (pin) return `Pin ${pin.number}${pin.name ? ` ${pin.name}` : ""}`;
           const g = symbol?.graphics.find((x) => x.id === item.id);
           return g ? g.kind : item.kind;
         },

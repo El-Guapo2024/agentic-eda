@@ -75,6 +75,11 @@ test("editing a cell sends one edit_cells of its address, and several cells one 
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Bold", true), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { bold: true } }]);
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Margin Top", 500), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { margins: [null, 500, null, null] } }]);
   assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 12_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_nm: 12_000 } }]);
+  // `SCH_TABLECELL_DESC`'s `PT_SIZE` rows have no validator: 0 is a width and a height, a negative size is refused (UI-LEFT-3 P3-8's schematic side)
+  assert.deepEqual(edit(s, ["tbl_a:0:1"], "Column Width", 0), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 1]], edit: { col_width_nm: 0 } }]);
+  assert.deepEqual(edit(s, ["tbl_a:1:0"], "Row Height", 0), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[1, 0]], edit: { row_height_nm: 0 } }]);
+  const negative = schEdit(s, ["tbl_a:0:1"], "Column Width", -1, "mm");
+  assert.match(negative.ok ? "" : negative.error, /Value must be greater than or equal to 0 mm/);
   // `SCH_TEXTBOX::SetSchTextSize`: one number for both dimensions of the glyph
   assert.deepEqual(edit(s, ["tbl_a:0:0"], "Text Size", 1_000_000), [{ op: "sch_table", verb: "edit_cells", id: "tbl_a", cells: [[0, 0]], edit: { width_nm: 1_000_000, height_nm: 1_000_000 } }]);
   const two = edit(s, ["tbl_a:0:0", "tbl_a:0:1"], "Italic", true);

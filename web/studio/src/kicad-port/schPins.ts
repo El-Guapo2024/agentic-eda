@@ -218,7 +218,7 @@ export function boxPins(sch: Schematic, box: Box, crossing: boolean, measure: Me
 /** `SCH_PIN::GetItemDescription` as the Properties panel and the status bar show it: `Pin 3 [VIN, Power input, Line]`, with the symbol in front (`Symbol U1 Pin 3 ...`). */
 export function describePin(pin: PinItem): string {
   const type = ELECTRICAL_TYPE_NAMES[pin.electricalType as keyof typeof ELECTRICAL_TYPE_NAMES] ?? pin.electricalType;
-  const name = pin.name && pin.name !== "~" ? pin.name : "";
+  const name = pin.name ?? ""; // a legacy pin's `~` is its name (`GetShownName`)
   const inner = name ? `${name}, ${type}, Line` : `${type}, Line`;
   return `Symbol ${pin.reference} Pin ${pin.number} [${inner}]`;
 }

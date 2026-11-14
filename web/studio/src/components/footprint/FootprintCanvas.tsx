@@ -630,8 +630,10 @@ export function FootprintCanvas() {
     if (shapeKind === "arc") {
       const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
       const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.lineMode, e));
-      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: fpStrokeWidthNm(state.activeLayer, getFpGraphicsDefaults()), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
-      dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
+      const arcWidth = fpStrokeWidthNm(state.activeLayer, getFpGraphicsDefaults());
+      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: arcWidth, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
+      // the preview item is the arc on its layer at its width (`ApplyToShape`, KiCad 25ec2335)
+      dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom, arcItem: { layer: state.activeLayer, widthNm: arcWidth } } : null });
       return;
     }
     // DRAWING_TOOL::drawOneBezier (via DrawBezier's chaining loop): start, control 1, end, control 2.

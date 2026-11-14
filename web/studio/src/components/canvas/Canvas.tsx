@@ -1207,11 +1207,13 @@ export function Canvas() {
         // `drawArc`: `if( !started ) m_toolMgr->RunAction( ACTIONS::selectionClear );`
         if (!prev) dispatch({ type: "SET_SELECTION", refs: [] });
         const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e));
+        const arcWidth = drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep);
         if (arc) {
-          const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: drawStrokeWidthNm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
+          const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: arcWidth, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
           void api.cmd({ op: "add_shape", shape });
         }
-        dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
+        // the preview item is the arc on its layer at its width (`ApplyToShape`, KiCad 25ec2335)
+        dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom, arcItem: { layerKey: state.activeLayer ?? "f_silks", widthNm: arcWidth } } : null });
         return;
       }
       // DRAWING_TOOL::drawOneBezier (via DrawBezier's chaining loop): start, control 1, end, control 2.

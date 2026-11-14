@@ -64,7 +64,7 @@ fn model() -> ConstraintModel {
             lib_pin("1", "IN", "input", -5.08, 0.0, 0.0),
             lib_pin("2", "OUT", "output", 5.08, 0.0, 180.0),
             lib_pin("3", "IO", "bidirectional", 0.0, -5.08, 90.0),
-            lib_pin("4", "~", "power_in", 0.0, 5.08, 270.0),
+            lib_pin("4", "", "power_in", 0.0, 5.08, 270.0),
         ],
     );
     let kinds = lib(

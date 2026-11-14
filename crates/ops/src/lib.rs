@@ -6648,7 +6648,7 @@ impl<'a> Board<'a> {
         }
         sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false, no_footprint: false });
         let last = sch.symbols.len() - 1;
-        // The placed symbol's fields are copies of the library symbol's (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), with their face and colour: kept as the
+        // The placed symbol's fields are copies of the library symbol's (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), with their face, colour and pen: kept as the
         // symbol's own (`SchExtras::field_looks`), from the design's library symbol, else the one the model resolves (PARITY-sch §87)
         let looks = match self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)) {
             Some(s) => s.kicad.field_looks.clone(),
@@ -6657,7 +6657,7 @@ impl<'a> Board<'a> {
         let key = eda_model::ir::field_key(id, unit);
         let sch = self.schematic_mut_or_create();
         for (name, l) in looks {
-            sch.extras.set_field_look(&key, &name, eda_model::sch_extras::FieldFontLook { font: l.font, color: l.color });
+            sch.extras.set_field_look(&key, &name, crate::sch_edit::field_look_of_library(&l));
         }
         // "Automatically place symbol fields" off (`if( m_frame->eeconfig()->m_AutoplaceFields.enable ) symbol->AutoplaceFields( .. )` in `PlaceSymbol` skipped): the
         // fields are the library symbol's copies, where it puts them and as it sets them (`SCH_SYMBOL::SCH_SYMBOL( const LIB_SYMBOL& .. )`), and not autoplaced

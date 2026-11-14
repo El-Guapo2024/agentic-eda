@@ -564,7 +564,7 @@ fn place_label_takes_the_new_labels_fields_from_its_grid() {
     let m = ConstraintModel::default();
     let mut b = board(section(), &m);
     let field = |name: &str, text: &str| LabelField { name: name.into(), text: text.into(), ..Default::default() };
-    let looks = std::collections::BTreeMap::from([("Net Class".to_string(), FieldFontLook { font: Some("KiCad Font".into()), color: None })]);
+    let looks = std::collections::BTreeMap::from([("Net Class".to_string(), FieldFontLook { font: Some("KiCad Font".into()), color: None, thickness_nm: None })]);
     let isr = LabelField { name: "Intersheetrefs".into(), bold: true, ..Default::default() };
     ok(&mut b, SchCmd::PlaceLabel { net: "CLK".into(), at: p(Nm::ZERO, Nm::ZERO), kind: glob(LabelShape::Input), spin: None, size_nm: None, bold: None, italic: None, auto_rotate: None, fields: Some(vec![field("Net Class", "HV"), field("", "")]), intersheet_refs: Some(isr), field_looks: Some(looks) });
     let sch = sch_of(&b);

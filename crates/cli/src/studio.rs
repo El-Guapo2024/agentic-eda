@@ -2532,7 +2532,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     // the id the studio selects, moves and edits the field by (`fld:<label id>:<name>`, `eda_engine::fields_edit`), and the font and colour
                     // Field Properties set (`SchExtras::field_looks` under the label's id)
                     let look = sch.extras.field_look(&l.id, &f.name);
-                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": if f.size_nm > Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }, "bold": f.bold, "name_shown": f.name_shown, "allow_autoplace": !f.no_autoplace, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color) })
+                    json!({ "id": eda_engine::fields_edit::field_id(&l.id, &f.name), "owner": l.id, "name": f.name, "text": f.text, "shown": shown, "visible": f.visible, "italic": f.italic, "intersheet_refs": f.intersheet_refs, "at": [f.at.x, f.at.y], "vertical": f.vertical, "h": h, "v": v, "size_nm": if f.size_nm > Nm::ZERO { f.size_nm } else { eda_model::ir::DEFAULT_FIELD_SIZE_NM }, "bold": f.bold, "name_shown": f.name_shown, "allow_autoplace": !f.no_autoplace, "font": look.and_then(|k| k.font.clone()), "color": look.and_then(|k| k.color), "thickness_nm": look.and_then(|k| k.thickness_nm) })
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
@@ -3044,7 +3044,7 @@ pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir
 /// One field as the studio draws and selects it: the text, its anchor on the sheet and which way it runs, how it is justified there, its size and look, and the
 /// id (`fld:<owner key>:<name>`) every move and edit verb takes it by. `owner` is the item's key in `field_layout` (a symbol's reference, `#<unit>` after it for a
 /// unit but the first, a power symbol's or a sheet's id).
-/// [`page_field_json`] with the font face and colour the item keeps for the field (`SchExtras::field_looks`: Symbol Properties' Font and Color columns), when it
+/// [`page_field_json`] with the font face, colour and pen the item keeps for the field (`SchExtras::field_looks`: Symbol Properties' Font and Color columns), when it
 /// has them.
 pub(crate) fn page_field_json_in(sch: &eda_model::ir::SchematicSection, owner: &str, f: &eda_engine::fields::PageField) -> Value {
     let mut v = page_field_json(owner, f);
@@ -3056,6 +3056,9 @@ pub(crate) fn page_field_json_in(sch: &eda_model::ir::SchematicSection, owner: &
             v["color"] = json!(c);
         }
     }
+    // its own pen (`(thickness ..)`, 0 for none), which `SCH_PAINTER::getTextThickness` draws it with and Compare Symbol with Library compares (UI-LEFT-3 S3-22's
+    // leftover)
+    v["thickness_nm"] = json!(sch.extras.field_look(owner, &f.name).and_then(|l| l.thickness_nm).unwrap_or(Nm::ZERO));
     v
 }
 

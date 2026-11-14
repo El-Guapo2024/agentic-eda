@@ -201,7 +201,8 @@ fn with_sheet_looks() -> (eda_model::ir::Design, ConstraintModel) {
     let sch = design.schematic.as_mut().unwrap();
     sch.extras.sheet_fields.insert(id.into(), vec![LabelField { name: "Rev".into(), text: "B".into(), visible: true, italic: true, size_nm: mm(2.0), bold: true, name_shown: true, no_autoplace: false }]);
     sch.extras.sheet_field_places.entry(id.into()).or_default().insert("Rev".into(), eda_model::sch_extras::SheetFieldPlace { dx: mm(5.08), dy: mm(25.4), angle: 90_000, h: eda_model::ir::TextJustify::Left, v: eda_model::ir::TextVAlign::Bottom });
-    sch.extras.set_field_look(id, "Rev", eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) });
+    // and its own pen (`(thickness ..)`, UI-LEFT-3 S3-22's leftover)
+    sch.extras.set_field_look(id, "Rev", eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()), thickness_nm: Some(mm(0.3)) });
     let s = sch.sheets.iter_mut().find(|s| s.id == id).unwrap();
     s.pins.push(eda_model::ir::SheetPin { id: "a1b2c3d4-0000-4000-8000-0000000000a1".into(), name: "VIN".into(), shape: LabelShape::Input, at: Point { x: mm(250.0), y: mm(25.08) } });
     sch.extras.text_attrs.insert("a1b2c3d4-0000-4000-8000-0000000000a1".into(), TextAttrs { color: Some(blue()), font: Some("KiCad Font".into()), ..Default::default() });
@@ -233,7 +234,8 @@ fn a_sheet_fields_looks_and_a_sheet_pins_font_and_colour_come_back_from_our_file
     let (fields, place, look, pin) = sheet_looks_back(root);
     assert_eq!(fields, design.schematic.as_ref().unwrap().extras.sheet_fields.values().next().cloned().unwrap());
     assert_eq!(place.map(|p| (p.dx, p.dy, p.angle, p.h, p.v)), Some((mm(5.08), mm(25.4), 90_000, eda_model::ir::TextJustify::Left, eda_model::ir::TextVAlign::Bottom)));
-    assert_eq!(look, Some(eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()) }));
+    assert_eq!(look, Some(eda_model::sch_extras::FieldFontLook { font: Some("KiCad Font".into()), color: Some(blue()), thickness_nm: Some(mm(0.3)) }));
+    assert!(root.contains("(size 2 2) (thickness 0.3) (bold yes) (italic yes) (color 0 0 255 1)"), "`EDA_TEXT::Format`'s order: {root}");
     assert_eq!(pin.map(|a| (a.font, a.color)), Some((Some("KiCad Font".into()), Some(blue()))));
 }
 

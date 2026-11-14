@@ -418,9 +418,10 @@ let paintedPen = SCH_DEFAULT_PEN_NM;
  * One field where KiCad draws it (`SCH_PAINTER::draw( SCH_FIELD )`, kicad-port/schTextSpecs.ts `schFieldDrawSpec`): centred at the centre of its box, in its face -- an outline font's
  * once the browser has it (UI-LEFT-2 CC1), the stroke font for none -- a bold one with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leaning.
  */
-function drawField(ctx: CanvasRenderingContext2D, text: string, f: Pick<SchField, "at" | "h" | "vertical" | "size_nm" | "bold" | "italic" | "font" | "id"> & { v?: SchField["v"] }, color: string): void {
+function drawField(ctx: CanvasRenderingContext2D, text: string, f: Pick<SchField, "at" | "h" | "vertical" | "size_nm" | "bold" | "italic" | "font" | "id"> & { v?: SchField["v"]; thickness_nm?: number | null }, color: string): void {
   if (!text) return;
-  const look = { at: f.at, h: f.h, v: f.v ?? "center", vertical: f.vertical, size_nm: f.size_nm || FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic };
+  // its own pen (`(thickness ..)`, `SCH_PAINTER::getTextThickness`: `GetEffectiveTextPenWidth( defaultPen )`) when it has one
+  const look = { at: f.at, h: f.h, v: f.v ?? "center", vertical: f.vertical, size_nm: f.size_nm || FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic, pen_nm: f.thickness_nm ?? null };
   const spec = schFieldDrawSpec(text, look, resolveFont(f.font, look.bold, look.italic), paintedPen);
   paintKicadText(ctx, spec, f.font, { color, record: f.id ? { tag: "sch", id: f.id } : undefined });
 }

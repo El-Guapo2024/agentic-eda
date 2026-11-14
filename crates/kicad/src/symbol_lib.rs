@@ -166,7 +166,11 @@ fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, Strin
 /// resolving every `(extends ...)` relationship internally so callers
 /// never see one.
 pub fn parse_symbol_library(text: &str) -> Result<LibraryTable, String> {
-    let tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    let mut tree = sexpr::parse(text).map_err(|e| format!("not a valid s-expression file: {e}"))?;
+    // a library older than 20250318: its `~` texts empty, as KiCad's parser reads them
+    crate::tilde_text::normalize(&mut tree);
+    // KiCad 10's bold text (file version 20260826 on, a schematic's and a symbol library's as a board's: measured with kicad-cli's `sch upgrade`), read in the older meaning
+    crate::bold_text::normalize(&mut tree);
     let root = tree.as_list().filter(|l| sexpr::tag(l) == Some("kicad_symbol_lib")).ok_or("top-level form is not (kicad_symbol_lib ...); not a KiCad symbol library file")?;
     Ok(build_symbol_table(root))
 }
@@ -570,9 +574,9 @@ fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
     let y = sexpr::num(at, 2)?;
     let angle_deg = sexpr::num(at, 3).unwrap_or(0.0);
     let length_mm = sexpr::find(item, "length").and_then(|l| sexpr::num(l, 1)).unwrap_or(0.0);
-    let name = sexpr::find(item, "name").and_then(|n| sexpr::txt(n, 1)).unwrap_or("~").to_string();
+    // a `~` of a file older than 20250318 was made the empty text before (`tilde_text::normalize`); a later one is the text `~`
+    let name = sexpr::find(item, "name").and_then(|n| sexpr::txt(n, 1)).unwrap_or("").to_string();
     let number = sexpr::find(item, "number").and_then(|n| sexpr::txt(n, 1)).unwrap_or("").to_string();
-    let name = if name == "~" { String::new() } else { name };
     Some(LibPin { number, name, electrical_type, shape, at: SPoint::new(x, y), angle_deg, length_mm, unit, hidden: crate::symbol_import::hidden(item) })
 }
 

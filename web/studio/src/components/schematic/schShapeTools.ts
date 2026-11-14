@@ -187,11 +187,11 @@ export function previewShape(draw: SchShapeDraw, cursor: readonly [number, numbe
 /** Paint the shape or rule area being drawn: the rubber-banded item for a shape, the locked corners, leader and closing loop for a rule area. */
 export function paintShapePreview(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: SchShapeDraw, cursor: readonly [number, number], lineMode: LineMode, units: LengthUnit = "mm"): void {
   if (draw.arc) {
-    // `ARC_ASSISTANT` over the arc as it would be drawn: the radius lines, the centre, the readout
+    // the arc as it would be drawn (the preview item), then `ARC_ASSISTANT` over it in `LAYER_SCHEMATIC_AUX_ITEMS` (`m_layerColors[LAYER_AUX_ITEMS]`): the guides and the readout
     const shape = previewShape(draw, cursor);
     if (shape) paintGraphics(ctx, view, [{ id: "__preview__", shape }], new Set());
     const scale = view.scale || 1;
-    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_NOTES"), hair: (px) => px / scale, units });
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => px / scale, units, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
     return;
   }
   if (draw.poly) {

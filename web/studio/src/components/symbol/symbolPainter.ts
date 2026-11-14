@@ -295,7 +295,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
       ctx.stroke();
       ctx.restore();
     }
-    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_DEVICE"), hair: (px) => hairlineNm(view, px), units });
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_SCHEMATIC_AUX_ITEMS"), hair: (px) => hairlineNm(view, px), units, background: layerColor("LAYER_SCHEMATIC_BACKGROUND") });
     return;
   }
   if (draw.shapeKind === "bezier") {
@@ -401,7 +401,7 @@ function fieldColor(name: string): string {
 function drawField(ctx: CanvasRenderingContext2D, f: SchField, color: string) {
   const text = shownText(f);
   if (!text) return;
-  const look = { at: f.at, h: f.h, v: f.v, vertical: f.vertical, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic };
+  const look = { at: f.at, h: f.h, v: f.v, vertical: f.vertical, size_nm: f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM, bold: !!f.bold, italic: !!f.italic, pen_nm: f.thickness_nm ?? null };
   paintKicadText(ctx, schFieldDrawSpec(text, look, resolveFont(f.font, look.bold, look.italic)), f.font, { color, record: f.id ? { tag: "sym", id: f.id } : undefined });
 }
 
@@ -524,7 +524,9 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
     if (mv) ctx.translate(mv.dxNm, mv.dyNm);
     const fl = opts.fieldLooksOf?.(f.name);
     const ownColor = fl?.color && !(fl.color.r === 0 && fl.color.g === 0 && fl.color.b === 0 && fl.color.a === 0) ? rgba(fl.color) : null;
-    drawField(ctx, fl?.font ? { ...f, font: fl.font } : f, opts.selection.has(f.id ?? "") ? layerColor("selection") : opts.brightened?.has(f.id ?? "") ? layerColor("LAYER_BRIGHTENED") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
+    // its face and its own pen (`(thickness ..)`, `getTextThickness`) as the library keeps them
+    const withLooks = { ...f, ...(fl?.font ? { font: fl.font } : {}), ...(fl?.thickness_mm ? { thickness_nm: Math.round(fl.thickness_mm * 1e6) } : {}) };
+    drawField(ctx, withLooks, opts.selection.has(f.id ?? "") ? layerColor("selection") : opts.brightened?.has(f.id ?? "") ? layerColor("LAYER_BRIGHTENED") : !f.visible ? hiddenColor : (ownColor ?? fieldColor(f.name)));
     ctx.restore();
   }
 

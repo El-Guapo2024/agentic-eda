@@ -1530,6 +1530,15 @@ struct QaTraced {
     names: Vec<(String, String, String)>,
     /// `(pin, the net kicad-cli names it on of the schematic the studio derives, the original's)` where the two differ.
     derived: Vec<(String, String, String)>,
+    /// The name of the net kicad-cli puts each pin of the original on.
+    kicad_pin_nets: Vec<String>,
+}
+
+impl QaTraced {
+    /// How many of kicad-cli's pins are on a net whose name passes `pick`.
+    fn kicad_names_with(&self, pick: impl Fn(&str) -> bool) -> usize {
+        self.kicad_pin_nets.iter().filter(|n| pick(n)).count()
+    }
 }
 
 /// The QA project `rel` brought in as a user brings it in (`eda import-kicad x.kicad_sch`: `Cmd::ReplaceSchematic`, the screens into the design's frame,
@@ -1591,7 +1600,8 @@ fn traced_beside_kicad_cli(src: &Path, name: &str) -> Option<QaTraced> {
         let d = derived_names.get(pin).cloned().unwrap_or_default();
         (&d != theirs).then(|| (pin.clone(), d, theirs.clone()))
     }).collect();
-    Some(QaTraced { ours, kicad, names, derived })
+    let kicad_pin_nets = kicad_names.values().cloned().collect();
+    Some(QaTraced { ours, kicad, names, derived, kicad_pin_nets })
 }
 
 /// KiCad's QA projects that show a screen twice, carry buses across sheets or give labels fields of their own, brought in by `eda import-kicad` and traced as
@@ -2918,11 +2928,12 @@ fn slow_kicad_qa_legacy_schematics_trace_as_kicad_cli_reads_the_sch() {
             continue;
         };
         // A pin KiCad's legacy library names `~` (an unnamed pin of a `.lib`) is the text `~` to KiCad 10, which no longer reads `~` as empty (file version
-        // 20250318) and names a net by it (`Net-(C5-~-Pad1)`, `Net-(U4A-~)`); the studio's library reader keeps an unnamed pin unnamed (PARITY-sch §90)
+        // 20250318) and names a net by it (`Net-(C5-~-Pad1)`, `Net-(U4A-~)`): so does the studio, and the schematic it derives is of that version (UI-LEFT-3 S3-35)
         let tilde = |theirs: &str| theirs.contains("-~-") || theirs.contains("-~)");
-        let names: Vec<_> = t.names.iter().filter(|(_, _, theirs)| !tilde(theirs)).collect();
-        let derived: Vec<_> = t.derived.iter().filter(|(_, _, theirs)| !tilde(theirs)).collect();
-        println!("{rel}: {} nets of 2+ pins, {} differ; {} pins named otherwise ({} by an unnamed pin's `~`); {} otherwise in the derived schematic", t.kicad.len(), only(&t.kicad, &t.ours).len(), names.len(), t.names.len() - names.len(), derived.len());
+        let names: Vec<_> = t.names.iter().collect();
+        let derived: Vec<_> = t.derived.iter().collect();
+        let by_tilde = t.kicad_names_with(tilde);
+        println!("{rel}: {} nets of 2+ pins, {} differ; {} pins named otherwise; {by_tilde} pins on a net named by an unnamed pin's `~`; {} otherwise in the derived schematic", t.kicad.len(), only(&t.kicad, &t.ours).len(), names.len(), derived.len());
         if t.kicad.is_empty() {
             wrong.push(format!("{rel}: kicad-cli has no nets"));
         }

@@ -19,6 +19,8 @@ import { colorToHex, hexToColor, isUnspecified } from "./schProperties";
 import type { PropertyManager, PropertyDef, PropValue } from "./propertyManager";
 import { registerTableClass, type TableItemParts, type TablePropertyHelpers } from "./pcbTableProperties";
 import { cellById, tableById } from "./tables";
+import { tooSmall } from "./propertyGrid";
+import type { LengthUnit } from "../state/units";
 
 type Item = { readonly type: string; readonly id: string } & TableItemParts;
 
@@ -47,7 +49,7 @@ const fillColorShown = (c: BoardTableCell): string => {
 const editCell = (i: Item, edit: TableCellEdit): Cmd => ({ op: "sch_table", verb: "edit_cells", id: i.table!.id, cells: [[i.cell!.row, i.cell!.col]], edit }) as Cmd;
 
 /** `SCH_TABLE_DESC` and `SCH_TABLECELL_DESC`. `Item` is the panel's item type, which carries the table and cell fields of `TableItemParts`. */
-export function registerSchTableProperties<I extends Item, C>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
+export function registerSchTableProperties<I extends Item, C extends { readonly units: LengthUnit }>(pm: PropertyManager<I, C, Cmd>, h: TablePropertyHelpers<I, C>): void {
   const add = (def: PropertyDef<I, C, Cmd>, group = ""): void => h.add(def, group);
   registerTableClass(pm, h, { table: "SCH_TABLE", base: "SCH_ITEM", op: "sch_table" });
 
@@ -168,7 +170,8 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
       display: "size",
       get: (i) => i.table!.col_widths[i.cell!.col]!,
       available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The column width must be positive." : null),
+      // `SCH_TABLECELL::SetColumnWidth` (no validator; a `PT_SIZE` row refuses only a negative size, as the board's, UI-LEFT-3 P3-8)
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => ((i.table!.col_widths[i.cell!.col] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { col_width_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP
@@ -181,7 +184,7 @@ export function registerSchTableProperties<I extends Item, C>(pm: PropertyManage
       display: "size",
       get: (i) => i.table!.row_heights[i.cell!.row]!,
       available: isCell,
-      validate: (v) => (num(v) <= 0 ? "The row height must be positive." : null),
+      validate: (v, _i, c) => (num(v) < 0 ? tooSmall(0, "size", c.units) : null),
       set: (i, v) => ((i.table!.row_heights[i.cell!.row] ?? 0) === Math.round(num(v)) ? [] : [editCell(i, { row_height_nm: Math.round(num(v)) })]),
     },
     TABLE_GROUP

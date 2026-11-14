@@ -120,7 +120,7 @@ test("a box takes the pins whose boxes it touches (crossing) or holds (window)",
 test("a pin is described the way KiCad describes it", () => {
   assert.equal(describePin(pinById(sheet(), "pin:R1:1")!), "Symbol R1 Pin 1 [P1, Passive, Line]");
   const noName = pinById(sheet({}), "pin:R1:1")!;
-  assert.equal(describePin({ ...noName, name: "~" }), "Symbol R1 Pin 1 [Passive, Line]");
+  assert.equal(describePin({ ...noName, name: "~" }), "Symbol R1 Pin 1 [~, Passive, Line]", "a legacy pin's `~` is its name");
 });
 
 test("selectedPins keeps the order the pins were picked in and drops what is no pin", () => {

@@ -409,6 +409,8 @@ fn change_symbols_resets_the_fields_visibility_size_and_style_and_place_from_the
     design.schematic = Some(sheet(0, false));
     let mut lib = eda_model::ir::LibrarySymbol { lib_id: "Device:R".into(), reference_prefix: "R".into(), published: true, ..Default::default() };
     lib.set_fields(vec![LibrarySymbolField { name: "Value".into(), text: "R".into(), size_mm: 2.0, bold: true, hidden: true, ..LibrarySymbolField::default() }]);
+    // the library field's face and pen (`SetAttributes( *libField )` copies `TEXT_ATTRIBUTES` whole)
+    lib.kicad.field_looks.insert("Value".into(), eda_model::lib_keep::KeptFieldLooks { font: Some("KiCad Font".into()), color: None, thickness_mm: Some(0.25) });
     design.symbol_library = Some(eda_model::ir::SymbolLibrarySection { symbols: vec![lib], ..Default::default() });
     let mut b = Board::new(design, &m, mm(0.1), mm(0.3));
     let value = field_id(&field_key("R1", 1), "Value");
@@ -417,6 +419,8 @@ fn change_symbols_resets_the_fields_visibility_size_and_style_and_place_from_the
     b.apply(&reset(false, true, false)).unwrap();
     let f = field_named(b.design().schematic.as_ref().unwrap(), "Value");
     assert_eq!((f.size_nm, f.bold, f.visible), (2_000_000.0, true, true), "sizes and styles, not the visibility");
+    let look = b.design().schematic.as_ref().unwrap().extras.field_look(&field_key("R1", 1), "Value").cloned().unwrap_or_default();
+    assert_eq!((look.font.as_deref(), look.thickness_nm), (Some("KiCad Font"), Some(mm(0.25))), "the library field's face and pen");
     b.apply(&reset(true, false, false)).unwrap();
     assert!(!field_named(b.design().schematic.as_ref().unwrap(), "Value").visible, "the library's Value is hidden");
     assert_eq!(b.apply(&reset(true, true, false)).unwrap_err()[0].check, "ops_field_unchanged", "nothing left to change");

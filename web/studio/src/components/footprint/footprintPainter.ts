@@ -26,7 +26,7 @@ import { circleThrough, drawGridOrigin, drawPadNumber, drawShapeGeometry as draw
 import type { LineEnding } from "../../kicad-port/lineEnding";
 import type { LineEndingIr } from "../../api/fpEditorTypes";
 import { fpEndingsOf } from "../../kicad-port/fpKeep";
-import { drawArcPreview } from "../canvas/arcPreview";
+import { drawArcItemPreview, drawArcPreview } from "../canvas/arcPreview";
 import { drawBezierPreview } from "../canvas/bezierPreview";
 import { BEZIER_MAX_ERROR_NM } from "../canvas/itemHitTest";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
@@ -428,7 +428,9 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
   // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
   const style = { color: layerColor("selection"), hair: (px: number) => hairlineNm(view, px), units: "mm" as const };
   if (draw.shapeKind === "arc" && draw.arc) {
-    drawArcPreview(ctx, draw.arc, style);
+    // the arc on its layer at its width (`ApplyToShape`), then `ARC_ASSISTANT` in `LAYER_AUX_ITEMS` (KiCad 25ec2335)
+    if (draw.arcItem) drawArcItemPreview(ctx, draw.arc, layerColor(realLayerKey(draw.arcItem.layer)), draw.arcItem.widthNm, style.hair);
+    drawArcPreview(ctx, draw.arc, { ...style, color: layerColor("LAYER_AUX_ITEMS"), background: layerColor("background") });
     return;
   }
   if (draw.shapeKind === "bezier" && draw.bezier) {
@@ -519,6 +521,8 @@ export interface FpPaintDrawState {
   /** A polygon's leader from its last corner to the cursor, bent by the line mode (`POLYGON_GEOM_MANAGER::m_leaderPts`); drawn in place of the straight rubber band. */
   leader?: [Nm, Nm][];
   arc?: ArcGeom;
+  /** The layer and width the arc being drawn goes in with: its preview item's. */
+  arcItem?: { layer: string; widthNm: Nm };
   bezier?: BezierGeom;
 }
 

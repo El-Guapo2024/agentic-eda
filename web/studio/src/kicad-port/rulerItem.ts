@@ -157,6 +157,27 @@ export function tickFormatForScale(scale: number, units: LengthUnit): { tickSpac
   return { tickSpace, majorStep: formats[f]!.majorStep, midStep: formats[f]!.midStep };
 }
 
+/**
+ * `KIGFX::PREVIEW::DrawTextNextToCursor( view, aCursorPos, aTextQuadrant, aStrings, aDrawingDropShadows )` (common/preview_items/preview_utils.cpp, the same at 8303b2ad
+ * and 25ec2335): the strings top to bottom, 15 px beside the cursor -- left-aligned on its right when the quadrant's x is negative, else right-aligned on its left --
+ * and above it, shifted up by one more line than they have, when the quadrant's y is positive; on the shadow layer moved back by `shadowXoffset` (left of a
+ * left-aligned text, right of a right-aligned one) and stroked two shadow widths wider. The ruler's and the arc assistant's cursor strings.
+ */
+export function textNextToCursor(cursor: readonly [number, number], quadrant: readonly [number, number], strings: readonly string[], scale: number, shadows = false): RulerText[] {
+  const g = constantGlyph(scale);
+  const pos: Vec = [cursor[0], cursor[1]];
+  if (quadrant[1] > 0) pos[1] -= g.linePitch * (strings.length + 1);
+  const halign = quadrant[0] < 0 ? "left" : "right";
+  pos[0] += (quadrant[0] < 0 ? 15 : -15) / scale;
+  const cursorShadowX = shadowXOffset(g.shadow, shadows);
+  pos[0] += halign === "left" ? -cursorShadowX : cursorShadowX;
+  const stroke = shadows ? g.stroke + 2 * g.shadow : g.stroke;
+  return strings.map((s) => {
+    pos[1] += g.linePitch;
+    return { text: s, at: [pos[0], pos[1]] as Vec, halign, angleDeg: 0, size: g.size, stroke };
+  });
+}
+
 /** `GetDimensionStrings`: x and y (signed, flipped as the display options flip them), r, and θ counterclockwise. */
 export function rulerStrings(origin: Vec, end: Vec, o: RulerOptions): string[] {
   const v = sub(end, origin);
@@ -213,19 +234,7 @@ export function rulerDrawing(origin: Vec, end: Vec, view: RulerView, o: RulerOpt
       chosen = c;
     }
   }
-  // `DrawTextNextToCursor`: 15 px beside the cursor, left-aligned on its right or right-aligned on its left; above it, shifted up by one more line than it has;
-  // on the shadow layer moved back by `shadowXoffset` (left of a left-aligned text, right of a right-aligned one) and its stroke two shadow widths wider
-  const pos: Vec = [end[0], end[1]];
-  if (chosen[1] > 0) pos[1] -= g.linePitch * (strings.length + 1);
-  const halign = chosen[0] < 0 ? "left" : "right";
-  pos[0] += (chosen[0] < 0 ? 15 : -15) / scale;
-  const cursorShadowX = shadowXOffset(g.shadow, shadows);
-  pos[0] += halign === "left" ? -cursorShadowX : cursorShadowX;
-  const cursorStroke = shadows ? g.stroke + 2 * g.shadow : g.stroke;
-  for (const s of strings) {
-    pos[1] += g.linePitch;
-    texts.push({ text: s, at: [pos[0], pos[1]], halign, angleDeg: 0, size: g.size, stroke: cursorStroke });
-  }
+  texts.push(...textNextToCursor(end, chosen, strings, scale, shadows));
 
   const minorTickLen = 5 / scale;
   const majorTickLen = minorTickLen * MAJOR_TICK_LENGTH_FACTOR;

@@ -442,13 +442,10 @@ impl PinTexts {
     }
 }
 
-/// The name KiCad shows for a pin: `~` stands for none.
+/// The name KiCad shows for a pin (`SCH_PIN::GetShownName`): the name as it is. A KiCad 5 legacy pin's `~` is a name KiCad 10 draws as `~`; a file older than
+/// 20250318 had its `~` for an empty name made empty as it was read (`eda_kicad::tilde_text`), so a `~` here is a real one.
 pub fn shown_name(name: &str) -> &str {
-    if name == "~" {
-        ""
-    } else {
-        name
-    }
+    name
 }
 
 /// Where a pin's number is drawn: over the pin, or under it when the name is over it; to the left or right of a vertical one
