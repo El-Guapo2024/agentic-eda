@@ -811,6 +811,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
     // each sheet's style and attributes (`SchExtras::sheet_props`), by its id
     let mut sheet_props_read: Vec<(String, eda_model::sch_extras::SheetProps)> = Vec::new();
     let mut sheet_variants_read: Vec<(String, BTreeMap<String, eda_model::sch_extras::SheetVariant>)> = Vec::new();
+    let mut sheet_path_variants_read: Vec<(String, BTreeMap<String, BTreeMap<String, eda_model::sch_extras::SheetVariant>>)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         // `parseSheet`: `(stroke ..)` sets the border's width and colour, `(fill ..)` the background colour, `in_bom` / `on_board` the inverted exclusions
@@ -827,9 +828,16 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
             props.exclude_from_board = !crate::sch_extras_io::parse_bool(s, "on_board").unwrap_or(true);
             props.dnp = crate::sch_extras_io::parse_bool(s, "dnp").unwrap_or(false);
             // its records of the design variants (`parseSheet`'s `T_instances` > `T_path` > `T_variant`, UI-LEFT-2 SS15)
-            let records = sheet_variants_of(s, &props, file_version);
-            if !records.is_empty() {
-                sheet_variants_read.push((id.clone(), records));
+            // (the first path's set is the sheet's own; a later path whose set differs keeps its own: `SchExtras::path_sheet_variants`, UI-LEFT-3 S3-33)
+            let mut per_path = sheet_variants_of(s, &props, file_version).into_iter();
+            if let Some((_, own)) = per_path.next() {
+                let later: BTreeMap<String, BTreeMap<String, eda_model::sch_extras::SheetVariant>> = per_path.filter(|(_, set)| *set != own).map(|(path, set)| (path.join("/"), set)).collect();
+                if !later.is_empty() {
+                    sheet_path_variants_read.push((id.clone(), later));
+                }
+                if !own.is_empty() {
+                    sheet_variants_read.push((id.clone(), own));
+                }
             }
             if props != eda_model::sch_extras::SheetProps::legacy() {
                 sheet_props_read.push((id.clone(), props));
@@ -1010,6 +1018,7 @@ fn import_screen(text: &str, opts: &ImportOptions, root_uuid: Option<&str>, lega
         sch.extras.sheet_fields.extend(sheet_user_fields);
         sch.extras.sheet_field_places.extend(sheet_field_places_read);
         sch.extras.sheet_variants.extend(sheet_variants_read);
+        sch.extras.path_sheet_variants.extend(sheet_path_variants_read);
         sch.extras.field_looks.extend(sheet_field_looks_read);
         sch.extras.sheet_props.extend(sheet_props_read);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
@@ -1721,14 +1730,17 @@ fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
 /// own) or with no components at all is skipped.
 /// A sheet's records of the design variants (KiCad 25ec2335 `SCH_IO_KICAD_SEXPR_PARSER::parseSheet`, `T_instances` > `T_path` > `T_variant`): each
 /// `(variant (name ..) ..)` starts as the sheet's own flags (`InitializeAttributes`) and takes `dnp`, `exclude_from_sim`, `in_bom` (the exclusion itself before
-/// 20260306, negated from it on) and `on_board` (negated). The first path's record of a name is kept (the design keeps one per sheet); one with no differential
-/// is not kept. Its field texts are not read (UI-LEFT-2 SS15).
-fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, version: f64) -> BTreeMap<String, eda_model::sch_extras::SheetVariant> {
-    let mut out = BTreeMap::new();
+/// 20260306, negated from it on), `on_board` (negated) and its field texts (`T_field`). One set per `(path ..)`, by the model's path of the screen the sheet is
+/// drawn on (the path's sheets below the root), in file order; a path with no record has an empty set (UI-LEFT-3 S3-33: KiCad's records are per path). A
+/// record with no differential is not kept.
+fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, version: f64) -> Vec<(Vec<String>, BTreeMap<String, eda_model::sch_extras::SheetVariant>)> {
+    let mut out: Vec<(Vec<String>, BTreeMap<String, eda_model::sch_extras::SheetVariant>)> = Vec::new();
     let Some(instances) = sexpr::find(item, "instances") else { return out };
     let yes = |v: &[Sexpr], name: &str| sexpr::find(v, name).and_then(|n| sexpr::txt(n, 1)).map(|t| t == "yes" || t == "true");
     for project in sexpr::find_all(instances, "project") {
         for path in sexpr::find_all(project, "path") {
+            let model_path: Vec<String> = sexpr::txt(path, 1).unwrap_or_default().split('/').filter(|c| !c.is_empty()).skip(1).map(String::from).collect();
+            let mut set: BTreeMap<String, eda_model::sch_extras::SheetVariant> = BTreeMap::new();
             for v in sexpr::find_all(path, "variant") {
                 let Some(name) = sexpr::find(v, "name").and_then(|n| sexpr::txt(n, 1)) else { continue };
                 let mut rec = eda_model::sch_extras::SheetVariant::initialized(base);
@@ -1750,9 +1762,11 @@ fn sheet_variants_of(item: &[Sexpr], base: &eda_model::sch_extras::SheetProps, v
                     rec.fields.insert(text("name"), text("value"));
                 }
                 if rec.has_differentials(base) {
-                    out.entry(name.to_string()).or_insert(rec);
+                    set.entry(name.to_string()).or_insert(rec);
                 }
             }
+            out.retain(|(p, _)| *p != model_path);
+            out.push((model_path, set));
         }
     }
     out

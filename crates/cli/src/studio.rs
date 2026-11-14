@@ -1371,6 +1371,7 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
     // The footprint libraries the parts' bodies are looked up in (the board's library tables), read when the first part needs them.
     let body_libs = crate::body_api::Libs::of_board(dir);
     let mut parts = Vec::new();
+    let off_board = design.symbols_excluded_from_board();
     let derived_sch: std::cell::OnceCell<Option<eda_model::ir::Design>> = std::cell::OnceCell::new();
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
@@ -1383,6 +1384,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
             "mpn": part.mpn,
             "block": block_of.get(&part.reference),
             "placed": fp.is_some(),
+            // kept off the board by its symbol's or a sheet's Exclude from board (UI-LEFT-3 S3-33): Update PCB adds no footprint for it
+            "excluded_from_board": off_board.contains(&part.reference),
             "size": size,
             // GAPS.md #8: the name `ConstraintModel::footprint_of` actually
             // resolved this part's pads from (`Part::footprint` first, then
@@ -2375,10 +2378,18 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .chain(design.sheet_contents.iter().flat_map(|c| c.values()))
         .flat_map(|s| s.labels.iter().filter(|l| matches!(l.kind, eda_model::ir::LabelKind::Global { .. })).map(|l| l.net.as_str()))
         .collect();
+    // a screen shown twice: a wire is on the net of the sheet path in view (`SCH_ITEM::Connection( &GetCurrentSheet() )`, `SchExtras::path_wire_nets`; UI-LEFT-3 S3-36)
+    let path_key = sheet_ids.join("/");
+    let on_path = |w: &eda_model::ir::Wire| sch.extras.path_wire_nets.get(&w.id).and_then(|m| m.get(&path_key));
+    let wire_net = |w: &eda_model::ir::Wire| -> String { on_path(w).map_or_else(|| w.net.clone(), |p| p.net.clone()) };
     let wires: Vec<Value> = sch
         .wires
         .iter()
         .map(|w| {
+            let w = &match on_path(w) {
+                Some(p) => eda_model::ir::Wire { net: p.net.clone(), pins: p.pins.clone(), ..w.clone() },
+                None => w.clone(),
+            };
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
             if let Some(name) = wire_label_driver(&sch, w, &global_texts) {
                 v["label_driver"] = json!(name);
@@ -2482,7 +2493,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 })
                 .collect();
             // the net the label is on, as the tracer named it (the wire under it): Highlight Net takes a label's connection, `conn->Name()`, not its text (r3 A3-M4)
-            let traced = sch.wires.iter().find(|w| !w.net.is_empty() && w.pts.windows(2).any(|s| point_on_segment(s[0], s[1], l.at))).map(|w| w.net.clone()).or_else(|| {
+            let traced = sch.wires.iter().find(|w| !w.net.is_empty() && w.pts.windows(2).any(|s| point_on_segment(s[0], s[1], l.at))).map(&wire_net).or_else(|| {
                 // a label put on a pin with no wire: the net of the pin it is on, a subgraph member like any other (r4 C4-M2)
                 sch.symbols.iter().find_map(|sym| {
                     let part = model.part(&sym.id)?;
@@ -2610,11 +2621,6 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             if let Some(sh) = &shown {
                 sh.annotate_sheet_fields(&mut drawn);
             }
-            for v in drawn.iter_mut() {
-                if let Some(o) = v.as_object_mut() {
-                    o.remove("id");
-                }
-            }
             json!({
                 "id": s.id, "name": s.name, "file": s.file, "page": shown_page(s),
                 "fields": fields,
@@ -2622,10 +2628,11 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 // Sheet Properties' Style and Attributes (`SchExtras::sheet_props`; absent: the look the writer has always given a sheet) and the user fields
                 "props": sch.extras.sheet_props.get(&s.id),
                 // its records of the design variants (`SchExtras::sheet_variants`), which the studio lays over the sheet's attributes while one is current
-                "variants": sch.extras.sheet_variants.get(&s.id),
+                // (those of the sheet path in view, where the screen is shown on several: `SCH_SHEET_INSTANCE::m_Variants`, UI-LEFT-3 S3-33)
+                "variants": eda_model::variants::sheet_records_on(&sch, &s.id, &here),
                 "user_fields": sch.extras.sheet_fields.get(&s.id),
-                // each user field's place, angle, justification, font and colour (Sheet Properties' grid; UI-LEFT-2 SS15), and the user fields as they are drawn
-                // (no id: they are not items of their own on the canvas)
+                // each user field's place, angle, justification, font and colour (Sheet Properties' grid; UI-LEFT-2 SS15), and the user fields as they are drawn,
+                // each an item of its own on the canvas (`fld:<sheet>:<name>`: clicked, dragged, Field Properties; UI-LEFT-3 S3-6)
                 "user_field_looks": sch.extras.sheet_fields.get(&s.id).into_iter().flatten().map(|f| {
                     let p = sch.extras.sheet_field_places.get(&s.id).and_then(|m| m.get(&f.name)).copied().unwrap_or_default();
                     let look = sch.extras.field_look(&s.id, &f.name);

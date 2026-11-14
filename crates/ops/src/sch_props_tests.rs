@@ -838,6 +838,61 @@ fn a_sheet_user_fields_place_font_and_colour_are_kept_and_go_with_the_field() {
     assert!(sch_of(&b).extras.field_look("sheet_a", "Rev").is_none());
 }
 
+/// UI-LEFT-3 S3-6: a sheet's user field is an item of its own (`SCH_FIELD` of an `SCH_SHEET`): moved on its own (`SCH_MOVE_TOOL::moveItem`, the sheet's
+/// fields no longer autoplaced), turned (`SCH_EDIT_TOOL::Rotate` on a lone field), edited in Field Properties (`DIALOG_FIELD_PROPERTIES::UpdateField`: any
+/// text, its size, bold, shown and its place), hidden by Delete (`DoDelete`: `SetVisible( false )`), each one step, and kept where Sheet Properties' grid
+/// reads it (`SchExtras::sheet_field_places`, `sheet_fields`). Autoplace Fields leaves it where it is (`SCH_SHEET::AutoplaceFields` places the name and the
+/// file only).
+#[test]
+fn a_sheet_user_field_is_an_item_moved_turned_and_edited_on_its_own() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![eda_model::sch_extras::LabelField { name: "Rev".into(), text: "A".into(), ..Default::default() }] });
+    b.apply(&Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["sheet_a"]) })).unwrap();
+    assert!(sch_of(&b).extras.fields_autoplaced.contains_key("sheet_a"));
+    // moved on its own: the offset from the corner, and the sheet's fields are no longer autoplaced
+    b.apply(&Cmd::SchMove(SchMoveCmd::Move { ids: ids(&["fld:sheet_a:Rev"]), dx: mm(2.54), dy: mm(5.08), turns: Vec::new(), about: None })).unwrap();
+    let place = sch_of(&b).extras.sheet_field_places["sheet_a"]["Rev"];
+    assert_eq!((place.dx, place.dy), (mm(2.54), mm(5.08)));
+    assert!(!sch_of(&b).extras.fields_autoplaced.contains_key("sheet_a"));
+    // the name and the file are where they were, in `field_layout`, which holds no user field
+    assert!(sch_of(&b).field_layout["sheet_a"].iter().all(|p| p.name == "Sheetname" || p.name == "Sheetfile"));
+    // turned alone: a quarter, where it stands
+    b.apply(&Cmd::SchMove(SchMoveCmd::Rotate { ids: ids(&["fld:sheet_a:Rev"]), vertices: BTreeMap::new(), ccw: true, about: None, grid: Nm::ZERO })).unwrap();
+    assert_eq!(sch_of(&b).extras.sheet_field_places["sheet_a"]["Rev"].angle, 90_000);
+    // Field Properties: its text, size, bold and shown name are the sheet's field's, its place the sheet's offset
+    ok(&mut b, SchCmd::EditField { id: "fld:sheet_a:Rev".into(), text: Some("B".into()), at: Some(p(mm(10.16), mm(-2.54))), vertical: Some(false), h: Some(eda_model::ir::TextJustify::Left), v: None, size_nm: Some(mm(2.0)), bold: Some(true), italic: None, visible: None, name_shown: Some(true), allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false });
+    let f = sch_of(&b).extras.sheet_fields["sheet_a"][0].clone();
+    assert_eq!((f.text.as_str(), f.size_nm, f.bold, f.name_shown), ("B", mm(2.0), true, true));
+    let place = sch_of(&b).extras.sheet_field_places["sheet_a"]["Rev"];
+    assert_eq!((place.dx, place.dy, place.angle, place.h), (mm(10.16), mm(-2.54), 0, eda_model::ir::TextJustify::Left));
+    let drawn = eda_engine::fields::sheet_user_fields(sch_of(&b), &sch_of(&b).sheets[0]);
+    assert_eq!(drawn[0].at, (mm(10.16).as_f64(), mm(-2.54).as_f64()));
+    // Autoplace Fields places the name and the file and leaves it
+    b.apply(&Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["sheet_a"]) })).unwrap();
+    assert_eq!(sch_of(&b).extras.sheet_field_places["sheet_a"]["Rev"].dx, mm(10.16));
+    // Delete hides it
+    ok(&mut b, SchCmd::EditField { id: "fld:sheet_a:Rev".into(), text: None, at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: Some(false), name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false });
+    assert!(!sch_of(&b).extras.sheet_fields["sheet_a"][0].visible);
+    // a field the sheet does not have is no item
+    assert_eq!(err(&mut b, SchCmd::EditField { id: "fld:sheet_a:Nope".into(), text: Some("x".into()), at: None, vertical: None, h: None, v: None, size_nm: None, bold: None, italic: None, visible: None, name_shown: None, allow_autoplace: None, local_at: None, local_vertical: None, keep_autoplaced: false }), "ops_unknown_item");
+}
+
+/// `SCH_SHEET::Rotate`: with its fields autoplaced the name and the file are placed again and a user field stays where it is on the sheet; with them placed
+/// by hand every field moves with the corner.
+#[test]
+fn a_sheet_turned_keeps_its_user_fields_where_kicad_does() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(hierarchy(), &m, mm(0.1), mm(0.3));
+    ok(&mut b, SchCmd::SetSheetFields { id: "sheet_a".into(), fields: vec![eda_model::sch_extras::LabelField { name: "Rev".into(), text: "A".into(), ..Default::default() }] });
+    b.apply(&Cmd::SchEdit(SchCmd::AutoplaceFields { ids: ids(&["sheet_a"]) })).unwrap();
+    let page = |b: &Board| eda_engine::fields::sheet_user_fields(sch_of(b), &sch_of(b).sheets[0])[0].at;
+    let before = page(&b);
+    b.apply(&Cmd::SchMove(SchMoveCmd::Rotate { ids: ids(&["sheet_a"]), vertices: BTreeMap::new(), ccw: true, about: None, grid: Nm::ZERO })).unwrap();
+    assert_ne!(sch_of(&b).sheets[0].at, p(Nm::ZERO, Nm::ZERO), "the corner moved");
+    assert_eq!(page(&b), before, "the autoplaced sheet's user field stays put");
+}
+
 #[test]
 fn a_sheet_pins_font_and_colour_are_set_text_attrs_and_go_with_the_pin() {
     let mut root = SchematicSection::default();
@@ -916,4 +971,23 @@ fn a_sheets_user_field_has_a_text_of_its_own_in_a_variant() {
     assert_eq!(err(&mut b, set(&[("Nope", "x")])), "ops_unknown_item");
     ok(&mut b, set(&[("Channel", "A")]));
     assert!(sch_of(&b).extras.sheet_variants.is_empty(), "the field's own text: no record left");
+}
+
+/// UI-LEFT-3 S3-33: a sheet excluded from the board keeps the symbols inside it off the board (`NETLIST_EXPORTER_XML::makeSymbols`' `forBoard &&
+/// sheet.GetExcludedFromBoard( variant )`: no component, so `UpdateNetlist` adds no footprint), as a symbol's own Exclude from board does; a reference with one
+/// placement left on the board is not.
+#[test]
+fn a_sheet_excluded_from_the_board_keeps_its_symbols_off_it() {
+    let m = ConstraintModel::default();
+    let mut d = hierarchy();
+    d.sheet_contents.as_mut().unwrap().get_mut("a.kicad_sch").unwrap().symbols.push(sym_at("R1"));
+    let mut own = sym_at("R2");
+    own.exclude_from_board = true;
+    d.schematic.as_mut().unwrap().symbols.push(own);
+    d.sheet_contents.as_mut().unwrap().get_mut("b.kicad_sch").unwrap().symbols.push(sym_at("R3"));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    assert_eq!(b.design().symbols_excluded_from_board().into_iter().collect::<Vec<_>>(), vec!["R2"]);
+    ok(&mut b, SchCmd::SetSheetProps { id: "sheet_a".into(), border_width_nm: None, border_color: None, fill_color: None, exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: Some(true), dnp: None });
+    assert_eq!(b.design().symbols_excluded_from_board().into_iter().collect::<Vec<_>>(), vec!["R1", "R2"]);
+    assert!(!b.design().symbol_excluded_from_board("R3"));
 }

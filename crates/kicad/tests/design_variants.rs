@@ -282,3 +282,63 @@ fn each_sheet_paths_records_and_variant_symbol_come_back_under_their_path() {
     assert!(text.contains("\"R1\",\"4k7\""), "{text}");
     assert!(!text.contains("R2"), "path B's R2 is DNP in 'Lite': {text}");
 }
+
+/// UI-LEFT-3 S3-33: a sheet drawn on a screen shown twice keeps its records of the variants per sheet path (`SCH_SHEET_INSTANCE::m_Variants`, one per path:
+/// `parseSheet` reads each `(path ..)`'s `(variant ..)`, `saveSheet` writes each path's): the inner sheet of a channel placed twice is DNP in 'Lite' on path A
+/// only; read, written back under the same paths, and (slow) kicad-cli's BOM of 'Lite' leaves out the symbol inside it on path A only.
+#[test]
+fn a_sheet_on_a_shared_screen_keeps_each_paths_variant_records() {
+    let dir = work_dir("sheet_paths");
+    let root = "00000000-0000-0000-0000-000000000001";
+    let (a, b, inner) = ("00000000-0000-0000-0000-0000000000a1", "00000000-0000-0000-0000-0000000000a2", "00000000-0000-0000-0000-0000000000b1");
+    let head = |uuid: &str| format!("(kicad_sch (version 20250114) (generator \"eeschema\") (generator_version \"9.0\") (uuid \"{uuid}\") (paper \"A4\")\n");
+    let sheet = |uuid: &str, name: &str, file: &str, x: i32, instances: &str| {
+        format!(
+            "\t(sheet (at {x} 10) (size 20 10) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid \"{uuid}\")\n\t\t(property \"Sheetname\" \"{name}\" (at {x} 9.3 0) (effects (font (size 1.27 1.27)) (justify left bottom)))\n\t\t(property \"Sheetfile\" \"{file}\" (at {x} 20.5 0) (effects (font (size 1.27 1.27)) (justify left top)))\n\t\t(instances (project \"p\" {instances}))\n\t)\n"
+        )
+    };
+    let top = format!(
+        "{}\t(lib_symbols)\n{}{}\t(sheet_instances (path \"/\" (page \"1\")))\n)\n",
+        head(root),
+        sheet(a, "A", "chan.kicad_sch", 10, &format!("(path \"/{root}\" (page \"2\"))")),
+        sheet(b, "B", "chan.kicad_sch", 40, &format!("(path \"/{root}\" (page \"3\"))"))
+    );
+    let chan = format!(
+        "{}\t(lib_symbols)\n{})\n",
+        head("00000000-0000-0000-0000-0000000000c1"),
+        sheet(inner, "Inner", "inner.kicad_sch", 10, &format!("(path \"/{root}/{a}\" (page \"4\") (variant (name \"Lite\") (dnp yes))) (path \"/{root}/{b}\" (page \"5\"))"))
+    );
+    let r = "(symbol \"Device:R\" (pin_numbers (hide yes)) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes) (property \"Reference\" \"R\" (at 2.032 0 90) (effects (font (size 1.27 1.27)))) (property \"Value\" \"R\" (at 0 0 90) (effects (font (size 1.27 1.27)))) (symbol \"R_0_1\" (rectangle (start -1.016 -2.54) (end 1.016 2.54) (stroke (width 0.254) (type default)) (fill (type none)))) (symbol \"R_1_1\" (pin passive line (at 0 3.81 270) (length 1.27) (name \"~\" (effects (font (size 1.27 1.27)))) (number \"1\" (effects (font (size 1.27 1.27))))) (pin passive line (at 0 -3.81 90) (length 1.27) (name \"~\" (effects (font (size 1.27 1.27)))) (number \"2\" (effects (font (size 1.27 1.27)))))))";
+    let inside = format!(
+        "{}\t(lib_symbols {r})\n\t(symbol (lib_id \"Device:R\") (at 50 50 0) (unit 1) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid \"00000000-0000-0000-0000-0000000000d1\")\n\t\t(property \"Reference\" \"R10\" (at 52 49 0) (effects (font (size 1.27 1.27))))\n\t\t(property \"Value\" \"10k\" (at 52 51 0) (effects (font (size 1.27 1.27))))\n\t\t(property \"Footprint\" \"\" (at 50 50 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t(property \"Datasheet\" \"\" (at 50 50 0) (effects (font (size 1.27 1.27)) (hide yes)))\n\t\t(instances (project \"p\"\n\t\t\t(path \"/{root}/{a}/{inner}\" (reference \"R10\") (unit 1))\n\t\t\t(path \"/{root}/{b}/{inner}\" (reference \"R11\") (unit 1))\n\t\t))\n\t)\n)\n",
+        head("00000000-0000-0000-0000-0000000000e1")
+    );
+    std::fs::write(dir.join("top.kicad_sch"), top).unwrap();
+    std::fs::write(dir.join("chan.kicad_sch"), chan).unwrap();
+    std::fs::write(dir.join("inner.kicad_sch"), inside).unwrap();
+    let (design, model) = read(&dir, "top");
+    let dnp_on = |d: &Design, first: &str| eda_model::variants::sheet_path_flags(d, &[first.to_string(), inner.to_string()], "Lite").dnp;
+    assert!(dnp_on(&design, a) && !dnp_on(&design, b), "path A's record only");
+    let out = work_dir("sheet_paths_out");
+    write(&design, &model, &out, "top");
+    let chan_file = std::fs::read_dir(&out).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| std::fs::read_to_string(p).is_ok_and(|t| t.contains("\"Inner\""))).expect("the channel file");
+    let text = std::fs::read_to_string(&chan_file).unwrap();
+    assert_eq!(text.matches("(variant (name \"Lite\") (dnp yes))").count(), 1, "one path's record: {text}");
+    let (again, _) = read(&out, "top");
+    let (sa, sb): (Vec<String>, Vec<String>) = {
+        let sheets = &again.schematic.as_ref().unwrap().sheets;
+        (vec![sheets.iter().find(|s| s.name == "A").unwrap().id.clone()], vec![sheets.iter().find(|s| s.name == "B").unwrap().id.clone()])
+    };
+    let inner_id = eda_model::sheet_list::screen_of(&again, &sa).unwrap().sheets[0].id.clone();
+    let flags = |p: &[String]| eda_model::variants::sheet_path_flags(&again, &[p[0].clone(), inner_id.clone()], "Lite").dnp;
+    assert!(flags(&sa) && !flags(&sb), "read back per path");
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = kicad_cli() else { return };
+    let bom = out.join("lite.csv");
+    let run = Command::new(&cli).args(["sch", "export", "bom", "--variant", "Lite", "--exclude-dnp", "--group-by", "", "--fields", "Reference,Value", "-o"]).arg(&bom).arg(out.join("top.kicad_sch")).output().unwrap();
+    assert!(run.status.success(), "kicad-cli: {}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(&bom).unwrap();
+    assert!(text.contains("R11") && !text.contains("R10"), "R10 (path A) is DNP in 'Lite' through its sheet, R11 (path B) is not: {text}");
+}

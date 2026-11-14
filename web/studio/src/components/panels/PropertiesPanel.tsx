@@ -12,6 +12,7 @@ import type { Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
 import { PropertyGrid } from "./PropertyGrid";
 import { useOriginTransforms } from "../../state/originTransforms";
+import { stillToPlace } from "../../kicad-port/updatePcb";
 
 /**
  * KiCad picks up an unplaced footprint through the Add Footprint tool's
@@ -25,7 +26,8 @@ import { useOriginTransforms } from "../../state/originTransforms";
 function UnplacedList() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
-  const unplaced = state.board?.parts.filter((p) => !p.placed) ?? [];
+  // (a part excluded from the board by its symbol or a sheet is no footprint to place: `UpdateNetlist` skips it, UI-LEFT-3 S3-33)
+  const unplaced = state.board?.parts.filter(stillToPlace) ?? [];
   if (unplaced.length === 0) return null;
   return (
     <div className="panel-section">

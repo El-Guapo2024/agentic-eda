@@ -130,6 +130,11 @@ impl<'a> Board<'a> {
             return Err(fail("ops_no_variant", "variant", "the default variant is the sheet itself: set_sheet_props"));
         }
         let variant = self.existing_variant(variant)?;
+        // the record of the sheet path in view of the screen the sheet is drawn on, when that screen is shown on several paths (`SCH_SHEET::SetDNP( value,
+        // &instance, variant )`: the instance of `GetCurrentSheet()`); else the sheet's own (UI-LEFT-3 S3-33)
+        let here = self.focus_sheet_path();
+        let shared = self.focus.as_ref().is_some_and(|f| eda_model::sheet_list::placement_counts(&self.design).get(f).copied().unwrap_or(0) > 1);
+        let parent: Option<&[String]> = shared.then_some(here.as_slice());
         let sch = self.schematic_mut()?;
         if !sch.sheets.iter().any(|s| s.id == id) {
             return Err(fail("ops_unknown_sheet", id, "no sheet with this id"));
@@ -140,7 +145,7 @@ impl<'a> Board<'a> {
         let mut changed = false;
         for (flag, value) in flags.each() {
             if let Some(v) = value {
-                changed |= variants::set_sheet_flag(sch, id, &variant, flag, v);
+                changed |= variants::set_sheet_flag_on(sch, id, parent, &variant, flag, v);
             }
         }
         // the user fields' texts in the variant (`SCH_SHEET::SetFieldText( .., aVariantName )`): a field the sheet has, never its name or file
@@ -148,7 +153,7 @@ impl<'a> Board<'a> {
             let Some(own) = sch.extras.sheet_fields.get(id).and_then(|fs| fs.iter().find(|f| &f.name == name)).map(|f| f.text.clone()) else {
                 return Err(fail("ops_unknown_item", id, format!("the sheet has no field '{name}'")));
             };
-            changed |= variants::set_sheet_field(sch, id, &variant, name, text, &own);
+            changed |= variants::set_sheet_field_on(sch, id, parent, &variant, name, text, &own);
         }
         if !changed {
             return Err(fail("ops_nothing_to_change", id, "the sheet already has these attributes in this variant"));

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appliable, backAnnotateCommands, backAnnotateLines, changeLines, updateCommands, updatePcbMessage } from "./updatePcb";
+import { appliable, backAnnotateCommands, backAnnotateLines, changeLines, updateCommands, updatePcbMessage, stillToPlace } from "./updatePcb";
 import { CHANGE_OPTIONS, REPLACE_OPTIONS, UPDATE_OPTIONS, exchangeReport, isLibraryId, matchingFootprints, setAllOptions } from "./pcbExchange";
 import type { BoardState } from "../api/types";
 
@@ -92,4 +92,16 @@ test("the message window tells each footprint, and under an updated one what the
     exchangeReport("change", [entry("R1", { to: "L:B", differs: true, lines: ["not shown in a change"] })]).map((l) => l.text),
     ["Changed footprint R1 from 'L:A' to 'L:B': OK"],
   );
+});
+
+test("a part excluded from the board by its symbol or a sheet is no footprint to place, as Update PCB skips its component (UI-LEFT-3 S3-33)", () => {
+  const parts = [
+    { ref: "R1", placed: true },
+    { ref: "R2", placed: false },
+    { ref: "R3", placed: false, excluded_from_board: true },
+    { ref: "R4", placed: true, excluded_from_board: true },
+  ];
+  assert.deepEqual(parts.filter(stillToPlace).map((p) => p.ref), ["R2"]);
+  // one already on the board stays (Update PCB's "Delete footprints with no symbols" is off by default); one not on it is not counted
+  assert.match(updatePcbMessage(parts), /3 footprints: 2 placed, 1 still to place \(R2\)/);
 });

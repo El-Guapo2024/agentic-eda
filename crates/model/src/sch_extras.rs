@@ -140,11 +140,19 @@ pub struct SchExtras {
     /// the variant's name: its Do not populate, Exclude from simulation, Exclude from bill of materials and Exclude from board in that variant, which Sheet
     /// Properties sets while the variant is the current one (`SetDNP( .., &instance, variantName )`) and which reach every symbol inside the sheet
     /// (`SCH_SHEET_PATH::GetDNP( variant )`). Written in each `(path ..)` of the sheet's `(instances ..)` as `(variant (name ..) (dnp ..) (exclude_from_sim ..)
-    /// (in_bom ..))` (`saveSheet`) and read back. **Differs**: a record is the sheet's on every sheet path its screen is shown on (KiCad's is one path's), as a
-    /// symbol's is ([`crate::variants`]); a variant's field texts of the sheet are not kept. A record with no differential from the sheet's own flags is not kept
-    /// (`HasDifferentials`: `saveSheet` writes none). Additive (UI-LEFT-2 SS15).
+    /// (in_bom ..))` (`saveSheet`) and read back. These are the records of every sheet path that has no set of its own ([`Self::path_sheet_variants`], one per
+    /// path as KiCad keeps them). A record with no differential from the sheet's own flags is not kept (`HasDifferentials`: `saveSheet` writes none). Additive
+    /// (UI-LEFT-2 SS15).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sheet_variants: BTreeMap<String, BTreeMap<String, SheetVariant>>,
+    /// A sheet's records of the variants on one sheet path of the screen it is drawn on, where that screen is shown on several paths and the path's records are
+    /// not the sheet's own [`Self::sheet_variants`] (KiCad keeps them per `SCH_SHEET_INSTANCE`, one per sheet path: `SCH_SHEET::SetDNP( .., &instance, variant )`
+    /// sets that path's): by the sheet's id, then by the path of the screen it is drawn on (the placement ids from the root down, joined with `/`) -> the path's
+    /// whole set of records, by variant name (an empty set: the path has none). Read through `crate::variants::sheet_records_on`; read from each `(path ..)` of
+    /// the sheet's `(instances ..)` and written back per path; Sheet Properties and the Properties panel set the record of the path in view. A path's set equal
+    /// to the sheet's own is not kept. Additive (UI-LEFT-3 S3-33).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_sheet_variants: BTreeMap<String, BTreeMap<String, BTreeMap<String, SheetVariant>>>,
     /// The page number of a sheet drawn on this screen, per sheet path, where the screen is shown on several paths and the paths' pages differ
     /// (`SCH_SHEET::m_instances`: one `SCH_SHEET_INSTANCE`, with its own `m_PageNumber`, per sheet path the sheet is on): by the sheet's
     /// `SheetInstance::id`, then by the path of the screen the sheet is drawn on (the placement ids from the root down, joined with `/`) -> the page.
@@ -215,6 +223,13 @@ pub struct SchExtras {
     /// Additive (UI-LEFT-2 SS16).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub path_symbol_variants: BTreeMap<String, BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>>,
+    /// The net a wire of this screen is on for a sheet path other than the first, where the screen is shown on several paths and the net there has
+    /// another name (KiCad's connectivity is per sheet path, `CONNECTION_GRAPH::Recalculate`: a subgraph per item per `SCH_SHEET_PATH`, and an item's
+    /// `SCH_ITEM::Connection( &aSheet )` is that path's): by the wire's id, then by the sheet path (the placement ids from the root down, joined with `/`)
+    /// -> the net's name and the pins at the wire's points under that path's references. [`crate::ir::Wire::net`] and `pins` are the first path's.
+    /// Written by the tracer each time it runs, read by the studio for the sheet path in view (UI-LEFT-3 S3-36). Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub path_wire_nets: BTreeMap<String, BTreeMap<String, PathWireNet>>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -644,6 +659,15 @@ pub struct PowerLibName {
     pub local: bool,
 }
 
+/// See [`SchExtras::path_wire_nets`]: a wire's net on one sheet path, and the pins it touches there ("REF.PIN" under the path's references).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathWireNet {
+    pub net: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<String>,
+}
+
 /// See [`SchExtras::sheet_field_places`]: a sheet user field's offset from the sheet's corner, its angle (0 or 90 degrees) and its justification.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1067,9 +1091,11 @@ impl SchExtras {
             && self.sheet_field_places.is_empty()
             && self.sheet_props.is_empty()
             && self.sheet_variants.is_empty()
+            && self.path_sheet_variants.is_empty()
             && self.sheet_pages.is_empty()
             && self.path_units.is_empty()
             && self.power_path_refs.is_empty()
+            && self.path_wire_nets.is_empty()
             && self.local_power.is_empty()
             && self.global_power.is_empty()
             && self.power_lib_names.is_empty()

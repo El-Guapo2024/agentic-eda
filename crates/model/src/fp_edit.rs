@@ -589,6 +589,28 @@ impl Design {
         (dnp, no_bom)
     }
 
+    /// Is the part `id` kept off the board: every placed symbol of the reference, on every sheet path, excluded from the board -- by its own attribute or by a
+    /// sheet of its path (KiCad 25ec2335 `NETLIST_EXPORTER_XML::makeSymbols`' `forBoard && ( sheet.GetExcludedFromBoard( variant ) ||
+    /// symbol->ResolveExcludedFromBoard( &sheet, variant ) )`, the default variant), so the board's netlist does not have it and Update PCB adds no footprint for it
+    /// (`BOARD_NETLIST_UPDATER::UpdateNetlist`: a component with `exclude_from_board` is skipped). A reference no sheet places is not.
+    pub fn symbol_excluded_from_board(&self, id: &str) -> bool {
+        self.symbols_excluded_from_board().contains(id)
+    }
+
+    /// Every reference [`Self::symbol_excluded_from_board`] keeps off the board, in one walk of the hierarchy.
+    pub fn symbols_excluded_from_board(&self) -> std::collections::BTreeSet<String> {
+        let mut kept: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+        for e in crate::sheet_list::walk(self) {
+            let Some(screen) = crate::sheet_list::screen_of(self, &e.path) else { continue };
+            let by_sheet = crate::variants::sheet_path_flags(self, &e.path, "").exclude_from_board;
+            for s in &screen.symbols {
+                let off = kept.entry(crate::sheet_list::reference_under(screen, s, &e.path)).or_insert(true);
+                *off &= s.exclude_from_board || by_sheet;
+            }
+        }
+        kept.into_iter().filter(|(_, off)| *off).map(|(r, _)| r).collect()
+    }
+
     /// The attributes a footprint is written with: the edit's, else the derived ones.
     pub fn effective_attrs(&self, id: &str, footprint: &Footprint) -> FootprintAttrs {
         if let Some(a) = self.footprint_edit(id).and_then(|e| e.attrs) {

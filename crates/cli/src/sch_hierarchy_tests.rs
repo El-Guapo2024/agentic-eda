@@ -1780,6 +1780,12 @@ fn slow_kicad_qa_schematics_written_back_are_judged_as_the_originals() {
         } else {
             differ += 1;
             println!("DIFF {rel}: erc [{}]; nets {} of {} only in the original, {} only in ours", erc_diff.join(", "), nets_only_o, groups_o.len(), nets_only_w);
+            // a run of one root (`EDA_QA_SCH_ONLY`) shows the nets themselves and leaves the folders for a look
+            if only.is_some() {
+                println!("   only in the original: {:?}", groups_o.iter().filter(|g| !groups_w.contains(g)).collect::<Vec<_>>());
+                println!("   only in ours: {:?}", groups_w.iter().filter(|g| !groups_o.contains(g)).collect::<Vec<_>>());
+                println!("   folders: {} {}", orig.display(), dir.display());
+            }
         }
     }
     println!("QA schematics written back: {same} judged alike, {differ} differ, {failed} failed");
@@ -2906,4 +2912,31 @@ fn slow_the_legacy_rescue_writes_a_library_kicad_cli_reads_and_remap_links_to_it
     assert!(!issues.iter().any(|f| f.contains("intent-rescue")), "kicad-cli finds the symbols in the rescue library: {issues:?}");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
+}
+
+/// UI-LEFT-3 S3-36 (`CONNECTION_GRAPH::Recalculate`: a subgraph per item per `SCH_SHEET_PATH`, `SCH_ITEM::Connection( &aSheet )`): a wire of a screen shown twice
+/// is on one net on each placement -- QA `complex_hierarchy` shows `ampli_ht` twice, and its wires are on U3's nets on one placement and U4's on the other. The
+/// sheet in view's wires are sent with that placement's net and pins (`SchExtras::path_wire_nets` for the later one), each the net the net list has its pins on.
+#[test]
+fn a_wire_of_a_screen_shown_twice_is_on_each_placements_own_net() {
+    let Some(dir) = qa_imported("netlists/complex_hierarchy/complex_hierarchy.kicad_sch", "path_wire_nets") else { return };
+    let (_, design, model) = load(&dir).unwrap();
+    let sheets = design.schematic.as_ref().unwrap().sheets.clone();
+    assert_eq!(sheets.len(), 2);
+    let net_of_pin: std::collections::BTreeMap<String, String> = design.nets.iter().flatten().flat_map(|n| n.pins.iter().map(move |p| (p.clone(), n.name.clone()))).collect();
+    let views: Vec<serde_json::Value> = sheets.iter().map(|s| crate::studio::schematic_json_of(&design, &model, &s.id)).collect();
+    let wires = |v: &serde_json::Value| v["wires"].as_array().unwrap().iter().map(|w| (w["id"].as_str().unwrap().to_string(), w["net"].as_str().unwrap_or("").to_string(), w["pins"].as_array().unwrap().iter().map(|p| p.as_str().unwrap().to_string()).collect::<Vec<_>>())).collect::<Vec<_>>();
+    let (a, b) = (wires(&views[0]), wires(&views[1]));
+    let mut differ = 0;
+    for ((id, na, pa), (_, nb, pb)) in a.iter().zip(b.iter()) {
+        for (net, pins) in [(na, pa), (nb, pb)] {
+            if let Some(p) = pins.first() {
+                assert_eq!(net_of_pin.get(p), Some(net), "wire {id}: its net is the one its pin {p} is on");
+            }
+        }
+        if na != nb {
+            differ += 1;
+        }
+    }
+    assert!(differ > 0, "the two placements' wires are on nets of their own");
 }

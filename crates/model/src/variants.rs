@@ -316,10 +316,10 @@ pub fn delete_records(sch: &mut SchematicSection, variant: &str) {
         records.remove(variant);
     }
     tidy_all(sch);
-    for records in sch.extras.sheet_variants.values_mut() {
+    for records in sheet_record_sets_mut(sch) {
         records.remove(variant);
     }
-    sch.extras.sheet_variants.retain(|_, r| !r.is_empty());
+    tidy_all_sheets(sch);
 }
 
 /// `SCH_SCREEN::RenameVariant` (`SCH_SYMBOL::RenameVariant`): every record of `old` is a record of `new`.
@@ -332,7 +332,7 @@ pub fn rename_records(sch: &mut SchematicSection, old: &str, new: &str) {
             records.insert(new.to_string(), r);
         }
     }
-    for records in sch.extras.sheet_variants.values_mut() {
+    for records in sheet_record_sets_mut(sch) {
         if let Some(r) = records.remove(old) {
             records.insert(new.to_string(), r);
         }
@@ -347,7 +347,7 @@ pub fn copy_records(sch: &mut SchematicSection, source: &str, new: &str) {
             records.entry(new.to_string()).or_insert(r);
         }
     }
-    for records in sch.extras.sheet_variants.values_mut() {
+    for records in sheet_record_sets_mut(sch) {
         if let Some(r) = records.get(source).cloned() {
             records.entry(new.to_string()).or_insert(r);
         }
@@ -357,9 +357,26 @@ pub fn copy_records(sch: &mut SchematicSection, source: &str, new: &str) {
 /// `SCH_SHEET::GetDNP( &instance, variant )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard`: the flags of the sheet `id` of the section, in
 /// `variant` when it has a record of it (`instance.m_Variants.contains( aVariantName )`), else its own (`m_DNP`, ...); the default variant (`""`) is its own.
 pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sch_extras::SheetVariant {
+    sheet_flags_on(sch, id, &[], variant)
+}
+
+/// The records of every variant the sheet `id` has on the sheet path `parent` of the screen it is drawn on (`SCH_SHEET_INSTANCE::m_Variants` of that path's
+/// instance): the path's own set ([`crate::sch_extras::SchExtras::path_sheet_variants`]) where the screen is shown on several paths and that path's records
+/// differ, else the sheet's ([`crate::sch_extras::SchExtras::sheet_variants`]). The root (`[]`) has the sheet's (UI-LEFT-3 S3-33).
+pub fn sheet_records_on<'a>(sch: &'a SchematicSection, id: &str, parent: &[String]) -> Option<&'a BTreeMap<String, crate::sch_extras::SheetVariant>> {
+    if !parent.is_empty() {
+        if let Some(m) = sch.extras.path_sheet_variants.get(id).and_then(|p| p.get(&parent.join("/"))) {
+            return Some(m);
+        }
+    }
+    sch.extras.sheet_variants.get(id)
+}
+
+/// [`sheet_flags`] on the sheet path `parent` of the screen the sheet is drawn on (`SCH_SHEET::GetDNP( &instance, variant )`: that path's instance).
+pub fn sheet_flags_on(sch: &SchematicSection, id: &str, parent: &[String], variant: &str) -> crate::sch_extras::SheetVariant {
     let base = sch.extras.sheet_props_of(id);
     if !variant.is_empty() {
-        if let Some(r) = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)) {
+        if let Some(r) = sheet_records_on(sch, id, parent).and_then(|m| m.get(variant)) {
             return r.clone();
         }
     }
@@ -369,55 +386,113 @@ pub fn sheet_flags(sch: &SchematicSection, id: &str, variant: &str) -> crate::sc
 /// `SCH_SHEET::SetDNP( value, &instance, variant )` and its kin for one flag: a record made for the variant starts as the sheet's own flags
 /// (`variant.InitializeAttributes( *this )`); a record left with no differential is not kept. Returns whether anything changed.
 pub fn set_sheet_flag(sch: &mut SchematicSection, id: &str, variant: &str, flag: Flag, value: bool) -> bool {
-    let base = sch.extras.sheet_props_of(id);
-    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
-    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
-    match flag {
+    set_sheet_flag_on(sch, id, None, variant, flag, value)
+}
+
+/// [`set_sheet_flag`] on the sheet path `parent` of the screen the sheet is drawn on (`SCH_SHEET::SetDNP( value, &instance, variant )`): `None` (or the root's
+/// `[]`) sets the sheet's own records, which every path without a set of its own reads; a path of a screen shown on several paths sets that path's alone.
+pub fn set_sheet_flag_on(sch: &mut SchematicSection, id: &str, parent: Option<&[String]>, variant: &str, flag: Flag, value: bool) -> bool {
+    if flag == Flag::ExcludeFromPosFiles {
+        return false;
+    }
+    edit_sheet_record(sch, id, parent, variant, |rec| match flag {
         Flag::Dnp => rec.dnp = value,
         Flag::ExcludeFromSim => rec.exclude_from_sim = value,
         Flag::ExcludeFromBom => rec.exclude_from_bom = value,
         Flag::ExcludeFromBoard => rec.exclude_from_board = value,
-        Flag::ExcludeFromPosFiles => return false,
-    }
-    store_sheet_record(sch, id, variant, &base, before, rec)
+        Flag::ExcludeFromPosFiles => {}
+    })
 }
 
-/// Keep `rec` as the sheet `id`'s record of `variant` where it has a differential (a record without one is not kept), `before` being the record it had.
-/// Returns whether anything changed.
-fn store_sheet_record(sch: &mut SchematicSection, id: &str, variant: &str, base: &crate::sch_extras::SheetProps, before: Option<crate::sch_extras::SheetVariant>, rec: crate::sch_extras::SheetVariant) -> bool {
-    let after = rec.has_differentials(base).then_some(rec);
+/// Edit the sheet `id`'s record of `variant` on `parent` (see [`set_sheet_flag_on`]) with `f`: a record made for the variant starts as the sheet's own flags
+/// (`variant.InitializeAttributes( *this )`); a record left with no differential is not kept, nor a path's set equal to the sheet's own. Returns whether
+/// anything changed.
+fn edit_sheet_record(sch: &mut SchematicSection, id: &str, parent: Option<&[String]>, variant: &str, f: impl FnOnce(&mut crate::sch_extras::SheetVariant)) -> bool {
+    let base = sch.extras.sheet_props_of(id);
+    let parent = parent.filter(|p| !p.is_empty());
+    let mut set = match parent {
+        Some(p) => sheet_records_on(sch, id, p).cloned().unwrap_or_default(),
+        None => sch.extras.sheet_variants.get(id).cloned().unwrap_or_default(),
+    };
+    let before = set.get(variant).cloned();
+    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
+    f(&mut rec);
+    let after = rec.has_differentials(&base).then_some(rec);
     if after == before {
         return false;
     }
     match after {
         Some(r) => {
-            sch.extras.sheet_variants.entry(id.to_string()).or_default().insert(variant.to_string(), r);
+            set.insert(variant.to_string(), r);
         }
         None => {
-            if let Some(m) = sch.extras.sheet_variants.get_mut(id) {
-                m.remove(variant);
-                if m.is_empty() {
-                    sch.extras.sheet_variants.remove(id);
-                }
-            }
+            set.remove(variant);
         }
     }
+    match parent {
+        Some(p) => {
+            sch.extras.path_sheet_variants.entry(id.to_string()).or_default().insert(p.join("/"), set);
+        }
+        None => {
+            sch.extras.sheet_variants.insert(id.to_string(), set);
+        }
+    }
+    tidy_sheet_records(sch, id);
     true
+}
+
+/// Drop the sheet `id`'s empty set of records and every path's set that is the sheet's own.
+fn tidy_sheet_records(sch: &mut SchematicSection, id: &str) {
+    if sch.extras.sheet_variants.get(id).is_some_and(BTreeMap::is_empty) {
+        sch.extras.sheet_variants.remove(id);
+    }
+    let own = sch.extras.sheet_variants.get(id).cloned().unwrap_or_default();
+    if let Some(paths) = sch.extras.path_sheet_variants.get_mut(id) {
+        paths.retain(|_, set| *set != own);
+        if paths.is_empty() {
+            sch.extras.path_sheet_variants.remove(id);
+        }
+    }
+}
+
+/// Every set of records the sheets of the section have: their own and each sheet path's.
+fn sheet_record_sets_mut(sch: &mut SchematicSection) -> impl Iterator<Item = &mut BTreeMap<String, crate::sch_extras::SheetVariant>> {
+    sch.extras.sheet_variants.values_mut().chain(sch.extras.path_sheet_variants.values_mut().flat_map(|p| p.values_mut()))
+}
+
+/// [`tidy_sheet_records`] for every sheet of the section.
+fn tidy_all_sheets(sch: &mut SchematicSection) {
+    let ids: Vec<String> = sch.extras.sheet_variants.keys().chain(sch.extras.path_sheet_variants.keys()).cloned().collect();
+    for id in ids {
+        tidy_sheet_records(sch, &id);
+    }
 }
 
 /// `SCH_SHEET::SetFieldText( aField, aFieldName, aFieldText, aPath, aVariantName )` for a user field of the sheet `id` (KiCad 25ec2335): a text equal to the
 /// field's own (`own`) takes the record's text of it away; another is the record's text of it, the record made first from the sheet's own flags
 /// (`InitializeAttributes`) when there is none. Returns whether anything changed.
 pub fn set_sheet_field(sch: &mut SchematicSection, id: &str, variant: &str, field: &str, text: &str, own: &str) -> bool {
-    let base = sch.extras.sheet_props_of(id);
-    let before = sch.extras.sheet_variants.get(id).and_then(|m| m.get(variant)).cloned();
-    let mut rec = before.clone().unwrap_or_else(|| crate::sch_extras::SheetVariant::initialized(&base));
-    if text == own {
-        rec.fields.remove(field);
-    } else {
-        rec.fields.insert(field.to_string(), text.to_string());
+    set_sheet_field_on(sch, id, None, variant, field, text, own)
+}
+
+/// [`set_sheet_field`] on the sheet path `parent` of the screen the sheet is drawn on (see [`set_sheet_flag_on`]).
+pub fn set_sheet_field_on(sch: &mut SchematicSection, id: &str, parent: Option<&[String]>, variant: &str, field: &str, text: &str, own: &str) -> bool {
+    edit_sheet_record(sch, id, parent, variant, |rec| {
+        if text == own {
+            rec.fields.remove(field);
+        } else {
+            rec.fields.insert(field.to_string(), text.to_string());
+        }
+    })
+}
+
+/// A sheet user field's text in `variant` on the sheet path `parent` of the screen the sheet is drawn on (KiCad 25ec2335 `SCH_SHEET::GetFieldText( aFieldName,
+/// aPath, aVariantName )`): the record's text of it, else `own` (the field's own text). The default variant is the field's own.
+pub fn sheet_field_text<'a>(sch: &'a SchematicSection, id: &str, parent: &[String], variant: &str, field: &str, own: &'a str) -> &'a str {
+    if variant.is_empty() {
+        return own;
     }
-    store_sheet_record(sch, id, variant, &base, before, rec)
+    sheet_records_on(sch, id, parent).and_then(|m| m.get(variant)).and_then(|r| r.fields.get(field)).map_or(own, String::as_str)
 }
 
 /// `SCH_SHEET_PATH::GetDNP( aVariantName )`, `GetExcludedFromSim`, `GetExcludedFromBOM`, `GetExcludedFromBoard` (8303b2ad `sch_sheet_path.cpp`): a flag is set for
@@ -428,7 +503,7 @@ pub fn sheet_path_flags(design: &crate::ir::Design, path: &[String], variant: &s
     let mut out = SymbolFlags::default();
     for k in 1..=path.len() {
         let Some(screen) = crate::sheet_list::screen_of(design, &path[..k - 1]) else { continue };
-        let f = sheet_flags(screen, &path[k - 1], variant);
+        let f = sheet_flags_on(screen, &path[k - 1], &path[..k - 1], variant);
         out.dnp |= f.dnp;
         out.exclude_from_sim |= f.exclude_from_sim;
         out.exclude_from_bom |= f.exclude_from_bom;
@@ -495,6 +570,7 @@ pub fn names(design: &crate::ir::Design) -> Vec<String> {
         out.extend(sch.extras.symbol_variants.values().flat_map(|r| r.keys().cloned()));
         out.extend(sch.extras.path_symbol_variants.values().flat_map(|p| p.values()).flat_map(|r| r.keys().cloned()));
         out.extend(sch.extras.sheet_variants.values().flat_map(|r| r.keys().cloned()));
+        out.extend(sch.extras.path_sheet_variants.values().flat_map(|p| p.values()).flat_map(|r| r.keys().cloned()));
     }
     out.into_iter().collect()
 }
