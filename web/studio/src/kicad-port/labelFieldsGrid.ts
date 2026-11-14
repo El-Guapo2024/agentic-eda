@@ -56,7 +56,9 @@ export function labelFieldLook(f: SchLabelField, labelAt: readonly [number, numb
 export function labelGridRows(fields: readonly SchLabelField[], labelAt: readonly [number, number], firstKey = 0): LabelGridRow[] {
   return fields.map((f, i) => {
     const look = labelFieldLook(f, labelAt);
-    return { key: firstKey + i, was: f.name, isr: f.intersheet_refs, name: f.name, text: f.text, visible: f.visible, look, wasLook: look };
+    // the grid shows a field's translated name (`SCH_LABEL_BASE::GetDefaultFieldName`: "Netclass" reads "Net Class"); OK maps it back (`labelFieldEditOf`)
+    const name = !f.intersheet_refs && f.name === "Netclass" ? "Net Class" : f.name;
+    return { key: firstKey + i, was: f.name, isr: f.intersheet_refs, name, text: f.text, visible: f.visible, look, wasLook: look };
   });
 }
 
@@ -75,7 +77,8 @@ export function newLabelGridRow(key: number, f: LabelFieldEdit, before?: FieldLo
 /** The `edit_label` row of a grid row (the Sheet References have none: they are not one of the label's own fields). */
 export function labelFieldEditOf(r: LabelGridRow): LabelFieldEdit {
   return {
-    name: r.name,
+    // the translated "Net Class" is stored as "Netclass" (`SCH_LABEL_BASE`'s canonical name)
+    name: !r.isr && r.name.trim() === "Net Class" ? "Netclass" : r.name,
     text: r.text,
     visible: r.visible,
     italic: r.look.italic,
