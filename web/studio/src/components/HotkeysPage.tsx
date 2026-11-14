@@ -1,9 +1,10 @@
 // Preferences > Hotkeys (`PANEL_HOTKEYS_EDITOR`, common/dialogs/panel_hotkeys_editor.cpp at KiCad 8303b2ad) and its list (`WIDGET_HOTKEY_LIST`,
 // common/widgets/widget_hotkey_list.cpp); the rules are kicad-port/hotkeyStore.ts', the person's keys state/userHotkeys.ts'.
 //
-//   * The list: "Type filter text" (`HOTKEY_FILTER`: the command or the hotkey's name), a section per application (Common, Schematic Editor, PCB Editor; Close and
-//     Quit at the top of Common and the Gestures last, read-only), columns "Command (double-click to edit)" / Hotkey / Alternate / Description, " *" on a row whose
-//     hotkey is not the saved one.
+//   * The list: "Type filter text" (`HOTKEY_FILTER`: the command or the hotkey's name), a section per application (3D Viewer, Common, Schematic Editor, PCB Editor;
+//     Close and Quit at the top of Common and the Gestures last, read-only), columns "Command (double-click to edit)" / Hotkey / Alternate / Description, " *" on a
+//     row whose hotkey is not the saved one. A click on a column's title sorts by it, a second click the other way (`wxCOL_SORTABLE`, hotkeyStore.ts
+//     `sortHotkeySections`; UI-LEFT-3 C3-4).
 //   * Double click (or Enter) on a row opens "Set Hotkey" ("Press a new hotkey, or press Esc to cancel...", Command:, Current key:, "Clear assigned hotkey"): the
 //     key pressed becomes the hotkey once it is released (`HK_PROMPT_DIALOG::OnKeyUp`); Esc changes nothing. A right click: Edit..., Edit Alternate..., Undo Changes,
 //     Clear Assigned Hotkey, Clear Assigned Alternate, Restore Defaults (`onContextMenu`, `resetItem`). A key another action of the section or of Common has asks
@@ -15,8 +16,7 @@
 //
 // Different from KiCad: "Export Hotkeys..." is the studio's -- KiCad writes user.hotkeys into its settings folder, where a person can copy it; the browser has no
 // such folder, so the button saves the list as it stands as a `user.hotkeys` file. The rows of the platform commands and the gestures are read-only here (KiCad
-// lets them be edited, but they are no actions and nothing it writes keeps the change). The columns are not sortable (KiCad's are, `wxCOL_SORTABLE`). The 3D
-// viewer's actions are not listed (kicad-port/actions3d.ts reads its keys itself).
+// lets them be edited, but they are no actions and nothing it writes keeps the change).
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { PreferencesPageHandle } from "./preferencesPage";
@@ -46,11 +46,14 @@ import {
   resetAllHotkeys,
   resetSteps,
   savedKeys,
+  nextHotkeySort,
+  sortHotkeySections,
   writeHotKeyConfig,
   type Hotkey,
   type HotkeyAction,
   type HotkeyMenuId,
   type HotkeySection,
+  type HotkeySort,
 } from "../kicad-port/hotkeyStore";
 
 const isWindows = () => typeof navigator !== "undefined" && /^Win/.test(navigator.platform ?? "");
@@ -167,6 +170,8 @@ export function useHotkeysPanel(open: boolean, readOnly: boolean, extraButtons?:
     setSectionsState(next);
   };
   const [filter, setFilter] = useState("");
+  /** The column the list is sorted by (a click on its title), none until one is clicked: a new list each time the dialog opens. */
+  const [sort, setSort] = useState<HotkeySort | null>(null);
   const [selected, setSelected] = useState<HotkeyAction | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [prompt, setPrompt] = useState<Prompt | null>(null);
@@ -179,6 +184,7 @@ export function useHotkeysPanel(open: boolean, readOnly: boolean, extraButtons?:
     if (!open) return;
     setSections(initialSections());
     setFilter("");
+    setSort(null);
     setSelected(null);
     setCollapsed(new Set());
     setPrompt(null);
@@ -247,7 +253,7 @@ export function useHotkeysPanel(open: boolean, readOnly: boolean, extraButtons?:
     setSections(importHotkeys(sectionsRef.current, readHotKeyConfig(text, mac)));
   };
 
-  const shownSections = useMemo(() => sections.map((s) => ({ ...s, hotkeys: s.hotkeys.filter((h) => filterMatches(h, filter, mac)) })), [sections, filter, mac]);
+  const shownSections = useMemo(() => sortHotkeySections(sections.map((s) => ({ ...s, hotkeys: s.hotkeys.filter((h) => filterMatches(h, filter, mac)) })), sort, mac), [sections, filter, sort, mac]);
   const columns = hotkeyColumns(readOnly);
 
   const cell = { padding: "2px 8px", whiteSpace: "nowrap" as const, overflow: "hidden", textOverflow: "ellipsis" };
@@ -264,11 +270,22 @@ export function useHotkeysPanel(open: boolean, readOnly: boolean, extraButtons?:
           </colgroup>
           <thead>
             <tr style={{ position: "sticky", top: 0, background: "var(--chrome-bg, #222)" }}>
-              {columns.map((c) => (
-                <th key={c} style={{ ...cell, textAlign: "left", fontWeight: 600 }}>
-                  {c}
-                </th>
-              ))}
+              {columns.map((c, i) => {
+                const sorted = sort?.column === i ? (sort.ascending ? "ascending" : "descending") : "none";
+                return (
+                  <th
+                    key={c}
+                    aria-sort={sorted}
+                    data-hotkey-column={i}
+                    title="Click to sort by this column"
+                    style={{ ...cell, textAlign: "left", fontWeight: 600, cursor: "pointer", userSelect: "none" }}
+                    onClick={() => setSort((now) => nextHotkeySort(now, i as HotkeySort["column"]))}
+                  >
+                    {c}
+                    {sorted !== "none" && <span aria-hidden style={{ marginLeft: 4 }}>{sorted === "ascending" ? "▲" : "▼"}</span>}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

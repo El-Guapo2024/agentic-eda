@@ -18,6 +18,8 @@ import {
   keyCodeToStudioHotkey,
   keyName,
   mapKeypressToKeycode,
+  nextHotkeySort,
+  sortHotkeySections,
   planHotkeyChange,
   readHotKeyConfig,
   reservedMessage,
@@ -234,4 +236,32 @@ test("the reserved hotkeys", () => {
   assert.equal(reservedMessage(MD_CTRL + WXK.TAB), "'Ctrl+Tab' is a reserved hotkey in KiCad and cannot be assigned.");
   assert.equal(reservedMessage(MD_CTRL + MD_SHIFT + WXK.TAB), "'Ctrl+Shift+Tab' is a reserved hotkey in KiCad and cannot be assigned.");
   assert.equal(reservedMessage(MD_CTRL + K("T")), null);
+});
+
+test("C3-4: a click on a column title sorts each section's rows by it (wxString::Cmp, ties in order), a second the other way; the sections by name in Command only", () => {
+  const acts = [
+    action("pcbnew.A.zeta", K("B"), { label: "zeta" }),
+    action("pcbnew.A.alpha", 0, { label: "alpha" }),
+    action("pcbnew.A.Beta", K("A"), { label: "Beta" }),
+    action("common.A.gamma", K("C"), { label: "gamma" }),
+    action("3DViewer.Control.viewTop", K("Z"), { label: "View Top" }),
+  ];
+  const sections = initHotkeySections(acts, false);
+  assert.deepEqual(sections.map((s) => s.name), ["3D Viewer", "Common", "PCB Editor"], "the 3D viewer's actions first, in the names' byte order");
+  const pcb = (ss: HotkeySection[]) => ss.find((s) => s.name === "PCB Editor")!.hotkeys.map((h) => h.action.label);
+  assert.deepEqual(pcb(sortHotkeySections(sections, null, false)), ["Beta", "alpha", "zeta"], "unsorted: the names' byte order");
+  const byCmd = nextHotkeySort(null, 0);
+  assert.deepEqual(byCmd, { column: 0, ascending: true });
+  assert.deepEqual(pcb(sortHotkeySections(sections, byCmd, false)), ["Beta", "alpha", "zeta"], "upper case before lower case (code points)");
+  const back = nextHotkeySort(byCmd, 0);
+  assert.deepEqual(back, { column: 0, ascending: false });
+  assert.deepEqual(sortHotkeySections(sections, back, false).map((s) => s.name), ["PCB Editor", "Common", "3D Viewer"]);
+  // by Hotkey: "" (alpha, no key), "A", "B"; the sections have no text there, so stay as they are
+  const byKey = nextHotkeySort(back, 1);
+  assert.deepEqual(byKey, { column: 1, ascending: true });
+  const sorted = sortHotkeySections(sections, byKey, false);
+  assert.deepEqual(pcb(sorted), ["alpha", "Beta", "zeta"]);
+  assert.deepEqual(sorted.map((s) => s.name), ["3D Viewer", "Common", "PCB Editor"]);
+  // descending turns the ties round too (`return ascending ? id1 - id2 : id2 - id1`)
+  assert.deepEqual(sortHotkeySections(sections, { column: 2, ascending: false }, false).map((s) => s.name), ["PCB Editor", "Common", "3D Viewer"]);
 });

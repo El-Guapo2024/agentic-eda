@@ -498,6 +498,41 @@ export function filterMatches(h: Hotkey, filter: string, mac: boolean): boolean 
   return keyName(h.editKey, mac).toUpperCase().includes(f);
 }
 
+/** A click on a column title (`wxCOL_SORTABLE`): the column (0 Command, 1 Hotkey, 2 Alternate, 3 Description) and its direction; null before any click. */
+export interface HotkeySort {
+  column: 0 | 1 | 2 | 3;
+  ascending: boolean;
+}
+
+/** The next sort after a click on `column`'s title: ascending first, a second click on the same column turns it round (the GTK tree's indicator). */
+export function nextHotkeySort(now: HotkeySort | null, column: HotkeySort["column"]): HotkeySort {
+  return now && now.column === column ? { column, ascending: !now.ascending } : { column, ascending: true };
+}
+
+/**
+ * The list sorted by a column, as `WIDGET_HOTKEY_LIST`'s `wxTreeListCtrl` sorts it (`wxCOL_SORTABLE` on every column; `wxTreeListModel::Compare` without a comparator is
+ * `wxDataViewModel::Compare`): each parent's children by the column's text with `wxString::Cmp` (code points, case counts), equal texts in the order they were added
+ * (the items' ids); descending turns the whole order round, the ties too. The sections are the root's children: by their name in the Command column, and in any
+ * other column (where they have no text) all equal, so kept in order -- or turned round when descending.
+ */
+export function sortHotkeySections(sections: readonly HotkeySection[], sort: HotkeySort | null, mac: boolean): HotkeySection[] {
+  if (!sort) return [...sections];
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  const ordered = <T,>(items: readonly T[], text: (t: T) => string): T[] => {
+    const keyed = items.map((item, i) => ({ item, i, t: text(item) }));
+    keyed.sort((x, y) => {
+      const r = cmp(x.t, y.t) || x.i - y.i;
+      return sort.ascending ? r : -r;
+    });
+    return keyed.map((k) => k.item);
+  };
+  const cell = (h: Hotkey): string => {
+    const r = hotkeyRow(h, mac);
+    return [r.label, r.key, r.alt, r.description][sort.column]!;
+  };
+  return ordered(sections, (s) => (sort.column === 0 ? s.name : "")).map((s) => ({ ...s, hotkeys: ordered(s.hotkeys, cell) }));
+}
+
 /** The column titles (`WIDGET_HOTKEY_LIST::WIDGET_HOTKEY_LIST`). */
 export function hotkeyColumns(readOnly: boolean): [string, string, string, string] {
   return [readOnly ? "Command" : "Command (double-click to edit)", "Hotkey", "Alternate", "Description"];

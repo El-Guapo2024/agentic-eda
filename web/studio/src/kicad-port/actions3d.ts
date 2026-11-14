@@ -1,38 +1,16 @@
-// Port of 3d-viewer/3d_viewer/tools/eda_3d_actions.cpp's DefaultHotkey()
-// bindings and eda_3d_controller.cpp's RotateView/PanControl's axis/sign
-// tables -- the 3D tab's OWN keyboard dispatch, deliberately independent
-// of this app's shared src/actions/* hotkey system (useGlobalHotkeys.ts,
-// actions.json): another session is actively editing those shared files
-// (and the Schematic tab), so the 3D tab's key handling lives entirely in
-// viewer3d/ instead of adding new entries there. See Viewer3D.tsx for how
-// this gets attached (a listener on the 3D canvas itself, not `window`,
-// so it only ever fires while that canvas has focus, and
-// e.stopPropagation() on every *handled* key so it can never also
-// trigger an unrelated same-key shared action while bubbling).
-//
-// Visibility-toggle hotkeys (T/S/V/P/D -- show TH/SMD/virtual/
-// not-in-pos/DNP models) are intentionally NOT here: the task's own
-// phase split puts those under "Appearance" (visibility toggles), not
-// "Actions and hotkeys" -- see PARITY-3d.md.
-//
-// eda_3d_actions.cpp's own DefaultHotkey() calls, verbatim:
-//   pivotCenter    Space
-//   rotateZCW      Shift+R      rotateZCCW   R
-//   rotateXCW/CCW, rotateYCW/CCW: no default hotkey (toolbar/menu only)
-//   moveLeft/Right/Up/Down: the 4 arrow keys
-//   homeView       Home  (VIEW3D_FIT_SCREEN -- observably == Top, camera3d.ts's reset())
-//   flipView       F
-//   viewFront Y   viewBack Shift+Y   viewRight X   viewLeft Shift+X
-//   viewTop   Z   viewBottom Shift+Z
-//   toggleOrtho: no default hotkey (toolbar/menu only)
-// Plus 4 actions EDA_3D_ACTIONS reuses unchanged from common/tool/
-// actions.cpp (ACTIONS::zoomIn/zoomOut/zoomFitScreen/zoomRedraw):
-// F1/F2/Home/F5, each with a genuine macOS-only override in source
-// (Cmd+'+'/Cmd+'-'/Cmd+0/Cmd+R -- same ones PARITY-pcb.md's "Hotkey
-// extraction fix" documents for the 2D app). Ported here as an ADDITIVE
-// superset instead (both the function key AND the Cmd-equivalent work on
-// every platform) rather than a true per-platform substitution -- simpler
-// and strictly more capable, not a fidelity loss; noted in PARITY-3d.md.
+// The 3D view's keys (3d-viewer/3d_viewer/tools/eda_3d_actions.cpp's `DefaultHotkey()`s and `EDA_3D_CONTROLLER::setTransitions`, KiCad 8303b2ad) and
+// eda_3d_controller.cpp's RotateView/PanControl's axis/sign tables. The 3D tab dispatches its keys itself (a listener on the 3D canvas, Viewer3D.tsx, so they only
+// fire while that canvas has focus, with `stopPropagation()` on every key it handles) rather than through the shared dispatcher (useGlobalHotkeys.ts): the 3D
+// viewer's actions are not in src/kicad/actions.json. Their keys are the person's when Preferences > Hotkeys gave them some -- the page lists the 3D viewer's
+// actions in a "3D Viewer" section (UI-LEFT-3 C3-4) -- else KiCad's defaults (src/kicad/actions3d.json, tools/extract-actions-3d.js):
+//   pivotCenter Space; rotateZCW Shift+R, rotateZCCW R; moveLeft/Right/Up/Down the arrows; homeView Home; flipView F; viewFront Y, viewBack Shift+Y, viewRight X,
+//   viewLeft Shift+X, viewTop Z, viewBottom Shift+Z; attributesTHT T, attributesSMD S, attributesOther V, attribute_not_in_posfile P, attribute_dnp D
+// plus the common actions the controller takes (`ACTIONS::zoomIn` F1, `zoomOut` F2, `zoomFitScreen` Home, `zoomRedraw` F5 -- Cmd+'+', Cmd+'-', Cmd+0 and Cmd+R
+// on macOS, each platform its own as KiCad's `#ifdef __WXMAC__` gives it -- and `panUp` .. `panRight`, Shift and an arrow).
+import actionsData from "../kicad/actions.json";
+import actions3dData from "../kicad/actions3d.json";
+import type { ActionsFile, KicadAction } from "../kicad/types";
+import { effectiveHotkey, eventToHotkeyCandidates } from "../actions/hotkeys";
 
 export type ViewFacePreset = "top" | "bottom" | "front" | "back" | "left" | "right";
 export type RotateAxis = "x" | "y" | "z";
@@ -68,79 +46,86 @@ export interface KeyInput {
   ctrlKey: boolean;
   metaKey: boolean;
   altKey: boolean;
+  /** `KeyboardEvent.code`, for the number pad's own keys (actions/hotkeys.ts `eventToHotkeyCandidates`). */
+  code?: string;
 }
 
-/**
- * `e.key` for the 4 arrow keys, matched case-sensitively like everything
- * else here -- DOM's own names, not wx's WXK_LEFT/etc spelling.
- */
-const ARROW_TO_PAN: Record<string, PanDirection> = {
-  ArrowLeft: "left",
-  ArrowRight: "right",
-  ArrowUp: "up",
-  ArrowDown: "down",
-};
+/** The Appearance rows the five model-attribute actions toggle (`EDA_3D_CONTROLLER::ToggleVisibility`'s `flipLayer( LAYER_3D_* )`). */
+export type ModelRow3D = "th_models" | "smd_models" | "virtual_models" | "not_in_pos_models" | "dnp_models";
+
+/** What a key does in the 3D view: a camera action, a model row toggled, the projection toggled (`ToggleOrtho`) or the board reloaded (`ReloadBoard`). */
+export type KeyTarget3D = Action3D | { kind: "modelRow"; row: ModelRow3D } | { kind: "ortho" } | { kind: "reload" };
 
 /**
- * Resolves a keydown event to one of this file's Action3D variants, or
- * null if it isn't one of eda_3d_actions.cpp's own bindings (or the 4
- * reused common actions) -- the caller should do nothing with a null
- * result (not even preventDefault), so every other key keeps working
- * normally (browser shortcuts, this app's own shared hotkey system).
- *
- * `ctrlLike` mirrors actions/hotkeys.ts's own eventToHotkey convention
- * (Cmd stands in for Ctrl on macOS) for the 4 reused zoom actions only --
- * every *real* eda_3d_actions.cpp hotkey below uses Shift or nothing, so
- * Ctrl/Cmd/Alt held down for any of those simply won't match (the exact
- * key string has to match with no extra modifier), the same way source's
- * own exact-hotkey-string matching works.
+ * `EDA_3D_CONTROLLER::setTransitions`: the actions a key reaches in the 3D view, by name -- the viewer's own (`EDA_3D_ACTIONS`, src/kicad/actions3d.json) first, then the
+ * common ones it takes (`ACTIONS::panUp` .. `panRight`, `zoomRedraw`, `zoomInCenter`, `zoomOutCenter`, `zoomFitScreen`, and `zoomIn` / `zoomOut` -- "because F1 and F2
+ * keys generate a zoomIn/zoomOut event, these events must be captured to use these hot keys"), as `ACTION_MANAGER::RunHotKey` prefers the active tool's actions to the
+ * global ones (Home is both Home View and Zoom to Fit, the same view). The rest of the 3D actions (grids, materials, the navigator, bounding boxes, raytracing,
+ * copy, export, the Appearance manager) are the toolbar's and menus' only: a key a person gives one of them does nothing in the 3D view.
  */
-export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
-  const ctrlLike = isMac ? e.metaKey : e.ctrlKey;
+export const KEYED_ACTIONS_3D: ReadonlyArray<readonly [string, KeyTarget3D]> = [
+  ["3DViewer.Control.pivotCenter", { kind: "pivot" }],
+  ["3DViewer.Control.rotateXclockwise", { kind: "rotate", axis: "x", dir: "cw" }],
+  ["3DViewer.Control.rotateXcounterclockwise", { kind: "rotate", axis: "x", dir: "ccw" }],
+  ["3DViewer.Control.rotateYclockwise", { kind: "rotate", axis: "y", dir: "cw" }],
+  ["3DViewer.Control.rotateYcounterclockwise", { kind: "rotate", axis: "y", dir: "ccw" }],
+  ["3DViewer.Control.rotateZclockwise", { kind: "rotate", axis: "z", dir: "cw" }],
+  ["3DViewer.Control.rotateZcounterclockwise", { kind: "rotate", axis: "z", dir: "ccw" }],
+  ["3DViewer.Control.moveLeft", { kind: "pan", direction: "left" }],
+  ["3DViewer.Control.moveRight", { kind: "pan", direction: "right" }],
+  ["3DViewer.Control.moveUp", { kind: "pan", direction: "up" }],
+  ["3DViewer.Control.moveDown", { kind: "pan", direction: "down" }],
+  ["3DViewer.Control.homeView", { kind: "reset" }],
+  ["3DViewer.Control.flipView", { kind: "flip" }],
+  ["3DViewer.Control.viewFront", { kind: "viewPreset", preset: "front" }],
+  ["3DViewer.Control.viewBack", { kind: "viewPreset", preset: "back" }],
+  ["3DViewer.Control.viewLeft", { kind: "viewPreset", preset: "left" }],
+  ["3DViewer.Control.viewRight", { kind: "viewPreset", preset: "right" }],
+  ["3DViewer.Control.viewTop", { kind: "viewPreset", preset: "top" }],
+  ["3DViewer.Control.viewBottom", { kind: "viewPreset", preset: "bottom" }],
+  ["3DViewer.Control.attributesTHT", { kind: "modelRow", row: "th_models" }],
+  ["3DViewer.Control.attributesSMD", { kind: "modelRow", row: "smd_models" }],
+  ["3DViewer.Control.attributesOther", { kind: "modelRow", row: "virtual_models" }],
+  ["3DViewer.Control.attribute_not_in_posfile", { kind: "modelRow", row: "not_in_pos_models" }],
+  ["3DViewer.Control.attribute_dnp", { kind: "modelRow", row: "dnp_models" }],
+  ["3DViewer.Control.toggleOrtho", { kind: "ortho" }],
+  ["3DViewer.Control.reloadBoard", { kind: "reload" }],
+  ["common.Control.panUp", { kind: "pan", direction: "up" }],
+  ["common.Control.panDown", { kind: "pan", direction: "down" }],
+  ["common.Control.panLeft", { kind: "pan", direction: "left" }],
+  ["common.Control.panRight", { kind: "pan", direction: "right" }],
+  ["common.Control.zoomRedraw", { kind: "zoomRedraw" }],
+  ["common.Control.zoomInCenter", { kind: "zoomIn" }],
+  ["common.Control.zoomOutCenter", { kind: "zoomOut" }],
+  ["common.Control.zoomFitScreen", { kind: "reset" }],
+  ["common.Control.zoomIn", { kind: "zoomIn" }],
+  ["common.Control.zoomOut", { kind: "zoomOut" }],
+];
 
-  // The 4 reused common/tool/actions.cpp actions -- checked first since
-  // their Mac form uses a modifier the rest of this table never does.
-  // A hotkey matches with its exact modifiers (round 6 V6-8): WXK_F1 / WXK_F2 / WXK_F5 / WXK_HOME and, below, ' ', 'F' and the arrows are bound
-  // with none, so Shift, Ctrl, Cmd or Alt held with them is no action.
-  const bare = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
-  if ((bare && e.key === "F1") || (isMac && ctrlLike && e.key === "+")) return { kind: "zoomIn" };
-  if ((bare && e.key === "F2") || (isMac && ctrlLike && e.key === "-")) return { kind: "zoomOut" };
-  if ((bare && e.key === "Home") || (isMac && ctrlLike && e.key === "0")) return { kind: "reset" };
-  if ((bare && e.key === "F5") || (isMac && ctrlLike && (e.key === "r" || e.key === "R"))) return { kind: "zoomRedraw" };
+const tables: ReadonlyMap<string, KicadAction> = new Map([...(actionsData as unknown as ActionsFile).actions, ...(actions3dData as unknown as { actions: KicadAction[] }).actions].map((a) => [a.name, a]));
 
-  // Nothing below ever uses Ctrl/Cmd or Alt -- bail out so e.g. Ctrl+R
-  // (browser reload) or an unrelated Alt-combo never gets misread as one
-  // of these plain/Shift-only keys.
-  if (ctrlLike || e.altKey) return null;
-
-  const pan = ARROW_TO_PAN[e.key];
-  if (pan) return bare ? { kind: "pan", direction: pan } : null;
-
-  if (e.key === " " || e.key === "Spacebar") return bare ? { kind: "pivot" } : null;
-  if (e.key === "f" || e.key === "F") return bare ? { kind: "flip" } : null;
-
-  // R/Shift+R: eda_3d_actions.cpp binds plain 'R' to rotateZCCW and
-  // Shift+'R' to rotateZCW -- source's DefaultHotkey('R') / DefaultHotkey(
-  // MD_SHIFT+'R') don't care about the Shift key's effect on case, only
-  // whether the modifier was held, so both e.key spellings ('r'/'R') are
-  // accepted per branch rather than relying on JS's own shift-changes-the-
-  // letter behavior.
-  if ((e.key === "r" || e.key === "R") && e.shiftKey) return { kind: "rotate", axis: "z", dir: "cw" };
-  if (e.key === "r" || e.key === "R") return { kind: "rotate", axis: "z", dir: "ccw" };
-
-  switch (e.key) {
-    case "y":
-    case "Y":
-      return { kind: "viewPreset", preset: e.shiftKey ? "back" : "front" };
-    case "x":
-    case "X":
-      return { kind: "viewPreset", preset: e.shiftKey ? "left" : "right" };
-    case "z":
-    case "Z":
-      return { kind: "viewPreset", preset: e.shiftKey ? "bottom" : "top" };
-    default:
-      return null;
+/**
+ * `ACTION_MANAGER::RunHotKey` in the 3D view: the first of `KEYED_ACTIONS_3D` whose hotkey or alternate -- the person's (Preferences > Hotkeys' `user.hotkeys`), else
+ * KiCad's default for the platform (`TOOL_ACTION::GetHotKey`, actions/hotkeys.ts `effectiveHotkey`) -- is the key pressed, with exactly its modifiers (Shift, Ctrl
+ * or Alt held with a bare key is another key). Null for any other key: the caller does nothing with it (not even preventDefault), so browser shortcuts and the
+ * studio's shared hotkeys keep working.
+ */
+export function resolve3DKey(e: KeyInput, isMac: boolean): KeyTarget3D | null {
+  const candidates = eventToHotkeyCandidates(e as unknown as KeyboardEvent, isMac);
+  if (candidates.length === 0) return null;
+  for (const [name, target] of KEYED_ACTIONS_3D) {
+    const a = tables.get(name);
+    if (!a) continue;
+    const { hotkey, altHotkey } = effectiveHotkey(a, isMac);
+    if ((hotkey && candidates.includes(hotkey)) || (altHotkey && candidates.includes(altHotkey))) return target;
   }
+  return null;
+}
+
+/** `resolve3DKey` for the camera's actions only (the view presets, rotations, moves, zooms, pivot, flip and home); null for the rest. */
+export function resolve3DAction(e: KeyInput, isMac: boolean): Action3D | null {
+  const t = resolve3DKey(e, isMac);
+  return t && t.kind !== "modelRow" && t.kind !== "ortho" && t.kind !== "reload" ? t : null;
 }
 
 /** One entry of the 3D view's right-click menu: an action by its KiCad name, a separator, or a submenu with its title and icon. */

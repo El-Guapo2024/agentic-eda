@@ -1,6 +1,6 @@
 // Preferences > Hotkeys and List Hotkeys (UI-LEFT-2 CC2; PARITY-common.md, "Hotkeys"): KiCad's hotkey list, Set Hotkey, the conflict question, the resets,
 // Import Hotkeys... and the person's user.hotkeys (`localStorage` "eda-studio.hotkeys.v1"). It drives the dialogs' own controls and real key events:
-//   page        the tree's Hotkeys page: KiCad's columns, the sections Common / Schematic Editor / PCB Editor / Gestures, Close and Quit atop Common, the filter
+//   page        the tree's Hotkeys page: KiCad's columns, the sections 3D Viewer / Common / Schematic Editor / PCB Editor / Gestures, Close and Quit atop Common, the filter
 //   reassign    Zoom to Fit (Home) given Shift+K in Set Hotkey: the row shows "Shift+K *", OK writes user.hotkeys, Shift+K zooms to fit, Home no longer does, and
 //               the View menu shows the new key
 //   conflict    F1 for Route Single Track asks KiCad's question about Zoom In at Cursor; No keeps both; Yes moves the key; Ctrl+Tab is refused as reserved; Undo
@@ -75,8 +75,10 @@
     const heads = [...panel().querySelectorAll("th")].map((h) => h.textContent.trim());
     t(JSON.stringify(heads) === JSON.stringify(["Command (double-click to edit)", "Hotkey", "Alternate", "Description"]), `columns ${heads.join(" | ")}`);
     const sections = [...panel().querySelectorAll("tr[data-hotkey-section]")].map((r) => r.getAttribute("data-hotkey-section"));
-    t(JSON.stringify(sections) === JSON.stringify(["Common", "Schematic Editor", "PCB Editor", "Gestures"]), `sections ${sections.join(", ")}`);
-    const firstRows = [...panel().querySelectorAll("tr[data-hotkey-label]")].slice(0, 3).map((r) => r.getAttribute("data-hotkey-label"));
+    t(JSON.stringify(sections) === JSON.stringify(["3D Viewer", "Common", "Schematic Editor", "PCB Editor", "Gestures"]), `sections ${sections.join(", ")}`);
+    const rowsAll = [...panel().querySelectorAll("tr[data-hotkey-section], tr[data-hotkey-label]")];
+    const commonAt = rowsAll.findIndex((r) => r.getAttribute("data-hotkey-section") === "Common");
+    const firstRows = rowsAll.slice(commonAt + 1, commonAt + 4).map((r) => r.getAttribute("data-hotkey-label"));
     t(firstRows[0] === "Close" && firstRows[1] === "Quit", `Common starts with ${firstRows.join(", ")}`);
     t(cellOf("common.Control.zoomFitScreen", "hotkey") === "Home", `Zoom to Fit is Home (${cellOf("common.Control.zoomFitScreen", "hotkey")})`);
     t(cellOf("pcbnew.PointEditor.addCorner", "hotkey") === "Ins", `Create Corner is KiCad's Ins (${cellOf("pcbnew.PointEditor.addCorner", "hotkey")})`);

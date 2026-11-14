@@ -1,0 +1,755 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-11-14T07:04:21.987Z",
+    "sourceFiles": [
+      "3d-viewer/3d_viewer/tools/eda_3d_actions.cpp"
+    ]
+  },
+  "actions": [
+    {
+      "name": "3DViewer.Control",
+      "label": "",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.attribute_dnp",
+      "label": "Show 3D Models marked DNP",
+      "tooltip": "Show 3D models even if marked 'Do Not Place'",
+      "hotkey": "D",
+      "altHotkey": null,
+      "hotkeyRaw": "'D'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "show_dnp",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.attribute_not_in_posfile",
+      "label": "Show 3D Models not in POS File",
+      "tooltip": "Show 3D models even if not found in .pos file",
+      "hotkey": "P",
+      "altHotkey": null,
+      "hotkeyRaw": "'P'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "show_not_in_posfile",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.attributesOther",
+      "label": "Show Unspecified 3D Models",
+      "tooltip": "Show 3D models for 'unspecified' type footprints",
+      "hotkey": "V",
+      "altHotkey": null,
+      "hotkeyRaw": "'V'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "show_other",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.attributesSMD",
+      "label": "Show SMD 3D Models",
+      "tooltip": "Show 3D models for 'Surface mount' type footprints",
+      "hotkey": "S",
+      "altHotkey": null,
+      "hotkeyRaw": "'S'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "show_smt",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.attributesTHT",
+      "label": "Show Through Hole 3D Models",
+      "tooltip": "Show 3D models for 'Through hole' type footprints",
+      "hotkey": "T",
+      "altHotkey": null,
+      "hotkeyRaw": "'T'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "show_tht",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.copyToClipboard",
+      "label": "Copy 3D image to clipboard",
+      "tooltip": "Copy the current 3D image to the clipboard",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "copy",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.exportImage",
+      "label": "Export Image...",
+      "tooltip": "Export the Current View as an image file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "export_file",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.flipView",
+      "label": "Flip Board",
+      "tooltip": "Flip the board view",
+      "hotkey": "F",
+      "altHotkey": null,
+      "hotkeyRaw": "'F'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "flip_board",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.homeView",
+      "label": "Home View",
+      "tooltip": "Redraw at the home position and zoom",
+      "hotkey": "Home",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_HOME",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.materialCAD",
+      "label": "Render CAD Colors",
+      "tooltip": "Use a CAD color style based on the diffuse color of the material",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.materialDiffuse",
+      "label": "Render Solid Colors",
+      "tooltip": "Use only the diffuse color property from 3D model file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.materialNormal",
+      "label": "Render Realistic Materials",
+      "tooltip": "Use all material properties from each 3D model file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.moveDown",
+      "label": "Move Board Down",
+      "tooltip": "",
+      "hotkey": "Down",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_DOWN",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "down",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.moveLeft",
+      "label": "Move Board Left",
+      "tooltip": "",
+      "hotkey": "Left",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_LEFT",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "left",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.moveRight",
+      "label": "Move Board Right",
+      "tooltip": "",
+      "hotkey": "Right",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_RIGHT",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "right",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.moveUp",
+      "label": "Move Board Up",
+      "tooltip": "",
+      "hotkey": "Up",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_UP",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "up",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.noGrid",
+      "label": "No 3D Grid",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.pivotCenter",
+      "label": "Set Pivot",
+      "tooltip": "Place point around which the board will be rotated (middle mouse click)",
+      "hotkey": "Space",
+      "altHotkey": null,
+      "hotkeyRaw": "' '",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.reloadBoard",
+      "label": "Reload board",
+      "tooltip": "Reload board and refresh 3D view",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "import3d",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateXclockwise",
+      "label": "Rotate X Clockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_cw_x",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateXcounterclockwise",
+      "label": "Rotate X Counterclockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_ccw_x",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateYclockwise",
+      "label": "Rotate Y Clockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_cw_y",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateYcounterclockwise",
+      "label": "Rotate Y Counterclockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_ccw_y",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateZclockwise",
+      "label": "Rotate Z Clockwise",
+      "tooltip": "",
+      "hotkey": "Shift+R",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'R'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_cw_z",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.rotateZcounterclockwise",
+      "label": "Rotate Z Counterclockwise",
+      "tooltip": "",
+      "hotkey": "R",
+      "altHotkey": null,
+      "hotkeyRaw": "'R'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "rotate_ccw_z",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.show10mmGrid",
+      "label": "3D Grid 10mm",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.show1mmGrid",
+      "label": "3D Grid 1mm",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.show2_5mmGrid",
+      "label": "3D Grid 2.5mm",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.show5mmGrid",
+      "label": "3D Grid 5mm",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.showBoundingBoxes",
+      "label": "Show Model Bounding Boxes",
+      "tooltip": "Show 3D model bounding boxes in realtime renderer",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "ortho",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.showLayersManager",
+      "label": "Show Appearance Manager",
+      "tooltip": "Show/hide the appearance manager",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "layers_manager",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.showNavigator",
+      "label": "Show 3D Navigator",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_front",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.toggleOrtho",
+      "label": "Toggle Orthographic Projection",
+      "tooltip": "Enable/disable orthographic projection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "ortho",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.toggleRaytacing",
+      "label": "Use raytracing",
+      "tooltip": "Render current view using Raytracing",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "ray_tracing",
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.toggleShowMissingModels",
+      "label": "Show parts without 3D model",
+      "tooltip": "Display a placeholder for footprints with missing 3D models",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": null,
+      "flags": [],
+      "scope": "AS_GLOBAL"
+    },
+    {
+      "name": "3DViewer.Control.viewBack",
+      "label": "View Back",
+      "tooltip": "",
+      "hotkey": "Shift+Y",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'Y'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_back",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.viewBottom",
+      "label": "View Bottom",
+      "tooltip": "",
+      "hotkey": "Shift+Z",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'Z'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_bottom",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.viewFront",
+      "label": "View Front",
+      "tooltip": "",
+      "hotkey": "Y",
+      "altHotkey": null,
+      "hotkeyRaw": "'Y'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_front",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.viewLeft",
+      "label": "View Left",
+      "tooltip": "",
+      "hotkey": "Shift+X",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'X'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_left",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.viewRight",
+      "label": "View Right",
+      "tooltip": "",
+      "hotkey": "X",
+      "altHotkey": null,
+      "hotkeyRaw": "'X'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_right",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    },
+    {
+      "name": "3DViewer.Control.viewTop",
+      "label": "View Top",
+      "tooltip": "",
+      "hotkey": "Z",
+      "altHotkey": null,
+      "hotkeyRaw": "'Z'",
+      "altHotkeyRaw": null,
+      "macHotkey": null,
+      "macAltHotkey": null,
+      "macHotkeyRaw": null,
+      "macAltHotkeyRaw": null,
+      "icon": "axis3d_top",
+      "flags": [
+        "AF_NONE"
+      ],
+      "scope": "AS_ACTIVE"
+    }
+  ]
+}

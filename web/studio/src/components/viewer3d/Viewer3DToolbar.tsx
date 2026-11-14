@@ -25,15 +25,20 @@ import { ActionIcon } from "../Toolbar";
 import { ContextMenu } from "../canvas/ContextMenu";
 import { resolvedToolbar, useToolbarSettings } from "../../state/toolbarSettings";
 import type { Viewer3DApi } from "./Viewer3D";
+import { HOTKEY_TABLE_3D } from "../../actions/hotkeyActions";
+import { useUserHotkeysVersion } from "../../state/userHotkeys";
 
 const file = toolbarData as unknown as Viewer3dToolbarsFile;
 const own = new Map<string, Viewer3dAction>([...file.actions, ...(file.otherActions ?? [])].map((a) => [a.name, a]));
 const common = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a]));
+const keys3d = new Map(HOTKEY_TABLE_3D.map((a) => [a.name, a]));
 
 /** What a toolbar item shows: its label, tooltip, hotkey and KiCad icon, from the 3D action table or, for the shared zoom actions, actions.json. The right-click menu shows the same. */
 export function describe(name: string): { label: string; tooltip: string; hotkey: string | null; icon: string | null } {
   const a = own.get(name);
-  if (a) return { label: a.label, tooltip: a.tooltip, hotkey: a.hotkey, icon: a.icon };
+  // the hotkey the person gave it in Preferences > Hotkeys, else KiCad's (`TOOL_ACTION::GetHotKey`; the 3D actions' table src/kicad/actions3d.json)
+  const k = keys3d.get(name);
+  if (a) return { label: a.label, tooltip: a.tooltip, hotkey: k ? effectiveHotkey(k).hotkey : a.hotkey, icon: a.icon };
   const c = common.get(name);
   return { label: c?.label ?? name, tooltip: c?.tooltip ?? "", hotkey: c ? effectiveHotkey(c).hotkey : null, icon: c?.icon ?? null };
 }
@@ -72,6 +77,7 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
   const toast = (message: string, kind: "info" | "error") => dispatch({ type: "TOAST", message, kind });
   const ready = !!api;
   useToolbarSettings();
+  useUserHotkeysVersion(); // the tooltips' hotkeys follow Preferences > Hotkeys
   const items = resolvedToolbar("3d", "main")?.items ?? file.toolbars[0]!.items;
   const [groupMenu, setGroupMenu] = useState<{ x: number; y: number; items: string[] } | null>(null);
 
