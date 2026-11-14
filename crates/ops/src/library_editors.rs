@@ -595,6 +595,11 @@ impl<'a> Board<'a> {
         entry.assign_missing_ids();
         let lib = self.symbol_library_mut();
         lib.symbols.retain(|s| s.lib_id != entry.lib_id && Some(&s.lib_id) != same_name.as_ref());
+        // a new buffer: the names it went by are no longer its (UI-LEFT-3 L3-1; `LIB_BUFFER::CreateBuffer` / `UpdateBuffer` of a copy)
+        lib.renamed.remove(&entry.lib_id);
+        if let Some(same) = &same_name {
+            lib.renamed.remove(same);
+        }
         lib.symbols.push(entry);
         Ok(())
     }
@@ -616,6 +621,17 @@ impl<'a> Board<'a> {
         let lib = self.symbol_library_mut();
         lib.symbols.retain(|s| s.lib_id != new_lib_id && Some(&s.lib_id) != clash.as_ref());
         lib.by_lib_id_mut(lib_id).expect("checked above").lib_id = new_lib_id.to_string();
+        // the buffer keeps its original through the rename (UI-LEFT-3 L3-1: `UpdateSymbolAfterRename` renames `SYMBOL_BUFFER::GetSymbol()`, never
+        // `GetOriginal()`): the names it went by, this one last, for Revert and Save to find the one its library's file holds
+        let mut chain = lib.renamed.remove(lib_id).unwrap_or_default();
+        lib.renamed.remove(new_lib_id);
+        if let Some(c) = &clash {
+            lib.renamed.remove(c);
+        }
+        if is_table_library_item(lib_id) {
+            chain.push(lib_id.to_string());
+            lib.renamed.insert(new_lib_id.to_string(), chain);
+        }
         // the old name leaves the library's file at the next Save (`LIB_BUFFER::SaveBuffer`: "Delete the original symbol if the symbol name has been
         // changed"), and so does the symbol an overwrite replaced in another case (`RemoveSymbol( newName )`)
         let gone = std::iter::once(lib_id).chain(clash.as_deref().filter(|c| *c != new_lib_id)).filter(|id| is_table_library_item(id)).collect::<Vec<_>>();
@@ -652,6 +668,11 @@ impl<'a> Board<'a> {
         if let Some(l) = self.design.symbol_library.as_mut().filter(|l| !l.deleted.is_empty()) {
             let held: std::collections::BTreeSet<&str> = l.symbols.iter().map(|s| s.lib_id.as_str()).collect();
             l.deleted.retain(|id| !held.contains(id.as_str()));
+        }
+        // a symbol deleted or forgotten takes the names it went by with it (UI-LEFT-3 L3-1)
+        if let Some(l) = self.design.symbol_library.as_mut().filter(|l| !l.renamed.is_empty()) {
+            let held: std::collections::BTreeSet<String> = l.symbols.iter().map(|s| s.lib_id.clone()).collect();
+            l.renamed.retain(|id, _| held.contains(id));
         }
         if let Some(l) = self.design.footprint_library.as_mut().filter(|l| !l.deleted.is_empty()) {
             let held: std::collections::BTreeSet<&str> = l.footprints.iter().map(|f| f.name.as_str()).collect();

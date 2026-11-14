@@ -178,6 +178,84 @@ fn revert_of_a_symbol_never_saved_puts_back_the_symbol_as_it_was_made_and_revert
     assert_eq!(revert(&dir, br#"{"kind":"symbol","id":"Mine:Nobody"}"#)["nothing"], true);
 }
 
+/// UI-LEFT-3 L3-1: `RevertSymbol` of a renamed symbol goes back to the original under its own name (`UpdateSymbolAfterRename( &original, .. )`), the
+/// symbols derived from it following it back; a renamed and saved symbol goes back to its saved name; a symbol made, renamed and never saved goes back to
+/// the made one.
+#[test]
+fn revert_of_a_renamed_symbol_goes_back_to_the_name_it_had() {
+    let (dir, path) = board_with("libbuf_revert_rename", false);
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Zeta".into(), new_lib_id: "Mine:Omega".into(), overwrite: false });
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Omega".into(), new_lib_id: "Mine:Psi".into(), overwrite: false });
+    assert_eq!(design(&dir).symbol_library.unwrap().renamed.get("Mine:Psi").cloned().unwrap_or_default(), ["Mine:Zeta", "Mine:Omega"]);
+    let r = revert(&dir, br#"{"kind":"symbol","id":"Mine:Psi"}"#);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["lib_id"], "Mine:Zeta", "the tree selects the original");
+    assert_eq!(strings(&r["gone"]), ["Mine:Psi"]);
+    let d = design(&dir).symbol_library.unwrap();
+    assert!(d.by_lib_id("Mine:Psi").is_none() && d.by_lib_id("Mine:Zeta").is_some());
+    assert_eq!(d.by_lib_id("Mine:Alpha").and_then(|s| s.extends.clone()).as_deref(), Some("Mine:Zeta"), "the child follows it back");
+    assert!(d.deleted.iter().all(|x| x != "Mine:Zeta") && d.renamed.is_empty(), "{:?} {:?}", d.deleted, d.renamed);
+    assert!(crate::library_save_api::symbol_matches_file(&dir, d.by_lib_id("Mine:Zeta").unwrap(), Some(&d)), "the file's symbol");
+    assert!(strings(&modified(&dir, "symbol")["items"]).iter().all(|i| i != "Mine:Zeta" && i != "Mine:Psi"));
+    // one undo step takes the revert back, the names it went by with it
+    crate::board::undo(&dir, "ui", Some(eda_ops::Domain::SymbolEditor)).unwrap();
+    assert_eq!(design(&dir).symbol_library.unwrap().renamed.get("Mine:Psi").cloned().unwrap_or_default(), ["Mine:Zeta", "Mine:Omega"]);
+    // saved under its new name, renamed again: Revert goes back to the saved name (`SetOriginal` after `SaveBuffer`)
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Other".into(), new_lib_id: "Mine:Kept".into(), overwrite: false });
+    assert_eq!(save(&dir, br#"{"kind":"symbol","lib":"Mine"}"#)["ok"], true);
+    assert!(names_in(&std::fs::read_to_string(&path).unwrap()).contains(&"Kept".to_string()));
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Kept".into(), new_lib_id: "Mine:Later".into(), overwrite: false });
+    let r = revert(&dir, br#"{"kind":"symbol","id":"Mine:Later"}"#);
+    assert_eq!(r["lib_id"], "Mine:Kept", "{r}");
+    // made, renamed, never saved: back to the made symbol, under its first name
+    ok(&dir, Cmd::NewSymbol { lib_id: "Mine:Fresh".into() });
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Fresh".into(), new_lib_id: "Mine:Stale".into(), overwrite: false });
+    let r = revert(&dir, br#"{"kind":"symbol","id":"Mine:Stale"}"#);
+    assert_eq!(r["lib_id"], "Mine:Fresh", "{r}");
+    assert!(design(&dir).symbol_library.unwrap().by_lib_id("Mine:Fresh").is_some());
+}
+
+/// UI-LEFT-3 L3-2: a derived symbol renamed while its parent is not in the design is saved derived from that parent (`LIB_BUFFER::SaveBuffer` of a derived
+/// buffer), and a child of a renamed parent derives from the parent's new name.
+#[test]
+fn a_renamed_derived_symbol_stays_derived_when_saved() {
+    let (dir, path) = board_with("libbuf_rename_derived", false);
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Alpha".into(), new_lib_id: "Mine:Beta".into(), overwrite: false });
+    assert!(design(&dir).symbol_library.unwrap().by_lib_id("Mine:Zeta").is_none(), "the parent is not in the design");
+    let r = save(&dir, br#"{"kind":"symbol","lib":"Mine"}"#);
+    assert_eq!(r["ok"], true, "{r}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(names_in(&text), ["Beta", "Other", "Zeta"]);
+    let beta = eda_kicad::scan_symbols(&text).into_iter().find(|s| s.name == "Beta").unwrap();
+    assert_eq!(beta.extends.as_deref(), Some("Zeta"), "written derived, as KiCad's buffer is");
+    // the folder library too, the parent in another file
+    let (dir, path) = board_with("libbuf_rename_derived_folder", true);
+    ok(&dir, Cmd::RenameLibrarySymbol { lib_id: "Mine:Alpha".into(), new_lib_id: "Mine:Beta".into(), overwrite: false });
+    assert_eq!(save(&dir, br#"{"kind":"symbol","lib":"Mine"}"#)["ok"], true);
+    let beta = eda_kicad::scan_symbols(&std::fs::read_to_string(path.join("Beta.kicad_sym")).unwrap()).into_iter().find(|s| s.name == "Beta").unwrap();
+    assert_eq!(beta.extends.as_deref(), Some("Zeta"));
+}
+
+/// UI-LEFT-3 L3-4: the modified flag and the symbol as it was made outlast the server (a restart reads them back from the design's history).
+#[test]
+fn the_modified_flag_and_a_made_symbol_outlast_a_restart() {
+    let (dir, _) = board_with("libbuf_persist", false);
+    ok(&dir, Cmd::OpenSymbolForEdit { lib_id: "Mine:Other".into() });
+    let sym = design(&dir).symbol_library.unwrap().by_lib_id("Mine:Other").unwrap().clone();
+    let mut edited = sym.clone();
+    edited.description = "changed".into();
+    ok(&dir, Cmd::PutLibrarySymbol { symbol: edited, overwrite: true });
+    ok(&dir, Cmd::PutLibrarySymbol { symbol: sym, overwrite: true });
+    ok(&dir, Cmd::NewSymbol { lib_id: "Mine:Fresh".into() });
+    // the server restarts: what it held in memory is gone
+    state().lock().unwrap().remove(&dir);
+    assert_eq!(strings(&modified(&dir, "symbol")["items"]), ["Mine:Fresh", "Mine:Other"], "edited back by hand, still modified after a restart");
+    assert!(original(&dir, "Mine:Fresh").is_some(), "the made symbol is kept");
+    assert_eq!(revert(&dir, br#"{"kind":"symbol","id":"Mine:Other"}"#)["ok"], true);
+    state().lock().unwrap().remove(&dir);
+    assert_eq!(strings(&modified(&dir, "symbol")["items"]), ["Mine:Fresh"], "the cleared flag is kept cleared");
+}
+
 const CHIP: &str = "(footprint \"Chip\" (version 20240108) (generator \"eda\") (layer \"F.Cu\")\n\t(attr through_hole exclude_from_bom)\n\t(pad \"1\" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers \"*.Cu\" \"*.Mask\"))\n)\n";
 
 fn board_with_footprints(name: &str) -> (PathBuf, PathBuf) {

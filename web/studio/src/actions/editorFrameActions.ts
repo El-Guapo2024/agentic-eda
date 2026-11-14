@@ -105,7 +105,7 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
   } else {
     m.set("common.Control.save", () => void saveSymbol(ctx.symApi, toast).catch(failed));
     m.set("common.Control.saveAll", () => void saveAllSymbols(toast).catch(failed));
-    m.set("common.Control.revert", () => void revertSymbol(ctx.symApi, toast).catch(failed));
+    m.set("common.Control.revert", () => void revertSymbol(ctx.symApi, toast, (names) => ctx.symDispatch({ type: "SET_TREE_SELECTION", names })).catch(failed));
   }
   // Print: the browser's print of the frame (styles/layout.css reduces the page to the canvas column).
   m.set("common.Control.print", () => window.print());

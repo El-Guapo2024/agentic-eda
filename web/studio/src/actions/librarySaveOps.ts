@@ -81,7 +81,7 @@ export function saveSymbolLibraryAs(api: SymbolEditorApi, toast: Toast, mode?: "
  * back to the symbol as it was made (`RevertSymbol`: the buffer's `m_original`), a library drops the symbols its file never had and gets back what Delete and
  * Rename took out (`RevertLibrary`: the buffer and its deleted list).
  */
-export async function revertSymbol(api: SymbolEditorApi, toast: Toast): Promise<void> {
+export async function revertSymbol(api: SymbolEditorApi, toast: Toast, selectInTree?: (ids: string[]) => void): Promise<void> {
   const st = api.getState();
   const t = symbolTarget(st.treeSelection, getLibraryTree("symbol").selectedLibs, st.libId);
   if (t.kind === "none") return;
@@ -95,7 +95,9 @@ export async function revertSymbol(api: SymbolEditorApi, toast: Toast): Promise<
   const r = await revertInLibrary(t.kind === "library" ? { kind: "symbol", lib } : { kind: "symbol", id: t.id });
   notifyLibraryChanged();
   if (!r.ok) return toast(r.nothing ? r.message : r.error, r.nothing ? "info" : "error");
-  // the open symbol is shown again as it was saved, or leaves the canvas when the library never had it (`reload_currentSymbol`)
+  // `m_treePane->GetLibTree()->SelectLibId( libId )`: a renamed symbol is back under the name it had (UI-LEFT-3 L3-1)
+  if (r.lib_id && t.kind === "symbol" && r.lib_id !== t.id) selectInTree?.([r.lib_id]);
+  // the open symbol is shown again as it was saved, or leaves the canvas when the library never had it, or no longer has its name (`reload_currentSymbol`)
   const open = st.libId;
   if (open && r.gone.includes(open)) api.closeSymbol();
   else await api.refresh();

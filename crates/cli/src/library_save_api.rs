@@ -212,9 +212,18 @@ fn as_saved(section: &SymbolLibrarySection, path: &Path, lib_id: &str) -> Option
     if sym.extends.is_some() {
         return Some(sym);
     }
-    let (lib, name) = split(lib_id);
-    let Some(parent) = saved_parent(path, name) else { return Some(sym) };
-    let parent_id = format!("{lib}:{parent}");
+    let (lib, _) = split(lib_id);
+    // the file's symbol it stands for: a renamed symbol's original (UI-LEFT-3 L3-2: KiCad's renamed buffer keeps its parent, `LIB_BUFFER::SaveBuffer`
+    // writes it derived), and its parent by the name the design has it under now (a parent renamed too: KiCad links them by pointer)
+    let summaries = saved_library(path).map(|(_, s)| s).unwrap_or_default();
+    let from = crate::library_buffer::original_name(Some(section), &summaries, lib_id);
+    let Some(parent) = saved_parent(path, split(&from).1) else { return Some(sym) };
+    let parent_file_id = format!("{lib}:{parent}");
+    let parent_id = section
+        .symbols
+        .iter()
+        .find(|s| s.lib_id != lib_id && crate::library_buffer::original_name(Some(section), &summaries, &s.lib_id) == parent_file_id)
+        .map_or(parent_file_id, |s| s.lib_id.clone());
     // a parent this Save takes out of the library (Delete, Rename) is not there to derive from: the symbol is written flat
     if section.deleted.contains(&parent_id) {
         return Some(sym);
@@ -664,11 +673,21 @@ pub(crate) fn revert(dir: &Path, body: &[u8]) -> Value {
                 cmds.extend(puts);
                 (cmds, ids, gone, Kind::Symbol)
             } else {
-                let back = match saved_symbol(&entry.path, id).or_else(|| crate::library_buffer::original(dir, id)) {
+                // `RevertSymbol`: the buffer's original, under its own name -- a renamed symbol goes back to the name it had (`UpdateSymbolAfterRename(
+                // &original, aSymbolName, aLibrary )`, UI-LEFT-3 L3-1), and the symbols derived from it follow it back (the rename's `follow_symbol_rename`)
+                let summaries = saved_library(&entry.path).map(|(_, s)| s).unwrap_or_default();
+                let to = crate::library_buffer::original_name(design.symbol_library.as_ref(), &summaries, id);
+                let back = match saved_symbol(&entry.path, &to).or_else(|| crate::library_buffer::original(dir, &to)) {
                     Some(sym) => sym,
                     None => return json!({ "nothing": true, "message": format!("'{}' was never saved to {lib}: there is no saved version to revert to.", split(id).1) }),
                 };
-                (vec![Cmd::ForgetLibrarySymbols { lib_ids: vec![id.to_string()] }, Cmd::PutLibrarySymbol { symbol: back, overwrite: true }], vec![id.to_string()], Vec::new(), Kind::Symbol)
+                if to == id {
+                    (vec![Cmd::ForgetLibrarySymbols { lib_ids: vec![id.to_string()] }, Cmd::PutLibrarySymbol { symbol: back, overwrite: true }], vec![id.to_string()], Vec::new(), Kind::Symbol)
+                } else {
+                    // the new name leaves the tree (the open symbol leaves the canvas: `SymbolExists( curr_symbolName )` is false after the revert)
+                    let cmds = vec![Cmd::RenameLibrarySymbol { lib_id: id.to_string(), new_lib_id: to.clone(), overwrite: true }, Cmd::PutLibrarySymbol { symbol: back, overwrite: true }];
+                    (cmds, vec![id.to_string(), to], vec![id.to_string()], Kind::Symbol)
+                }
             }
         }
         "footprint" => {
@@ -679,10 +698,12 @@ pub(crate) fn revert(dir: &Path, body: &[u8]) -> Value {
         }
         other => return bad(format!("kind is footprint or symbol, not {other:?}")),
     };
+    // the id the tree selects after the revert (`SelectLibId( libId )`): a renamed symbol's original name
+    let lib_id = if kind == Kind::Symbol && !id.is_empty() { reverted.last().cloned() } else { None };
     match board::step(dir, Cmd::Batch { cmds }, false, "ui") {
         Ok(summary) => {
             crate::library_buffer::clear(dir, kind, &reverted, false);
-            json!({ "ok": true, "reverted": reverted, "gone": gone, "message": summary })
+            json!({ "ok": true, "reverted": reverted, "gone": gone, "lib_id": lib_id, "message": summary })
         }
         Err(e) => bad(board::reasons(&e)),
     }
