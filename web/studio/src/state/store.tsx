@@ -21,7 +21,7 @@ import { revisionOf } from "../kicad-port/checkRevision";
 import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, setSchCmdPrefs, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, type CarryStep, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, setSchCmdPrefs, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, setRouterStrict, type CarryStep, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -353,6 +353,8 @@ export type DrawState =
       restoreSelection?: string[];
       /** The nets highlighted again when the drag ends (see kicad-port/dragTool.ts `dragHighlight`). */
       restoreHighlight?: string[];
+      /** `InlineDrag`'s: a click ends it whatever the router says (see kicad-port/dragTool.ts). */
+      inline?: boolean;
     }
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
    * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-
@@ -2032,6 +2034,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // "Allow free pads", which the edit tools' pure modules read (kicad-port/freePads.ts, UI-LEFT-3 R3-7)
     setAllowFreePads(state.prefs.allowFreePads);
   }, [state.prefs]);
+  // the Strict switch the router's commits follow (api/client.ts `setRouterStrict`), as `/api/cmd`'s do
+  useEffect(() => setRouterStrict(state.strict), [state.strict]);
   useEffect(() => saveAngleSnapMode(browserStorage(), state.pcbx.angleSnapMode), [state.pcbx.angleSnapMode]);
   const stateRef = useRef(state);
   stateRef.current = state;

@@ -17,7 +17,7 @@ import { openEmbeddedDocument } from "../api/embeddedClient";
 import { markContentSaved } from "../state/contentModified";
 import { boardCopyKey } from "../api/fpEditorTypes";
 import { saveSymbolLibraryAs } from "./librarySaveOps";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
@@ -58,7 +58,7 @@ import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { attemptFinishDiffPairRoute, continueDiffPairFromEnd } from "../components/canvas/diffPairRouting";
 import { endInlineDrag, findDraggableAt, startGroupDrag, startInlineDrag, type DraggableHit, type InlineDragContext } from "../components/canvas/dragging";
-import { findGroupDragTarget } from "../kicad-port/dragTool";
+import { dragEndsOnActivate, findGroupDragTarget, routeHighlightBegin, routeHighlightEnd, type DragDrawState } from "../kicad-port/dragTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { collectorAccuracyNm, findNetAtCursor } from "../components/canvas/netAtCursor";
 import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
@@ -177,6 +177,37 @@ export function useActionRunner() {
   const netNavKey = useRef<string | null>(null);
   /** The clarification menu's choice while the action that asked replays (`requestSelection`; kept across the registry's rebuilds while the menu is open). */
   const forcedSelection = useRef(newForcedSelection()).current;
+  // `InlineDrag`'s loop on another tool's activation (`evt->IsActivate()`: `hasMultidragCancelled = true; break;`): a drag still on screen when the
+  // active tool changes to another is cancelled as Esc cancels it -- nothing committed, the selection put back (`restoreSelection`), the highlight as
+  // `highlightNets( false )` leaves it (UI-LEFT-3 R3-10). A click that ends the drag clears its draw state with the tool, so it is not one.
+  const toolBefore = useRef(state.activeTool);
+  useEffect(() => {
+    const before = toolBefore.current;
+    toolBefore.current = state.activeTool;
+    if (!dragEndsOnActivate(before, state.activeTool, state.drawState?.kind)) return;
+    const draw = state.drawState as DragDrawState;
+    cancelInteractiveRoute(dispatch, api);
+    endInlineDrag(draw, { cancelled: true }, dispatch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the tool change alone, as `IsActivate()` is
+  }, [state.activeTool]);
+  // `ROUTER_TOOL::prepareInteractive`'s `highlightNets( true, { m_startItem->Net() } )` (a pair's two nets) when a route or a pair starts, and
+  // `finishInteractive`'s `highlightNets( false )` -- the router tool's remembered highlight -- when it ends, however it ends
+  const routeKindBefore = useRef<string | null>(null);
+  useEffect(() => {
+    const d = state.drawState;
+    const kind = d?.kind === "route" || d?.kind === "diffpair" ? d.kind : null;
+    const before = routeKindBefore.current;
+    routeKindBefore.current = kind;
+    if (state.tab !== "pcb") return;
+    if (kind && !before) {
+      const nets = d?.kind === "route" ? [d.net] : d?.kind === "diffpair" ? [d.netA, d.netB] : [];
+      const show = routeHighlightBegin(highlightedNets(state.netHighlight, state.bcx.netHighlightMore), nets);
+      if (show) dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: show });
+    } else if (!kind && before) {
+      dispatch({ type: "SET_NET_HIGHLIGHT_SET", nets: routeHighlightEnd() });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a session's start and end
+  }, [state.drawState?.kind]);
 
   const registry = useMemo(() => {
     // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.
@@ -477,6 +508,9 @@ export function useActionRunner() {
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      // Delete under an `InlineDrag`: the drag's cancel puts its selection back (`restoreSelection`) before `EDIT_TOOL::Remove` asks for it
+      // (`Activate()`, then `RequestSelection`), so that selection is what is deleted -- this handler's `state` is from before the cancel
+      const restored = state.tab === "pcb" && state.drawState?.kind === "drag" ? (state.drawState.restoreSelection ?? []) : [];
       if (routerKey("delete")) return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
@@ -484,7 +518,7 @@ export function useActionRunner() {
       if (drawZoneStarted(state.tab, state.activeTool, state.drawState)) return void dispatch({ type: "SET_DRAW_STATE", draw: withoutLastCorner(state.drawState as { pts: [number, number][] }) as typeof state.drawState });
       // `drawShape`'s loop: Delete with a line, rectangle or circle started takes back the chain's last line, or drops the shape (round 4 A-1, A-2)
       if (drawShapeStarted(state.tab, state.activeTool, state.drawState)) return takeBackLine();
-      withRequestedSelection((refs) => {
+      const remove = (refs: string[]) => {
         // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
         // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
         // user wanted)."
@@ -496,7 +530,9 @@ export function useActionRunner() {
           }
         }
         deleteRefs(refs);
-      });
+      };
+      if (restored.length > 0) remove([...restored]);
+      else withRequestedSelection(remove);
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack

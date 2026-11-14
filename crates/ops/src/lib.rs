@@ -4522,8 +4522,11 @@ impl<'a> Board<'a> {
 
     // --------------------------------------------------------- copper
 
+    /// A net the board has (`BOARD::FindNet`): one of the model's, or the `unconnected-(..)` net the derived board gives the pad of a pin the model
+    /// has on no net (`eda_engine::nets::unconnected_pad_nets`: KiCad's netlist names a lone pin's net, and Update PCB puts it on the pad), which a
+    /// route started on that pad takes (`syncPad`'s net).
     fn known_net(&self, net: &str) -> Result<(), Vec<CheckResult>> {
-        if self.model.nets.iter().any(|n| n.name == net) {
+        if self.model.nets.iter().any(|n| n.name == net) || (net.starts_with("unconnected-(") && eda_engine::nets::unconnected_pad_nets(&self.design, &self.model).values().any(|n| n == net)) {
             Ok(())
         } else {
             Err(vec![CheckResult::fail("ops_unknown_net", net, "no net with this name exists in the model")])
@@ -5567,15 +5570,20 @@ impl<'a> Board<'a> {
     #[allow(clippy::too_many_arguments)] // the fields of `Cmd::CommitRoute`, one argument each, as the other verbs take theirs
     #[allow(clippy::too_many_arguments)]
     fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize], via_kinds: &[(usize, eda_model::via_extra::ViaKind)], track_sources: &[(usize, String)], group: Option<&str>, keep_track_ids: &[usize]) -> Result<(), Vec<CheckResult>> {
+        // a route of no net (`GetOrphanedNetHandle()`, net code 0: started in empty space, ending on nothing of a net) is committed with no net
         for t in &tracks {
-            self.known_net(&t.net)?;
+            if !t.net.is_empty() {
+                self.known_net(&t.net)?;
+            }
             self.known_layer(&t.layer)?;
             if t.width <= Nm::ZERO || t.pts.len() < 2 {
                 return Err(vec![CheckResult::fail("ops_bad_track", &t.net, "a committed route track needs a positive width and at least two points")]);
             }
         }
         for v in &vias {
-            self.known_net(&v.net)?;
+            if !v.net.is_empty() {
+                self.known_net(&v.net)?;
+            }
             self.known_layer(&v.from_layer)?;
             self.known_layer(&v.to_layer)?;
             if v.drill <= Nm::ZERO || v.diameter <= Nm::ZERO || v.drill >= v.diameter {

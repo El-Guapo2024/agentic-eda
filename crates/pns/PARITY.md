@@ -1792,6 +1792,86 @@ UI-LEFT-3 R3-1, R3-2, R3-5 and R3-7, each read against KiCad 8303b2ad: `pns_shov
   place), web `freePads.test.ts` (4), `pcbDisplayOptions.test.ts` (the pad's net text), browser `free-pads.check.js`.
 - Gates: see the branch's report (HANDOFF "Open branches").
 
+## Stage 29 -- router-2: the draggers' commit and mode, joint locks in the frames, a cut arc, the tuner's panel, the tolerances, a lone pin's net (branch `task-v17-router`, 2026-11-14)
+
+UI-LEFT-3 R3-3, R3-4, R3-6, R3-8, R3-9, R3-10, R3-11, and the lone pin's net Stage 28 left, each read against KiCad 8303b2ad: `pns_component_dragger.cpp`
+(`Drag`, `FixRoute`, `CurrentNode`), `pns_multi_dragger.cpp` (`Start`, `Drag`, `multidragShove`, `multidragWalkaround`, `FixRoute`), `pns_router.cpp` (`FixRoute`,
+`moveDragging`), `router_tool.cpp` (`InlineDrag`, `handleCommonEvents`, `ChangeRouterMode`), `common/tool/tool_manager.cpp` (`dispatchInternal`: a waiting tool's
+transitions still run), `edit_tool.cpp::Remove`, `pns_tool_base.cpp::highlightNets`, `pns_item.cpp` (`collideSimple`, `shouldWeConsiderHoleCollisions`), `pns_node.cpp`
+(`CheckColliding`, `QueryColliding`, `addSolid`, `addHole`, `LockJoint`, `unlinkJoint`), `pns_shove.cpp::Run`, `pns_line_placer.cpp` (`rhShoveOnly`, `FixRoute`,
+`Move`, `routeStep`, `reduceTail`, `handleSelfIntersections`, `splitHeadTail`, `buildInitialLine`, `initPlacement`), `pns_via.cpp::PushoutForce`, `pns_utils.cpp`
+(`SegmentHull`, `IsSegment45Degree`), `libs/kimath` (`SHAPE_LINE_CHAIN::splitArc`, `amendArc`, `Remove`, `Slice`, `Split`; `SHAPE_POLY_SET::booleanOp`; Clipper2's
+`LocMinSorter`), `pns_meander_placer.cpp::doMove`, `pns_dp_meander_placer.cpp::Move`, `generators/pcb_tuning_pattern.cpp` (`getOutline`, `GetMsgPanelInfo`),
+`board.cpp::GetTrackLength`, `connectivity_data.cpp::GetConnectedItems`, `pns_kicad_iface.cpp::syncPad`.
+
+- **R3-3, the component dragger.** `InlineDrag`'s click is `FixRoute` with no `Move` first, and `COMPONENT_DRAGGER::FixRoute` / `MULTI_DRAGGER::FixRoute` commit
+  `CurrentNode()`, the last motion's node: `Router::group_drag_finish` no longer drags to the click (the studio sends the motion to the click before the finish,
+  KiCad's last `Move`, since its previews are throttled). The group drags read the router's settings live (`Settings().AllowDRCViolations()` at the click,
+  `MULTI_DRAGGER::Drag`'s `switch( Settings().Mode() )`); the single `DRAGGER` keeps the mode it started in (`m_currentMode`). A moved pad is asked with its hole
+  (`Node::item_colliding` -> `pad_hole_collision`: "a special case for the "head" via's hole" for a pad: the hole against other nets' copper at the hole
+  clearance, and hole to hole whatever the nets). Tests: `component_drag` `a_component_drag_commits_the_last_motion_and_reads_the_mode_when_it_commits`,
+  `a_moved_pads_own_hole_keeps_the_hole_to_hole_clearance` (a THT pad next to a via of its own net: refused at 0.15 mm, taken at 0.35 mm).
+- **R3-4, the tuner.** The message panel's routed length is `BOARD::GetTrackLength( *primaryItem )` (and the coupled item's): the cluster `GetConnectedItems(
+  &aTrack, EXCLUDE_ZONES )` gives (`cli::net_inspector_api::track_length_stats`: `eda_connectivity`'s clusters without zone copper), the piece of a net in
+  pieces the track is in. A pair whose two outlines do not meet draws `Outline( 0 )` of the union alone: the one Clipper2 outputs first (`tuneTool.ts`
+  `clipperFirstOutline`: the outline with the vertex of largest y, then smallest x, `LocMinSorter`). The placers' one clone of the world is the branch every
+  `doMove` / `DP_MEANDER_PLACER::Move` reads (nothing in a move writes to it): as KiCad, no longer listed as a difference. Tests: cli
+  `the_panels_routed_length_is_the_connected_items_not_the_whole_net`, web `tuneTool.test.ts` "a pair pattern whose outlines do not meet ...".
+- **R3-6, the router's interaction edges: found done** in Stage 24 / u5 (`PARITY-pcb` section 82): the router-mode and corner-mode actions show no toast
+  (`setRouterMode`, `setCornerMode`), Delete under a drag ends it and deletes (`routerEditKey`'s `cancelThenPass`, `EDIT_TOOL::Remove`'s `Activate()` first). The
+  browser check now holds both (`router-v17` mode, delete).
+- **R3-8, a click's via and the joint locks.** `SHOVE::Run`'s `LockJoint` of each head's start and (unless it ends in a via) its end belongs to the node the
+  run pushes and to every node branched from it. `springback::World::locked` carries them (`World::lock_head_ends` in the line placer, the pair placer and
+  the multi-track drag's shove; `add_to` locks them), and a locked joint outlives its items (`Node::lock_joint` touches the joint, `Node::remove` keeps a
+  locked one: KiCad keeps every joint, "fixme: remove dangling joints"). The old rule -- every fixed run's ends locked -- is gone: a click's via is pushed by a
+  later leg's shove where no frame locked its joint (the leg from it had no successful shove). Tests: `a_later_legs_shove_pushes_a_clicks_via_no_shove_locked`
+  (the leg from the via walked: the via is pushed, the runs on it follow), `a_later_legs_shove_stops_at_an_earlier_clicks_via` still holds, springback
+  `the_world_of_a_frame_is_the_session_world_with_what_it_moved`.
+- **R3-9, a cut inside an arc.** `SHAPE_LINE_CHAIN::Remove`, `Slice` and `Split` cut an arc with `splitArc`: each part a `SHAPE_ARC` on the same circle
+  (`ConstructFromStartEndCenter( .., GetCenter(), IsClockwise() )`), the chain's points kept. `ArcPts::sub_arc` makes the part, whose polyline is the vertices
+  of the arc it was cut from (`ArcPts::of`), so it is found again by its points and committed as an arc; `line::split_arcs_at` / `split_arcs_for_insert` cut
+  the arc list where `reduceTail`, `handleSelfIntersections`, `optimizeTailHeadTransition`'s merge and `splitHeadTail` (the placer's and `rhWalkBase`'s,
+  `split_head_tail_arcs`) cut the points. A part ending at a polyline vertex (a little outside the arc) has its centre a few micrometres off the arc's, as
+  KiCad's `SHAPE_ARC` through that end does. Tests: `line` `a_cut_inside_an_arc_keeps_a_shorter_arc_on_the_same_circle`, `line_placer`
+  `a_tail_cut_inside_its_arc_keeps_the_arcs_first_part_as_an_arc`.
+- **R3-10, the multi-track drag.** A position not resolved commits, with "Allow DRC violations", KiCad's `m_lastNode` of it (`multi_dragger::Unresolved`):
+  nothing (the walk found no way, or the drag has no `SHOVE` -- `Start` makes one only in Shove), or the shove's frame, where the dragged lines are not. The
+  frames carry the locked joints (R3-8). The studio: a drag of no net puts back the router tool's `m_startHighlightNetcodes` at its end (`dragTool.ts`
+  `startHighlightNetcodes`: an empty set turns the highlight off, as KiCad's), another tool's activation cancels the drag as Esc does and gives the selection
+  back (`IsActivate()`: `dragEndsOnActivate`, the effect in `useActionRunner.ts`), and an `InlineDrag` ends on a refused click (`inline`: the router session is
+  cancelled; the router tool's own drag goes on). Tests: `multi_dragger`
+  `a_drag_started_in_walk_around_never_shoves_and_an_unresolved_position_commits_kicads_last_node`, `the_bus_shoves_frames_keep_the_joints_it_locked`; web
+  `dragTool.test.ts` (2 new); browser `router-v17` activate, no-net.
+- **R3-11, tolerances.** `line_walk`'s tolerances and `FANOUT_CLEANUP` on the head were done in Stage 24. `SegmentHull` takes `d`, `dr`, `xr2` before a kink's
+  `cl ++` / `cl += 2`, the rounded `SEG::Length()` and `IsSegment45Degree`'s one-nanometre slack (findings p5 F1-7). `buildInitialLine` pushes a pending via in
+  two attempts, the second along the lead from the last `routeStep`'s cursor (`m_last_p_end`, `LinePlacer::last_p_end`, reset at `Start` only). A pad's or
+  via's hole that reaches past its copper's clearance is an obstacle of its own (`HOLE_T`, `addHole`): `Node::obstacle_hulls` gives the copper's and the
+  hole's hulls, `NearestObstacle` meets the nearer (`NearestHit::hole`), the walk goes round both, the mark-obstacles snap takes the hole's hull when it is the
+  nearest. Tests: `hull` `a_kink_stub_is_straightened_with_the_sizes_of_the_clearance_before_the_bump` (KiCad's points by hand),
+  `line_placer` `a_via_the_first_lead_cannot_free_is_pushed_along_the_lead_from_the_last_cursor`, `component_drag`
+  `a_hole_that_pokes_out_of_its_pad_is_an_obstacle_of_its_own`.
+- **A lone pin's net (Stage 28's left).** `syncPad`'s `solid->SetNet( aPad->GetNet() )`: the pad of a pin the model has on no net carries the net the derived
+  board writes for it (`DrcPad::net`, which `task-v17-backannot` made the written net: `eda_engine::nets::written_pad_net`, KiCad's `unconnected-(..)` and a
+  no-connect pin's later pads' `<name>_1`; the router and the routing_clearance gate take that one name), so a route started on it takes that net and
+  copper of no net keeps its clearance from it. `Board::known_net` takes those nets (`BOARD::FindNet`), and `Cmd::CommitRoute` commits a route of no net (net code 0). Tests:
+  `component_drag` `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router`, ops `commit_route_takes_a_lone_pins_net_and_no_net`, slow cli
+  `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router_and_for_kicad_cli` (kicad-cli: no clearance, short, crossing or edge violation for either route),
+  browser `router-v17` lone-pad.
+- **The Strict switch (coordinator's report).** The router's commits (`/api/route/finish`, `fix`'s, `attempt_finish`, `continue_from_end`, `cancel`, `drag_finish`,
+  the pair's) stepped the board strict whatever the status bar's Strict said; they now take the `"strict"` the studio sends (`api/client.ts` `setRouterStrict`,
+  every `/api/route/*` request) as `/api/cmd` does, strict when absent. Tests: cli `a_drag_commit_follows_the_strict_switch`, browser `router-v17` strict.
+- **Follow-ups (coordinator, same branch).** A multi-track position not resolved previews `m_lastNode` (`updateView( m_dragger->CurrentNode() )`): the
+  board as it is, or what the shove's frame pushed, no dragged line drawn (`Router::drag_preview`; test `an_unresolved_multi_track_position_shows_the_board_as_it_is`).
+  A pending via `buildInitialLine` cannot free in Walk around or Shove leaves the head with no via (`aViaOk`, `LinePlacer::via_ok`; Highlight collisions
+  appends it at the cursor as KiCad does; test `a_via_that_cannot_be_freed_leaves_the_head_with_no_via`); with it, Backspace of the only run gives the leg its
+  start back (`UnfixRoute`'s `m_p_start = st.pts[0].p`; the run was lost before -- `head_via` `backspace_takes_a_via_leg_back_with_the_via_armed_again` now
+  checks it is committed). A route or pair highlights its net(s) when it starts (`prepareInteractive`'s `highlightNets( true, .. )`) and puts back the
+  router tool's remembered highlight however it ends (`finishInteractive`'s `highlightNets( false )`; `dragTool.ts` `routeHighlightBegin` / `routeHighlightEnd`,
+  the effect in `useActionRunner.ts`; browser `router-v17` route-hl). The length tuner's commits take the Strict switch too (`tune_api::strict_of`,
+  `api/tuneClient.ts`; test `a_patterns_commit_takes_the_strict_switch`).
+- **Differs (kept):** none of this stage's.
+- Gates: see the branch's report.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now

@@ -211,6 +211,8 @@ fn backspace_takes_a_via_leg_back_with_the_via_armed_again() {
     let commit = router.finish(p(mm(-5.0), mm(3.0))).unwrap();
     assert_eq!(commit.vias.iter().map(|v| v.at).collect::<Vec<_>>(), vec![p(mm(-5.0), Nm::ZERO)]);
     assert!(commit.tracks.iter().any(|t| t.layer == "B.Cu"));
+    // the F.Cu leg taken back and placed again is committed too (`UnfixRoute`: `m_p_start = st.pts[0].p`, the leg's start)
+    assert!(commit.tracks.iter().any(|t| t.layer == "F.Cu" && t.pts.last() == Some(&p(mm(-5.0), Nm::ZERO))), "{commit:?}");
 }
 
 /// r5 R5-2: a dragged track's replacement names the track as its source (`NODE::AssembleLine`: `pl.SetSourceItem( aSeg->GetSourceItem() )`), so the

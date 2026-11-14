@@ -91,18 +91,20 @@ export interface DragDrawState {
    * cleared (`ACTIONS::selectionClear`) and which Esc puts back (`restoreSelection( selection )`). Absent for the router tool's own drag
    * (`performDragging`), which leaves the selection alone. */
   restoreSelection?: string[];
-  /** The nets highlighted when the drag ends (`highlightNets( false )`: `m_startHighlightNetcodes`, see `dragHighlight`). Absent: the drag did not
-   * change the highlight. */
+  /** The nets highlighted when the drag ends (`highlightNets( false )`: `m_startHighlightNetcodes`, see `dragHighlight`; empty: the highlight goes
+   * off). Absent: the drag did not change the highlight. */
   restoreHighlight?: string[];
+  /** `InlineDrag` (`D` from the selection tool, every kind of drag): a click ends the drag whatever `FixRoute` says (`break`). Absent for the router
+   * tool's own drag (`performDragging`), which a refused click leaves going. */
+  inline?: boolean;
 }
 
 /**
  * `TOOL_BASE::highlightNets( true, nets )` at the start of a drag (pcbnew/router/pns_tool_base.cpp at 8303b2ad), with `current` the nets highlighted
  * now: the drag shows `nets` highlighted (`rs->SetHighlight( netcodes, true )`), and at its end (`highlightNets( false )`) the highlight goes back
  * to `current` when it already held one of them ("If the user has previously set some of the routed nets to be highlighted, we assume they want
- * to keep them highlighted after routing"), else off. `null` when `nets` is empty (`if( closestItem->Net() )`: no call). **Differs:** with no net
- * KiCad's `highlightNets( false )` at the end still puts back `m_startHighlightNetcodes` -- whatever an earlier route left there -- where the
- * studio leaves the highlight as it was.
+ * to keep them highlighted after routing"), else off -- `restore`, which is the tool's `m_startHighlightNetcodes` from then on. `null` when `nets`
+ * is empty (`if( closestItem->Net() )`: no call, `m_startHighlightNetcodes` stays what it was).
  */
 export function dragHighlight(current: readonly string[], nets: readonly string[]): { show: string[]; restore: string[] } | null {
   const shown = [...new Set(nets.filter((n) => n !== ""))];
@@ -118,13 +120,50 @@ export interface InlineDragContext {
   highlighted: readonly string[];
 }
 
+/** `TOOL_BASE::m_startHighlightNetcodes` of the router tool (one `ROUTER_TOOL` for the frame): what the last `highlightNets( true, .. )` left to put
+ * back, which `highlightNets( false )` at the end of every drag puts back -- one of no net too, which never set it. */
+let startHighlightNetcodes: string[] = [];
+
+/** The router tool's `m_startHighlightNetcodes` (`startHighlightNetcodes`), and setting it (a test's fresh tool). */
+export function routerStartHighlight(): string[] {
+  return [...startHighlightNetcodes];
+}
+export function setRouterStartHighlight(nets: readonly string[]): void {
+  startHighlightNetcodes = [...nets];
+}
+
+/** `ROUTER_TOOL::prepareInteractive`: a route (or a pair) started on an item of a net highlights it (`highlightNets( true, { m_startItem->Net() } )`, a
+ * pair's both nets), the router tool remembering what to put back (`m_startHighlightNetcodes`); `null` with no net (no call). `current` is what is
+ * highlighted now. */
+export function routeHighlightBegin(current: readonly string[], nets: readonly (string | null | undefined)[]): string[] | null {
+  const highlight = dragHighlight(current, nets.filter((n): n is string => !!n));
+  if (!highlight) return null;
+  startHighlightNetcodes = [...highlight.restore];
+  return highlight.show;
+}
+
+/** `ROUTER_TOOL::finishInteractive`'s `highlightNets( false )`: the highlight the router tool remembers (`m_startHighlightNetcodes`), off when empty. */
+export function routeHighlightEnd(): string[] {
+  return [...startHighlightNetcodes];
+}
+
 /** `InlineDrag` once the router has started the drag: whether the selection is cleared (`m_toolMgr->RunAction( ACTIONS::selectionClear )`, the
  * selection tool's drag; `clearsSelection`), the nets to highlight now (`highlightNets( true, { closestItem->Net() } )`, `net`), and the draw
- * state with what the end puts back. Without `context` nothing changes. */
+ * state with what the end puts back (`highlightNets( false )`: `m_startHighlightNetcodes`, set by this drag when it has a net, else what the last
+ * one left -- an empty set turns the highlight off). Without `context` nothing changes. `clearsSelection` is `InlineDrag`'s (the selection tool's
+ * `D`), whose click ends the drag whatever `FixRoute` says (`inline`). */
 export function inlineDragBegin(draw: DragDrawState, context: InlineDragContext | undefined, clearsSelection: boolean, net: string | null | undefined): { draw: DragDrawState; clearSelection: boolean; highlight: string[] | null } {
   if (!context) return { draw, clearSelection: false, highlight: null };
   const highlight = dragHighlight(context.highlighted, net ? [net] : []);
-  return { draw: { ...draw, restoreSelection: clearsSelection ? [...context.selection] : undefined, restoreHighlight: highlight?.restore }, clearSelection: clearsSelection, highlight: highlight?.show ?? null };
+  if (highlight) startHighlightNetcodes = [...highlight.restore];
+  return { draw: { ...draw, restoreSelection: clearsSelection ? [...context.selection] : undefined, restoreHighlight: [...startHighlightNetcodes], inline: clearsSelection || undefined }, clearSelection: clearsSelection, highlight: highlight?.show ?? null };
+}
+
+/** `InlineDrag`'s loop on another tool's activation (`evt->IsActivate()`: `hasMultidragCancelled = true; break;`): the drag in progress is
+ * cancelled as Esc cancels it -- nothing committed, the selection put back -- when the active tool changes from the drag to another while the
+ * drag's draw state is still there. */
+export function dragEndsOnActivate(prevTool: string | null, tool: string, drawKind: string | null | undefined): boolean {
+  return prevTool === "drag" && tool !== "drag" && drawKind === "drag";
 }
 
 /** The end of an `InlineDrag` (Esc, or the click that ends it): the nets highlighted again (`highlightNets( false )`, `null`: unchanged), and the

@@ -23,13 +23,14 @@
 //! - **The fixed runs are tracks of the frame, as in KiCad** (`FixRoute`: `m_lastNode->Add( segment )`): a later leg's shove may push the
 //!   route's own tail (a track the head pushes into it pushes it on), and `CommitPlacement` commits the node, tail and all. Here a run
 //!   carries a [`run_tag`] in the frame's world, so what a shove made of it is in the frame's [`World::tracks`] under that tag, and the
-//!   preview and the commit draw the runs from there ([`World::placed_runs`]). Its ends are locked joints (`LockJoint`, which `SHOVE::Run`
-//!   does to each head's start and which the frames inherit), so a pushed run keeps its ends and a shoved line never runs on into the
-//!   head. The vias the clicks placed are ordinary vias of the frame too, as `FixRoute`'s `m_lastNode->Add( Clone( pl.Via() ) )` makes them
-//!   (under a [`fixed_via_tag`]): a later leg's shove that meets one at a leg's locked joint stops there (`pushOrShoveVia`'s `SH_INCOMPLETE`)
-//!   and one elsewhere it pushes; the commit writes each where the newest frame has it ([`World::placed_vias`]). (Until the review of
-//!   2026-10-23 the runs were locked here, and what a later leg pushed into the tail was walked round it or stopped the head; until UI-LEFT R6
-//!   the vias were, and a track pushed onto one was walked round it.)
+//!   preview and the commit draw the runs from there ([`World::placed_runs`]). **The joint locks belong to the frames** ([`World::locked`]):
+//!   `SHOVE::Run` locks each head's start and, unless it ends in a via, its end (`LockJoint`) in the node it pushes, and every frame branched
+//!   from it keeps them -- so a leg's ends are locked where a shove of that leg succeeded, and a shoved line never runs on into the head. The
+//!   vias the clicks placed are ordinary vias of the frame too, as `FixRoute`'s `m_lastNode->Add( Clone( pl.Via() ) )` makes them (under a
+//!   [`fixed_via_tag`]): a later leg's shove that meets one at a locked joint stops there (`pushOrShoveVia`'s `SH_INCOMPLETE`), and one whose
+//!   joint no frame locked -- the leg from it had no successful shove -- it pushes, with the runs on it; the commit writes each where the newest
+//!   frame has it ([`World::placed_vias`]). (Until the review of 2026-10-23 the runs were locked here, and what a later leg pushed into the tail
+//!   was walked round it or stopped the head; until UI-LEFT R6 the vias were; until UI-LEFT-3 R3-8 every run's ends were locked joints.)
 //! - `SetSpringbackDoNotTouchNode` (the node that owns the placer's end item) has no counterpart: the end item is always picked from the
 //!   session's world, which is not a frame. The place of a dragged via in each frame (`m_draggedVias`) is not part of a [`World`],
 //!   because only the dragger has one: it keeps those places itself, one per frame (`crate::dragger`'s `DragShove`), and truncates
@@ -67,16 +68,18 @@ pub fn fixed_via_tag(i: usize) -> String {
 /// What a frame's world is, against the session's world: every IR track a shove replaced (by `Track::id`, with every line that replaces
 /// it -- none: the track is gone), every IR via a shove moved (by `Via::id`, to where), and what the clicks fixed. A fixed run is an ordinary
 /// track of the world, as `FixRoute`'s `m_lastNode->Add( segment )` makes it: a later shove may push it (it is then in `tracks`, under its
-/// [`run_tag`]), and its ends are locked joints (`SHOVE::Run`'s `LockJoint` of each head's start, which the frames keep: every leg's start
-/// stays a locked joint of the worlds after it), so a pushed run keeps its ends and the shove never runs on into the head. The vias the
-/// clicks placed are ordinary vias of the world too (under their [`fixed_via_tag`]): a shove that meets one where a leg starts or ends stops at
-/// the locked joint (`pushOrShoveVia`: `if( jt->IsLocked() ) return SH_INCOMPLETE`), one that is not there it pushes, with the runs on it.
+/// [`run_tag`]). The joints the shoves locked are the world's ([`Self::locked`]). The vias the clicks placed are ordinary vias of the world too
+/// (under their [`fixed_via_tag`]): a shove that meets one at a locked joint stops (`pushOrShoveVia`: `if( jt->IsLocked() ) return
+/// SH_INCOMPLETE`), one at a joint no shove locked it pushes, with the runs on it.
 #[derive(Debug, Clone, Default)]
 pub struct World {
     pub tracks: BTreeMap<String, Vec<Line>>,
     pub vias: BTreeMap<String, Point>,
     pub fixed: Vec<Line>,
     pub fixed_vias: Vec<Via>,
+    /// The joints the shoves that made this world locked (`SHOVE::Run`'s `LockJoint` of each head's ends, in the node the frame is), with the
+    /// ones of the frames below it (`NODE::Branch` copies the joints, locks and all): by position and net.
+    pub locked: Vec<(Point, Net)>,
 }
 
 impl World {
@@ -199,10 +202,19 @@ impl World {
         for (i, v) in self.placed_vias(&self.fixed_vias).into_iter().enumerate() {
             node.add(Item::Via(Via { source_via: Some(fixed_via_tag(i)), ..v }));
         }
-        // every leg's start (and so every run's end) is a locked joint, as `LockJoint` left it in the frame each leg was routed in
-        for l in &self.fixed {
-            for p in [l.first(), l.last()].into_iter().flatten() {
-                node.lock_joint(p, &l.net);
+        // the joints the shoves locked (`LockJoint`), which the frame's `NODE` has and every branch of it inherits
+        for (p, net) in &self.locked {
+            node.lock_joint(*p, net);
+        }
+    }
+
+    /// `SHOVE::Run`'s `LockJoint( head.CPoint( 0 ) )` and, unless the head ends in a via, `LockJoint( head.CLastPoint() )`: kept with the frame the run
+    /// pushes.
+    pub fn lock_head_ends(&mut self, pts: &[Point], net: &Net, ends_with_via: bool) {
+        let ends = [pts.first().copied(), if ends_with_via { None } else { pts.last().copied() }];
+        for p in ends.into_iter().flatten() {
+            if !self.locked.iter().any(|(q, n)| *q == p && crate::item::same_net(n, net)) {
+                self.locked.push((p, net.clone()));
             }
         }
     }
@@ -473,8 +485,14 @@ mod tests {
         assert_eq!(segs.len(), 2);
         assert!(segs.contains(&(mm(2.0), false, Some("t1".into()))), "{segs:?}");
         assert!(segs.contains(&(mm(-3.0), false, Some(run_tag(0)))), "the fixed run is in it, a track a shove may push: {segs:?}");
+        // a run's ends are locked only where a shove locked them (`LockJoint` of the head's ends, kept in the frame and every frame after it)
         let ends = [Point { x: Nm::ZERO, y: mm(-3.0) }, Point { x: mm(5.0), y: mm(-3.0) }];
-        assert!(ends.iter().all(|&e| n.joint_at(e, &net_of("A")).is_some_and(|j| j.locked)), "its ends are locked joints (`LockJoint`)");
+        assert!(ends.iter().all(|&e| n.joint_at(e, &net_of("A")).is_some_and(|j| !j.locked)), "no shove locked them");
+        let mut w = moved(mm(2.0));
+        w.lock_head_ends(&ends, &net_of("A"), true);
+        let n = w.with_fixed(Some(&Line::from_points(net_of("A"), 0, mm(0.25), ends.to_vec())), None).apply(&b);
+        assert!(n.joint_at(ends[0], &net_of("A")).is_some_and(|j| j.locked), "the head's start is locked");
+        assert!(n.joint_at(ends[1], &net_of("A")).is_some_and(|j| !j.locked), "a head that ends in a via leaves its end unlocked");
     }
 
     #[test]

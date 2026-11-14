@@ -820,6 +820,9 @@ impl DiffPairPlacer {
                 self.current_trace.set_shape(hp, hn, false);
                 let (hit_p, hit_n) = (self.current_trace.p_pair_line().hits_node(&out.world, rules, kind_mask::ANY), self.current_trace.n_pair_line().hits_node(&out.world, rules, kind_mask::ANY));
                 world.merge_shove(&out.displaced_lines, &out.displaced_vias);
+                // the joints `Run` locked at both heads' ends are the frame's too
+                world.lock_head_ends(&p_line.pts, &p_line.net, self.current_trace.via_p.is_some());
+                world.lock_head_ends(&n_line.pts, &n_line.net, self.current_trace.via_n.is_some());
                 // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
                 self.springback.push(&self.world, world.clone(), out.area);
                 self.last_node = Some(out.world);

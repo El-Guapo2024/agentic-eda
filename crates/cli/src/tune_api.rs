@@ -265,7 +265,7 @@ pub fn fix(dir: &Path, body: &[u8]) -> Value {
     };
     let readout = session.tuner.last().map(|m| m.readout.json());
     let p = session.tuner.pattern.clone();
-    match board::step(dir, cmd, true, "ui") {
+    match board::step(dir, cmd, strict_of(&req), "ui") {
         Ok(summary) => {
             let id = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.mode == p.mode && q.layer == p.layer && (q.origin == p.origin || (!p.id.is_empty() && q.id == p.id))).map(|q| q.id));
             json!({ "ok": true, "message": summary, "pattern_id": id, "readout": readout })
@@ -383,17 +383,19 @@ fn msg_panel_json(scene: &Scene, p: &TuningPattern) -> Value {
     let primary = tracks.first().map(|t| t.net.clone());
     let coupled = primary.as_ref().and_then(|pn| tracks.iter().find(|t| &t.net != pn)).map(|t| t.net.clone());
     let width = tracks.first().map(|t| t.width).filter(|w| tracks.iter().all(|t| t.width == *w));
-    let lengths = |net: &str| {
-        let s = crate::net_inspector_api::net_length_stats(&scene.design, &scene.model, net);
-        json!({ "length": s.track_length + s.via_length, "die_length": s.pad_to_die_length, "delay": s.track_delay + s.via_delay, "die_delay": s.pad_to_die_delay })
+    // `BOARD::GetTrackLength( *primaryItem )` / `( *coupledItem )`: what the track is connected to (`GetConnectedItems`), not the whole net
+    let lengths = |track: Option<&&eda_model::ir::Track>| {
+        track.and_then(|t| crate::net_inspector_api::track_length_stats(&scene.design, &scene.model, &t.id)).map(|s| {
+            json!({ "length": s.track_length + s.via_length, "die_length": s.pad_to_die_length, "delay": s.track_delay + s.via_delay, "die_delay": s.pad_to_die_delay })
+        })
     };
-    let has_net = |n: &Option<String>| n.as_deref().is_some_and(|n| !n.is_empty());
+    let coupled_item = coupled.as_ref().and_then(|cn| tracks.iter().find(|t| &t.net == cn));
     json!({
         "primary_net": primary, "coupled_net": coupled,
         "netclass": primary.as_deref().map(|n| crate::route_api::human_readable_class(&scene.model.board, n)),
         "width": width,
-        "primary": has_net(&primary).then(|| lengths(primary.as_deref().unwrap_or(""))),
-        "coupled": has_net(&coupled).then(|| lengths(coupled.as_deref().unwrap_or(""))),
+        "primary": lengths(tracks.first()),
+        "coupled": lengths(coupled_item),
         // `EvalRules( .., primaryItem, coupledItem, m_layer )`: min, opt and max as the rule has them (nanometres, or attoseconds with `time_domain`)
         "constraint": tracks.first().and_then(|t| {
             let other = coupled.as_ref().and_then(|cn| tracks.iter().find(|u| &u.net == cn)).map(|u| u.id.as_str());
@@ -449,9 +451,14 @@ pub fn pattern(dir: &Path, body: &[u8]) -> Value {
     })
 }
 
-fn board_stepped(dir: &Path, cmds: Vec<Cmd>) -> Result<String, String> {
+/// The Strict switch the studio sends with a request that commits (`"strict"`, as `/api/cmd` takes it); strict when absent.
+fn strict_of(req: &Value) -> bool {
+    req.get("strict").and_then(Value::as_bool).unwrap_or(true)
+}
+
+fn board_stepped(dir: &Path, cmds: Vec<Cmd>, strict: bool) -> Result<String, String> {
     let cmd = if cmds.len() == 1 { cmds.into_iter().next().unwrap() } else { Cmd::Batch { cmds } };
-    board::step(dir, cmd, true, "ui").map_err(|e| board::reasons(&e))
+    board::step(dir, cmd, strict, "ui").map_err(|e| board::reasons(&e))
 }
 
 /// `POST /api/tune/update` `{id, settings}`: the pattern tuned again with these settings (`ShowPropertiesDialog`'s OK, `EditStart`, `Update`, `EditFinish`).
@@ -480,7 +487,7 @@ pub fn update(dir: &Path, body: &[u8]) -> Value {
             }
         }
     }
-    match tune_edit::retune_cmds(&scene, &p, &settings).and_then(|cmds| board_stepped(dir, cmds)) {
+    match tune_edit::retune_cmds(&scene, &p, &settings).and_then(|cmds| board_stepped(dir, cmds, strict_of(&req))) {
         Ok(summary) => {
             let after = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.id == p.id));
             json!({ "ok": true, "message": summary, "pattern": after.as_ref().map(pattern_json), "info": after.map(|q| q.tuning_info()) })
@@ -501,7 +508,7 @@ pub fn remove(dir: &Path, body: &[u8]) -> Value {
         Ok(p) => p,
         Err(m) => return err(m),
     };
-    match tune_edit::reset_cmd(&scene, &p).and_then(|c| board_stepped(dir, vec![c])) {
+    match tune_edit::reset_cmd(&scene, &p).and_then(|c| board_stepped(dir, vec![c], strict_of(&req))) {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(m) => err(m),
     }
@@ -541,7 +548,7 @@ pub fn regenerate(dir: &Path, body: &[u8]) -> Value {
     if cmds.is_empty() {
         return err(format!("No tuning pattern could be regenerated. {}", failed.join(" ")));
     }
-    match board_stepped(dir, cmds) {
+    match board_stepped(dir, cmds, strict_of(&req)) {
         Ok(summary) => json!({ "ok": true, "message": summary, "regenerated": chosen.len() - failed.len(), "failed": failed }),
         Err(m) => err(m),
     }
@@ -880,6 +887,38 @@ mod tests {
         let rounded = pts(&m);
         assert!(segs(&rounded).iter().any(|&(dx, dy)| dx != 0 && dy != 0 && dx.abs() != dy.abs()), "rounded corners are arcs");
         assert!(rounded.iter().flatten().any(|q| q.1 > 9_800_000), "both sides");
+    }
+
+    /// The message panel's routed length is `BOARD::GetTrackLength( *primaryItem )`: the items `GetConnectedItems( &aTrack, EXCLUDE_ZONES )` gives,
+    /// the piece of the net the pattern's track is in -- a 10 mm piece of the same net elsewhere, touching nothing, is not counted (UI-LEFT-3 R3-4).
+    #[test]
+    fn the_panels_routed_length_is_the_connected_items_not_the_whole_net() {
+        let dir = scratch("panel_piece");
+        let straight = |y: Nm, x0: f64, x1: f64| vec![p(mm(x0), y), p(mm(x1), y)];
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", straight(mm(9.5), 5.0, 25.0)), ("OTHER", straight(mm(10.5), 5.0, 25.0)), ("SIG", straight(mm(16.0), 5.0, 15.0))]);
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })))["ok"], json!(true));
+        let pat = &tune_edit::patterns_of(&design_of(&dir))[0];
+        let pv = pattern(&dir, &body(json!({ "id": pat.id })));
+        let routed = pv["panel"]["primary"]["length"].as_i64().unwrap();
+        assert!((routed - 24_000_000).abs() < 200_000, "the tuned piece only, not the 10 mm one beside it: {routed}");
+    }
+
+    /// A pattern's commit follows the Strict switch the studio sends (`"strict"`, strict when absent): the switch read from the request, and a pattern
+    /// committed with it off, one undo step as with it on.
+    #[test]
+    fn a_patterns_commit_takes_the_strict_switch() {
+        assert!(strict_of(&json!({})) && strict_of(&json!({ "strict": true })) && !strict_of(&json!({ "strict": false })));
+        let dir = scratch("tune_strict_off");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        let s = start(&dir, &body(json!({ "x": 8_000_000, "y": 9_500_000, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 24_000_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        mv(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000 })));
+        assert_eq!(fix(&dir, &body(json!({ "x": 22_000_000, "y": 9_000_000, "strict": false })))["ok"], json!(true));
+        assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1);
     }
 
     /// The board's rules as `.kicad_dru` text (what the rule engine compiles).

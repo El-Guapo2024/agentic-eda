@@ -1588,8 +1588,13 @@ impl Router {
         self.drag.as_mut().map(|d| d.drag(world, rules, &settings, at))
     }
 
-    /// The router's settings with the mode the drag started in.
+    /// The router's settings a drag runs with: `DRAGGER::Start`'s `m_currentMode = Settings().Mode()` keeps the mode the single drag started in;
+    /// the component and multi-track draggers read `Settings()` live (`COMPONENT_DRAGGER::FixRoute`'s `AllowDRCViolations()`, `MULTI_DRAGGER::Drag`'s
+    /// `switch( Settings().Mode() )`), so a mode changed while they run counts from the next position on.
     fn drag_settings(&self) -> RoutingSettings {
+        if self.group_drag.is_some() {
+            return self.settings.clone();
+        }
         RoutingSettings { mode: self.drag_mode.unwrap_or(self.settings.mode), ..self.settings.clone() }
     }
 
@@ -1790,7 +1795,7 @@ impl Router {
         });
         let p = self.snap_to_nearest(at, &items);
         let net = self.closest_net(at, &items);
-        let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items).ok_or("nothing to drag")?;
+        let dragger = crate::multi_dragger::MultiDragger::start(&self.world, p, &items, self.settings.mode).ok_or("nothing to drag")?;
         self.drag_net = net;
         self.session = None;
         self.diff = None;
@@ -1852,21 +1857,29 @@ impl Router {
             }
             GroupDrag::Multi(m) => {
                 let drag = m.drag(world, rules, settings, at);
-                let fanout = drag.lines.iter().map(|(_, l)| l.clone()).collect();
-                crate::dragger::DragPreview { colliding: drag.colliding, fanout, displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() }
+                // `ROUTER::moveDragging`: `updateView( m_dragger->CurrentNode(), .. )` -- a position not resolved shows `m_lastNode`: the world as it is
+                // (nothing drawn over the board), or the shove's frame, whose dragged lines are not in it (only what the frame pushed is drawn)
+                match drag.unresolved {
+                    Some(crate::multi_dragger::Unresolved::World) => crate::dragger::DragPreview::default(),
+                    Some(crate::multi_dragger::Unresolved::ShoveFrame) => crate::dragger::DragPreview { displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() },
+                    None => {
+                        let fanout = drag.lines.iter().map(|(_, l)| l.clone()).collect();
+                        crate::dragger::DragPreview { colliding: drag.colliding, fanout, displaced_lines: drag.displaced_lines, displaced_vias: drag.displaced_vias, ..Default::default() }
+                    }
+                }
             }
         }
     }
 
-    /// `ROUTER::FixRoute` of a group drag (`m_dragger->FixRoute( aForceCommit )`, after the position the click is at): the commit, or `None`
-    /// when the dragger refuses it -- and the drag is over either way (`InlineDrag`).
-    fn group_drag_finish(&mut self, at: Point, force_commit: bool, settings: &RoutingSettings) -> Option<RouteCommit> {
+    /// `ROUTER::FixRoute` of a group drag (`m_dragger->FixRoute( aForceCommit )`): the commit of what the last motion left (`CurrentNode()`, the
+    /// node the last `Drag` made: `InlineDrag`'s click calls `FixRoute` with no `Move` first, so `at` is not dragged to), or `None` when the dragger
+    /// refuses it -- and the drag is over either way (`InlineDrag`).
+    fn group_drag_finish(&mut self, _at: Point, force_commit: bool, settings: &RoutingSettings) -> Option<RouteCommit> {
         let mut g = self.group_drag.take()?;
         let (world, rules) = (&self.world, &self.rules);
         let mut commit = RouteCommit::default();
         match &mut g {
             GroupDrag::Component(c) => {
-                c.drag(world, at);
                 let cc = c.fix_route(world, rules, settings, force_commit)?;
                 commit.remove_track_ids = cc.remove_track_ids;
                 for (k, line) in cc.tracks.iter().enumerate() {
@@ -1878,7 +1891,6 @@ impl Router {
                 commit.move_by = cc.offset;
             }
             GroupDrag::Multi(m) => {
-                m.drag(world, rules, settings, at);
                 // `GetLastCommittedLeaderSegments()`: what `InlineDrag` selects once the drag is over, whatever `FixRoute` says
                 self.drag_leaders = m.leader_segments(world).into_iter().map(|(layer, (a, b))| (self.layer_name(layer).to_string(), a, b)).collect();
                 let mc = m.fix_route(world, settings)?;
@@ -2082,7 +2094,7 @@ pub fn line_to_tracks(line: &Line, layer_name: &str, net: Option<&str>) -> Vec<e
         .into_iter()
         .map(|piece| match piece {
             LinePiece::Poly(pts) => eda_model::ir::Track { id: String::new(), net: net.clone(), pins: Vec::new(), layer: layer_name.to_string(), width: line.width, pts, arc_mid_offset: None },
-            LinePiece::Arc(ArcPts { start, mid, end }) => eda_model::ir::Track::new_arc(net.clone(), layer_name.to_string(), line.width, start, mid, end),
+            LinePiece::Arc(ArcPts { start, mid, end, .. }) => eda_model::ir::Track::new_arc(net.clone(), layer_name.to_string(), line.width, start, mid, end),
         })
         .collect()
 }

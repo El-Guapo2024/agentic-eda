@@ -25,7 +25,7 @@
 //!    `optimizeTailHeadTransition` (its `FANOUT_CLEANUP` straightens a short fan-out from a pad) and `mergeHead` are ported
 //!    ([`LinePlacer::build_head`]), and the walk and the shove are of the whole leg, split back into head and tail (`splitHeadTail`). A repeated
 //!    request for the same cursor starts from the state before the last one, as the tracer does. The tail keeps a rounded corner's arc
-//!    (UI-LEFT-2 RR4); **differs:** a cut inside an arc leaves chords, not KiCad's shorter arc.
+//!    (UI-LEFT-2 RR4), and a cut inside an arc keeps the part left as a shorter arc on the same circle (`splitArc`, UI-LEFT-3 R3-9).
 //!
 //! Each fixed "run" is single-layer (`crate::line::Line`); a via placed
 //! mid-route (`switch_layer`) ends the current run and starts a new one on
@@ -175,6 +175,12 @@ pub struct LinePlacer {
     /// The cursor of the last `Move` and the tracer as it was before it: asking again about the same cursor (a click at the place the cursor is) starts
     /// from that state, so it gives the posture the person saw.
     last_move: RefCell<Option<(Point, MouseTrailTracer, TailState)>>,
+    /// `m_last_p_end`: the cursor of the last `routeStep` (set at its end, every mode; reset by `initPlacement` at `Start` only), the second lead
+    /// `buildInitialLine` pushes a pending via along ([`Self::push_via`]).
+    last_p_end: Cell<Option<Point>>,
+    /// `aViaOk` of the last `rhWalkBase`: whether `buildInitialLine` freed the pending via (`v.PushoutForce` in one of its two attempts). A head whose
+    /// via it could not free has no via (`if( m_placingVia && viaOk ) .. AppendVia`).
+    via_ok: Cell<bool>,
     /// `m_tail`, `m_head`, `m_direction` and `m_initial_direction` of the leg being routed: what `routeStep` keeps from one `Move` to the next in
     /// Walk around and Shove ([`TailState`]).
     tail_state: RefCell<TailState>,
@@ -247,7 +253,7 @@ impl LinePlacer {
         trail.add_trail_point(p);
         trail.set_tolerance(width);
         trail.set_default_directions(direction, Direction45::Undefined);
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_p_end: Cell::new(None), via_ok: Cell::new(true), tail_state: RefCell::new(TailState::new(direction)), stage_dirs: Vec::new(), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: Nm::ZERO, via_drill: Nm::ZERO, via_to_layer: None, via_span: None, runs: Vec::new(), fixed_vias: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None, springback: RefCell::new(Springback::new()), last_world: RefCell::new(World::default()), last_good: RefCell::new(None), stages: Vec::new(), start_layers, chained: false, start_on_segment }
     }
 
     /// `FixRoute`'s `setInitialDirection( d_last )` -- "if( m_tail.SegmentCount() == 0 ) m_direction = aDirection;" -- then
@@ -292,9 +298,9 @@ impl LinePlacer {
     /// The tail and head keep their arcs (a rounded corner mode's, [`TailState::arcs`]), and the steps treat them as KiCad's do: `mergeHead` and
     /// `optimizeTailHeadTransition` count an arc as one shape, `mergeHead` and `handlePullback` take an arc's direction as `DIRECTION_45( const
     /// SHAPE_ARC& )` does, `handlePullback`'s `RemoveShape( -1 )` takes a whole arc off the tail, and the optimizer leaves a line with an arc alone
-    /// (`hasArcs`), so the tail-head merge and the fan-out cleanup do nothing there (UI-LEFT-2 RR4). **Differs:** where `reduceTail` or
-    /// `handleSelfIntersections` cut the tail inside an arc (`SHAPE_LINE_CHAIN::Remove`'s `splitArc` keeps the part of the arc left as a shorter
-    /// arc), the part left is the arc's chords: the studio's lines hold an arc whole or not at all ([`Line::arcs`]).
+    /// (`hasArcs`), so the tail-head merge and the fan-out cleanup do nothing there (UI-LEFT-2 RR4). Where `reduceTail`, `handleSelfIntersections`
+    /// or `splitHeadTail` cut inside an arc, `SHAPE_LINE_CHAIN::Remove`'s, `Split`'s and `Slice`'s `splitArc` keep each part as an arc on the
+    /// same circle ([`crate::line::split_arcs_at`], [`ArcPts::sub_arc`]; UI-LEFT-3 R3-9).
     fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
         let follow_mouse = settings.mode != Mode::MarkObstacles;
         let mut st = self.tail_state.borrow().clone();
@@ -344,6 +350,8 @@ impl LinePlacer {
         }
         st.prune_arcs();
         *self.tail_state.borrow_mut() = st.clone();
+        // `m_last_p_end = aP;`, the last thing `routeStep` does
+        self.last_p_end.set(Some(p));
         match routed.filter(|_| !fail) {
             Some(mut r) => {
                 // `Trace()`: the tail and the head, with their arcs (a rounded corner merged into the tail stays an arc, UI-LEFT-2 RR4)
@@ -406,6 +414,8 @@ impl LinePlacer {
         }
         if let Some((i, dir)) = reduce {
             st.direction = dir;
+            // `tail.Remove( reduce_index + 1, -1 )`: an arc the cut falls inside keeps its first part, an arc (`splitArc`)
+            crate::line::split_arcs_at(&mut st.arcs, &st.tail, i);
             st.tail.truncate(i + 1);
             st.head.clear();
             return true;
@@ -466,6 +476,9 @@ impl LinePlacer {
         if merged.segment_count() < new_head.segment_count() && merged.pts.len() >= 2 {
             st.head.clear();
             let keep = st.tail.len() - threshold;
+            if keep > 0 {
+                crate::line::split_arcs_at(&mut st.arcs, &st.tail, keep - 1);
+            }
             st.tail.truncate(keep);
             append_points(&mut st.tail, &merged.pts);
             simplify_points(&mut st.tail);
@@ -532,7 +545,10 @@ impl LinePlacer {
             let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
             let (mut walk_p, mut walked) = (p, None);
             for _round in 0..2 {
-                let target = self.push_via(world, rules, settings, walk_p, to_layer, mask);
+                // `aViaOk = buildInitialLine( walkP, l1, aMode, .. )`: the head goes to where the via was freed, or -- not freed -- to the cursor
+                let freed = self.try_push_via(world, rules, settings, walk_p, to_layer, mask);
+                self.via_ok.set(freed.is_some());
+                let target = freed.unwrap_or(walk_p);
                 let l1 = with_tail(build_l1(target));
                 let w = walkaround::walk_base_line(world, rules, &l1, &st.tail, mask, iteration_limit, settings.walkaround_hug_length_threshold, &exclude, settings.corner_mode)?;
                 walk_p = w.last().unwrap_or(target);
@@ -552,10 +568,10 @@ impl LinePlacer {
                 let head = optimized.pts.clone();
                 return (optimized, head, Vec::new());
             }
-            // the head and the tail keep the arcs of the line that are still whole in them
-            let (head_pts, tail_pts) = split_head_tail(&line.pts, &st.tail);
-            let head = optimize(&Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts) }, world);
-            let mut full = Line { arcs: line.arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone()) };
+            // the head and the tail keep the arcs of the line in them, an arc the split falls inside as its two pieces
+            let (head_pts, tail_pts, split_arcs) = split_head_tail_arcs(&line.pts, &line.arcs, &st.tail);
+            let head = optimize(&Line { arcs: split_arcs.clone(), ..Line::from_points(self.net.clone(), self.current_layer, self.width, head_pts) }, world);
+            let mut full = Line { arcs: split_arcs, ..Line::from_points(self.net.clone(), self.current_layer, self.width, tail_pts.clone()) };
             append_points(&mut full.pts, &head.pts);
             full.arcs.extend(head.arcs.iter().copied());
             let kept = arcs_in(&full.arcs, &full.pts);
@@ -574,7 +590,7 @@ impl LinePlacer {
                 // `if( m_placingVia && viaOk ) newHead.AppendVia( makeVia( newHead.CLastPoint() ) )`: the via is part of the head, so the shove
                 // moves what is in the way of the via as well as what is in the way of the track (`SHOVE::Run`: `headVia->SetRank( 100000 )`,
                 // `m_currentNode->Add( std::move( headVia ) )`)
-                let head_via = if self.placing_via { walked.last().map(|end| self.make_via(end)) } else { None };
+                let head_via = if self.placing_via && self.via_ok.get() { walked.last().map(|end| self.make_via(end)) } else { None };
                 // `SHOVE::Run`: "Pop NODEs containing previous shoves which are no longer necessary" (`reduceSpringback( headSet )`), then
                 // `m_currentNode = parent->Branch()`: the shove starts from the world the newest frame the head still presses on left
                 let head_set = HeadSet { pts: &walked.pts, net: &self.net, layer: self.current_layer, width: self.width, via: head_via.as_ref() };
@@ -600,9 +616,10 @@ impl LinePlacer {
                     // shortcut is only taken where the pushed items now allow it.
                     let (optimized, head, tail) = split_and_optimize(line, &outcome.world);
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
-                    // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame
+                    // `pushSpringback( m_currentNode, m_affectedArea )`: the world this shove left is the newest frame, the joints it locked with it
                     let mut world = parent;
                     world.merge_shove(&outcome.displaced_lines, &outcome.displaced_vias);
+                    world.lock_head_ends(&walked.pts, &self.net, head_via.is_some());
                     self.springback.borrow_mut().push(node, world.clone(), outcome.area);
                     let r = HeadResult { pts: optimized.pts, arcs: optimized.arcs, colliding: false, displaced_lines: world.displaced_lines(node), displaced_vias: world.displaced_vias(), world, via, via_shoved: true, kept: false };
                     return Some((r, head, tail));
@@ -656,7 +673,8 @@ impl LinePlacer {
                 // `rhWalkOnly` fails when the walk does (ST_STUCK) or still collides
                 walked.map(|path| {
                     let (optimized, head, tail) = split_and_optimize(path, world_node);
-                    let via = if self.placing_via { optimized.last() } else { None };
+                    // `if( m_placingVia && viaOk ) walkFull.AppendVia( .. )`
+                    let via = if self.placing_via && self.via_ok.get() { optimized.last() } else { None };
                     (HeadResult { via, ..HeadResult::plain_line(optimized, false, node, current) }, head, tail)
                 })
             }
@@ -668,8 +686,8 @@ impl LinePlacer {
     /// &m_head, false )`, `HullCache( obs->m_item, clearance, m_head.Width(), m_head.Layer() )`) and the point of it nearest the cursor `p` --
     /// `hull.NearestPoint( aP )`, or in `MITERED_90` / `ROUNDED_90` `hull.BBox().NearestPoint( aP )`. When that point is within half the head's width
     /// of the cursor (`( nearest - aP ).EuclideanNorm() < m_head.Width() / 2`), the head is built to it instead (`buildInitialLine( nearest, .. )`):
-    /// the caller does that. `None`: no obstacle, or the cursor is not that close to its hull. **Differs:** for a pad or via whose hole reaches
-    /// further than its copper the hull is the hole's ([`Node::obstacle_hull`]), where KiCad's nearest obstacle may be the `HOLE` item itself.
+    /// the caller does that. `None`: no obstacle, or the cursor is not that close to its hull. The nearest obstacle may be a pad's or via's hole
+    /// (`HOLE_T`, [`crate::node::NearestHit::hole`]), whose own hull is then the one ([`Node::obstacle_hulls`]).
     fn mark_obstacles_snap(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, raw: &Line, p: Point) -> Option<Point> {
         // `buildInitialLine( aP, m_head, RM_MarkObstacles )`: a pending via is appended at the cursor
         let via = self.placing_via.then(|| self.make_via(p));
@@ -677,7 +695,8 @@ impl LinePlacer {
         let hit = world.nearest_obstacle(raw, via.as_ref(), rules, &self.exclude(), opts)?;
         let item = world.get(hit.id)?;
         let head = crate::rule_resolver::Side::of_line(raw);
-        let hull = world.obstacle_hull(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
+        let hulls = world.obstacle_hulls(rules, item, head, Nm::ZERO, self.width, self.current_layer, false);
+        let Some((hull, _)) = hulls.iter().find(|(_, h)| *h == hit.hole).or(hulls.first()).cloned() else { return None };
         if hull.is_empty() {
             return None;
         }
@@ -746,19 +765,36 @@ impl LinePlacer {
         self.push_via(node, rules, settings, at, to_layer, mask)
     }
 
-    /// `buildInitialLine`'s `v.PushoutForce( m_currentNode, lead, force, collMask, iterLimit )` for the pending via at `at`, the lead from where
-    /// this leg started: where it comes free of the items of `mask`, or `at` when it does not.
+    /// `buildInitialLine`'s `v.PushoutForce( m_currentNode, lead, force, collMask, iterLimit )` for the pending via at `at`, in two attempts
+    /// (`for( int attempt = 0; attempt < 2; attempt++ )`): along the lead from where this leg started (`aP - m_p_start`), then -- when the last
+    /// `routeStep` left a cursor (`m_last_p_end`) -- along the lead from that cursor (`aP - m_last_p_end.value()`): where it comes free of the items
+    /// of `mask`, or `at` when neither attempt frees it.
     fn push_via(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, at: Point, to_layer: i32, mask: u8) -> Point {
         if settings.mode == Mode::MarkObstacles {
             return at;
         }
+        self.try_push_via(node, rules, settings, at, to_layer, mask).unwrap_or(at)
+    }
+
+    /// [`Self::push_via`]'s two attempts, `None` when neither frees the via (`buildInitialLine`'s `return false; // via placement unsuccessful`).
+    fn try_push_via(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, at: Point, to_layer: i32, mask: u8) -> Option<Point> {
+        if settings.mode == Mode::MarkObstacles {
+            return Some(at);
+        }
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers(to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false, layer_diameters: Vec::new(), is_virtual: false };
         let start = self.fixed_start();
-        let lead = (at.x - start.x, at.y - start.y);
-        match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
-            Some(force) => Point { x: at.x + force.0, y: at.y + force.1 },
-            None => at,
+        for attempt in 0..2 {
+            let from = match (attempt, self.last_p_end.get()) {
+                (0, _) => start,
+                (_, Some(last)) => last,
+                (_, None) => start,
+            };
+            let lead = (at.x - from.x, at.y - from.y);
+            if let Some(force) = crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
+                return Some(Point { x: at.x + force.0, y: at.y + force.1 });
+            }
         }
+        None
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
@@ -821,14 +857,21 @@ impl LinePlacer {
                 // shoved together with the head: what was in its way has been moved, so the via is where the head ends and collides with nothing
                 Some((head.last().unwrap_or(target), self.via_diameter, self.via_drill))
             } else {
-                // pushed off before the head was walked to it (the head ends there), or placed on the head's end now
+                // pushed off before the head was walked to it (the head ends there), or (Highlight collisions) placed on the head's end now;
+                // in Walk around / Shove a via `buildInitialLine` could not free is not on the head (`aViaOk` false: no `AppendVia`)
                 let to_layer = self.via_to_layer.unwrap_or(self.current_layer);
-                let placed = resolved_via.unwrap_or_else(|| self.place_via(node, rules, settings, head.last().unwrap_or(target), to_layer));
-                let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
-                if node.first_colliding(&shape, &self.net, self.via_layers(to_layer), rules, &[]).is_some() {
-                    colliding = true;
-                }
-                Some((placed, self.via_diameter, self.via_drill))
+                let placed = match resolved_via {
+                    Some(v) => Some(v),
+                    None if settings.mode != Mode::MarkObstacles => None,
+                    None => Some(self.place_via(node, rules, settings, head.last().unwrap_or(target), to_layer)),
+                };
+                placed.map(|placed| {
+                    let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
+                    if node.first_colliding(&shape, &self.net, self.via_layers(to_layer), rules, &[]).is_some() {
+                        colliding = true;
+                    }
+                    (placed, self.via_diameter, self.via_drill)
+                })
             }
         } else {
             None
@@ -1089,6 +1132,13 @@ impl LinePlacer {
     /// shrink below the route's own origin.
     pub fn undo_last_segment(&mut self) -> bool {
         let Some(popped) = self.runs.pop() else { return false };
+        // `UnfixRoute`: "m_p_start = st.pts[0].p" -- the leg starts where the undone run did (with no run left that is not the via the run ended in,
+        // which a click's via had made the start)
+        if self.runs.is_empty() {
+            if let Some(&first) = popped.pts.first() {
+                self.origin = first;
+            }
+        }
         // `UnfixRoute`: "m_startItem = nullptr;" (`m_chainedPlacement` is left as it was)
         self.start_layers = None;
         // the via that run ended in goes with it, and the route is back on the layer the run was on (`m_currentLayer = st.pts[0].layer`)
@@ -1435,11 +1485,21 @@ fn find_point(chain: &[Point], p: Point) -> Option<usize> {
 /// where it leaves the old tail -- at the first point of the old tail it no longer has (`l2.CLine().Find( aOldTail.CPoint( i ) ) < 0`), the old
 /// tail's end first split into it when it lies on one of its segments (`PointOnEdge`, `Split`). `(head, tail)`; with an old tail of fewer than two
 /// points the whole line is the head.
+#[cfg(test)]
 pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>) {
+    let (head, tail, _) = split_head_tail_arcs(line, &[], old_tail);
+    (head, tail)
+}
+
+/// [`split_head_tail`] of a line with arcs (`arcs`, found by their points): the third is the line's arcs after the split -- an arc the inserted
+/// point or the cut between tail and head falls inside is two arcs on the same circle (`Split`'s and `Slice`'s `splitArc`), so the head and the
+/// tail each keep their part of it as an arc.
+pub(crate) fn split_head_tail_arcs(line: &[Point], arcs: &[ArcPts], old_tail: &[Point]) -> (Vec<Point>, Vec<Point>, Vec<ArcPts>) {
     let mut l2 = line.to_vec();
+    let mut pool = arcs.to_vec();
     let n = l2.len();
     if !(n > 1 && old_tail.len() > 1) {
-        return (l2, Vec::new());
+        return (l2, Vec::new(), pool);
     }
     let last = *old_tail.last().unwrap();
     // `if( l2.CLine().PointOnEdge( aOldTail.CLastPoint() ) ) l2.Line().Split( aOldTail.CLastPoint() );`
@@ -1448,6 +1508,7 @@ pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>
         a == last || b == last || eda_drc::kimath::Seg::new(a, b).sq_distance_to_point(last) <= 1
     }) {
         if !l2.contains(&last) {
+            crate::line::split_arcs_for_insert(&mut pool, &l2, i + 1, last);
             l2.insert(i + 1, last);
         }
     }
@@ -1466,8 +1527,10 @@ pub(crate) fn split_head_tail(line: &[Point], old_tail: &[Point]) -> (Vec<Point>
     if i >= l2.len() {
         i = l2.len() - 1;
     }
+    // `Slice( 0, i )` and `Slice( i, -1 )`: an arc cut at `i` is two
+    crate::line::split_arcs_at(&mut pool, &l2, i);
     let tail = if i == 0 { Vec::new() } else { l2[..=i].to_vec() };
-    (l2[i..].to_vec(), tail)
+    (l2[i..].to_vec(), tail, pool)
 }
 
 /// `SHAPE_LINE_CHAIN::Intersect( aChain, aIp )` of two open chains, `ours` against `theirs` (KiCad 8303b2ad's: `theirs`' segments taken in the order
@@ -1540,6 +1603,8 @@ fn handle_self_intersections(st: &mut TailState) -> bool {
     }
     // `const SEG last = tail.CSegment( n - 1 ); m_direction = DIRECTION_45( last ); tail.Remove( n, -1 );`
     st.direction = Direction45::from_seg(st.tail[n - 1], st.tail[n]);
+    // `Remove( n, -1 )`: `splitArc( n, false )` keeps the part of an arc before the cut, an arc ending at point `n - 1`
+    crate::line::split_arcs_at(&mut st.arcs, &st.tail, n - 1);
     st.tail.truncate(n);
     true
 }
@@ -1791,6 +1856,49 @@ mod tests {
         assert_eq!(placer.place_via(&node, &rules, &marking, on_the_pad, 1), on_the_pad);
     }
 
+    /// `buildInitialLine`'s second attempt (UI-LEFT-3 R3-11): a via between two columns of pads, where the minimum translation vector only throws it
+    /// from one column to the other, is freed in the second half of `VIA::PushoutForce`'s steps by the lead alone. The lead from where the leg
+    /// started (`aP - m_p_start`, from above) runs down between the columns and never frees it; the second attempt's, from the cursor of the
+    /// last `routeStep` (`aP - m_last_p_end`, from below), runs up and out.
+    #[test]
+    fn a_via_the_first_lead_cannot_free_is_pushed_along_the_lead_from_the_last_cursor() {
+        let mut node = Node::new();
+        for (k, y) in [0.0, -1.0, -2.0, -3.0].into_iter().enumerate() {
+            for (side, x) in [("L", -0.55), ("R", 0.55)] {
+                let c = Point { x: mm(x), y: mm(y) };
+                node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r: mm(0.5) }, source: format!("U{k}.{side}"), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
+            }
+        }
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Walkaround, via_force_prop_iteration_limit: 20, ..RoutingSettings::default() };
+        let at = Point { x: Nm::ZERO, y: Nm::ZERO };
+        let mut placer = LinePlacer::start(&node, Point { x: Nm::ZERO, y: mm(10.0) }, None, net_of("SIG"), 0, mm(0.2));
+        placer.toggle_via(true, mm(0.6), mm(0.3));
+        assert_eq!(placer.place_via(&node, &rules, &settings, at, 1), at, "no last cursor: both attempts lead down, and the via stays");
+        placer.preview(&node, &rules, &settings, Point { x: Nm::ZERO, y: mm(-10.0) });
+        assert_eq!(placer.last_p_end.get(), Some(Point { x: Nm::ZERO, y: mm(-10.0) }));
+        let placed = placer.place_via(&node, &rules, &settings, at, 1);
+        assert!(placed.y > mm(0.8), "pushed up and out: {placed:?}");
+    }
+
+    /// `buildInitialLine`'s `return false; // via placement unsuccessful` (UI-LEFT-3, router-2 follow-up): in Walk around a pending via that
+    /// `VIA::PushoutForce` cannot free in its steps is not on the head (`if( m_placingVia && viaOk ) walkFull.AppendVia( .. )`) -- the preview has no
+    /// via; with the steps to free it, the via is on the head where it came free.
+    #[test]
+    fn a_via_that_cannot_be_freed_leaves_the_head_with_no_via() {
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: Nm::ZERO, y: Nm::ZERO }, shape: Shape::Circle { c: Point { x: Nm::ZERO, y: Nm::ZERO }, r: mm(0.5) }, source: "U1.1".into(), edge: false, rule: 0, free_pad: false, anchor_points: Vec::new() }));
+        let rules = rules();
+        let cursor = Point { x: mm(0.95), y: Nm::ZERO };
+        for (limit, via) in [(1, false), (40, true)] {
+            let settings = RoutingSettings { mode: Mode::Walkaround, via_force_prop_iteration_limit: limit, ..RoutingSettings::default() };
+            let mut placer = LinePlacer::start(&node, Point { x: mm(5.0), y: Nm::ZERO }, None, net_of("SIG"), 0, mm(0.2));
+            placer.toggle_via(true, mm(0.6), mm(0.3));
+            let pv = placer.preview(&node, &rules, &settings, cursor);
+            assert_eq!(pv.via.is_some(), via, "limit {limit}: {:?}", pv.via);
+        }
+    }
+
     /// findings p5 F2-4 / F2-5: a `Move` whose `routeHead` fails keeps the head of the last one that routed (`routeStep`: `m_head = std::move(
     /// prevHead )`), not colliding, and a click fixes that head; with no head routed yet it is a zero-length one, which a click cannot fix.
     /// A walk fails when the start itself collides (every clipped prefix does); here the world grows a pad over the start between two moves.
@@ -2005,6 +2113,7 @@ mod tests {
             vias: placer.displaced_vias().map(|(v, p)| (v.to_string(), p)).collect(),
             fixed: placer.placed_runs(),
             fixed_vias: Vec::new(),
+            locked: Vec::new(),
         };
         world.apply(node)
     }
@@ -2188,6 +2297,66 @@ mod tests {
         assert!(!near_via(&pv), "GND is not shoved onto the via, nor walked round it: {:?}", pv.displaced_lines);
         assert_eq!(placer.placed_vias().len(), 1);
         assert_eq!(placer.placed_vias()[0].pos, at(5.0, 0.0), "the via stays where it was placed");
+    }
+
+    /// The locks of a click's via are the shoves': `SHOVE::Run` locks the joint a leg starts from in the frame it pushes (`LockJoint( head.CPoint( 0
+    /// ) )`), and the frames after keep it (`NODE::Branch` copies the joints) -- so where the leg that starts at a via had no shove (routed in Walk
+    /// around: `ChangeRouterMode` while routing), no frame holds that lock, and a later leg's shove that pushes GND onto the via pushes the via
+    /// (`pushOrShoveVia`, `ShoveVias()`), as KiCad's does. The legs of the test above, the second walked.
+    #[test]
+    fn a_later_legs_shove_pushes_a_clicks_via_no_shove_locked() {
+        use crate::item::Segment;
+        let rules = rules();
+        let at = |x: f64, y: f64| Point { x: mm(x), y: mm(y) };
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 1, a: at(2.0, 0.8), b: at(7.0, 0.8), width: mm(0.2), source_track: Some(("G".into(), 0)), locked: false }));
+        let settings = RoutingSettings { mode: Mode::Shove, fix_all_segments: true, ..RoutingSettings::default() };
+        let walk = RoutingSettings { mode: Mode::Walkaround, ..settings.clone() };
+        let mut placer = LinePlacer::start(&node, at(0.0, 0.0), None, net_of("SIG"), 0, mm(0.2));
+        placer.preview(&node, &rules, &settings, at(0.5, 0.0));
+        placer.preview(&node, &rules, &settings, at(5.0, 0.0));
+        placer.toggle_via(true, mm(0.6), mm(0.3));
+        placer.switch_layer(&node, &rules, &settings, at(5.0, 0.0), 1, mm(0.6), mm(0.3));
+        for (s, moves, fix) in [(&walk, vec![at(6.0, 0.0)], at(8.0, 0.0)), (&settings, vec![at(8.0, 0.5)], at(8.0, 0.95))] {
+            for m in moves {
+                placer.preview(&node, &rules, s, m);
+            }
+            assert_eq!(placer.fix(&node, &rules, s, fix), FixOutcome::Fixed { real_end: false });
+        }
+        let frame = placer.springback.borrow().locked_top();
+        assert!(frame.locked.iter().all(|(p, _)| *p != at(5.0, 0.0)), "no frame locked the via's joint: {:?}", frame.locked);
+        for x in [7.5, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0] {
+            placer.preview(&node, &rules, &settings, at(x, 0.95));
+        }
+        assert_eq!(placer.placed_vias().len(), 1);
+        let via = placer.placed_vias()[0].pos;
+        assert_ne!(via, at(5.0, 0.0), "the via is pushed");
+        let runs = placer.placed_runs();
+        assert_eq!(runs.iter().filter(|r| r.first() == Some(via) || r.last() == Some(via)).count(), 2, "the runs on it follow it: {via:?} {runs:?}");
+    }
+
+    /// `handleSelfIntersections`' `tail.Remove( n, -1 )` inside an arc of the tail (a rounded corner mode's corner, UI-LEFT-3 R3-9): `splitArc`
+    /// keeps the part before the cut as an arc on the same circle, ending at the tail's new last point -- the tail is not left with the arc's chords.
+    #[test]
+    fn a_tail_cut_inside_its_arc_keeps_the_arcs_first_part_as_an_arc() {
+        let pt = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+        let arc = ArcPts::new(pt(0, 0), pt(2_928_932, 7_071_068), pt(10_000_000, 10_000_000));
+        let mut tail = vec![pt(-5_000_000, 0)];
+        tail.extend(arc.polyline());
+        tail.push(pt(20_000_000, 10_000_000));
+        let k = tail.len() / 2;
+        // a head from the tail's end back across the arc, between its vertices k - 1 and k
+        let (a, b) = (tail[k - 1], tail[k]);
+        let cross_at = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        let normal = (-(b.y - a.y), b.x - a.x);
+        let head = vec![*tail.last().unwrap(), Point { x: cross_at.x + normal.0 * 50, y: cross_at.y + normal.1 * 50 }, Point { x: cross_at.x - normal.0 * 50, y: cross_at.y - normal.1 * 50 }];
+        let mut st = TailState { tail, head, arcs: vec![arc], direction: Direction45::E, initial: Direction45::E };
+        assert!(handle_self_intersections(&mut st));
+        let kept = st.tail_line();
+        // the head crosses segment k - 1: `n = k - 1`, and `Remove( n, -1 )` keeps the points before it
+        assert_eq!(kept.pts.len(), k - 1, "cut before the crossed chord");
+        let pieces = kept.pieces();
+        assert!(matches!(pieces[..], [crate::line::LinePiece::Poly(_), crate::line::LinePiece::Arc(p)] if p.start == arc.start && p.end == kept.pts[k - 2]), "{pieces:?}");
     }
 
     fn ts(tail: &[(f64, f64)], head: &[(f64, f64)]) -> TailState {

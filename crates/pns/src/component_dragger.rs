@@ -29,7 +29,9 @@
 //!
 //! ## `FixRoute` ([`ComponentDragger::fix_route`])
 //!
-//! `Settings().AllowDRCViolations() || aForceCommit || !node->CheckColliding( m_draggedItems )`: the moved pads, the moved tracks and the new
+//! `Settings().AllowDRCViolations() || aForceCommit || !node->CheckColliding( m_draggedItems )`, of the node the last `Drag` made (`CurrentNode()`:
+//! `InlineDrag`'s click calls `FixRoute` with no `Move` first, so the commit is of the last motion's position) and of the settings as they are then
+//! (the router's mode read live): the moved pads -- each with its hole ([`crate::node::Node::item_colliding`]) --, the moved tracks and the new
 //! lines may collide with nothing of the world, unless violations are allowed (Highlight collisions with "Allow DRC violations") or the click
 //! is a Ctrl+click. `GetForceMarkObstaclesMode` is false and `m_dragStatus` is never set: there is no "Track violates DRC." hint, and a
 //! refused click ends the drag with nothing committed (`InlineDrag` breaks out of its loop whatever `FixRoute` says).
@@ -48,8 +50,9 @@
 //! - (no longer a difference) a footprint's own Edge.Cuts and Margin graphics -- its art since the importer keeps them there -- are among the
 //!   solids dragged (`InlineDrag`: `GraphicalItems()` on Edge_Cuts or Margin, `itemsToDrag.Add( solid )`; `from_ir::edge_source`), so a pad
 //!   keeps its distance to the footprint's own slot or edge as the footprint moves;
-//! - a pad's own hole is not asked as the probe of `CheckColliding` (see [`crate::node::Node::item_colliding`]); the world's holes are, and a
-//!   moved pad's hole moves with it ([`crate::rule_resolver::RuleResolver::pad_hole_of`]);
+//! - (no longer a difference) a moved pad's own hole is asked with it (`aHead->HasHole()`: [`crate::node::Node::item_colliding`]), and moves with it
+//!   ([`crate::rule_resolver::RuleResolver::pad_hole_of`]); the commit is of the last motion, and the mode is read when the click commits
+//!   (UI-LEFT-3 R3-3);
 //! - the rules that look at an item's geometry (`A.intersectsArea( .. )`) see a moved pad where the board has it.
 
 use crate::item::{Item, ItemId, Net};
@@ -309,7 +312,7 @@ impl ComponentDragger {
         })
     }
 
-    /// `COMPONENT_DRAGGER::FixRoute( aForceCommit )`: the drag at the last position it was given (or where it started), committed when
+    /// `COMPONENT_DRAGGER::FixRoute( aForceCommit )`: the drag at the last position `Drag` was given (`CurrentNode()`; where it started before any), committed when
     /// `Settings().AllowDRCViolations() || aForceCommit || !node->CheckColliding( m_draggedItems )`; `None` otherwise.
     pub fn fix_route(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, force_commit: bool) -> Option<ComponentCommit> {
         let drag = self.solve(world, self.last.unwrap_or(self.p0));

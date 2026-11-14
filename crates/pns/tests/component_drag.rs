@@ -206,6 +206,109 @@ fn a_refused_component_drag_ends_and_ctrl_commits_it() {
     assert!(router.drag_finish_with(to, true).is_some(), "Ctrl+click commits it");
 }
 
+/// `InlineDrag`'s click is `FixRoute` alone (no `Move` first): the commit is of the last motion's position (`CurrentNode()`), not of where the click
+/// is. And `COMPONENT_DRAGGER::FixRoute` reads `Settings()` then (`AllowDRCViolations()`): a drag started in Walk around and switched to Highlight
+/// collisions with "Allow DRC violations" commits a position that collides.
+#[test]
+fn a_component_drag_commits_the_last_motion_and_reads_the_mode_when_it_commits() {
+    let (mut design, model) = two_routed();
+    design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "gnd".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(25.0, 20.0), p(35.0, 20.0)], arc_mid_offset: None });
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_component(p(15.0, 15.0), &["R1".to_string()], true).unwrap();
+    router.drag_preview(p(16.0, 13.0));
+    let commit = router.drag_finish(p(19.0, 11.0)).expect("commits");
+    assert_eq!(commit.move_by, (mm(1.0), mm(-2.0)), "the last motion's position, not the click's");
+    // onto the GND track: refused in Walk around; the mode switched to Highlight collisions with Allow DRC violations before the click commits it
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_component(p(15.0, 15.0), &["R1".to_string()], true).unwrap();
+    assert!(router.drag_preview(p(30.0, 20.0)).unwrap().colliding);
+    router.settings.mode = Mode::MarkObstacles;
+    router.settings.can_violate_drc = true;
+    assert!(router.drag_finish(p(30.0, 20.0)).is_some(), "AllowDRCViolations() is read at the click");
+}
+
+/// A through-hole pad dragged next to a via of its own net: the copper of one net never collides ("same nets? no clearance!"), but the pad's
+/// hole is asked with the moved pad (`collideSimple`'s "special case for the "head" via's hole", `aHead->HasHole()`), and hole to hole has nothing
+/// to do with nets -- 0.15 mm between the two holes is under the board's 0.25 mm, so the click is refused.
+#[test]
+fn a_moved_pads_own_hole_keeps_the_hole_to_hole_clearance() {
+    let (mut design, mut model) = board(&[("J1", "THT", p(10.0, 10.0)), ("R2", "PAD1", p(30.0, 10.0))], &[("N1", &["J1.1", "R2.1"])]);
+    model.footprints.push(footprint("THT", vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(1.6), mm(1.6)), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(mm(1.0)), drill_slot: None, rot: 0, roundrect_ratio: None }]));
+    model.parts[0] = part("J1", "THT", 1);
+    model.board.hole_to_hole_min_nm = mm(0.25);
+    design.routing.as_mut().unwrap().vias.push(eda_model::ir::Via { id: "v1".into(), net: "N1".into(), at: p(20.0, 10.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_component(p(10.0, 10.0), &["J1".to_string()], true).unwrap();
+    // 0.8 mm from the via's centre: the holes 0.8 - 0.5 - 0.15 = 0.15 mm apart
+    assert!(router.drag_preview(p(19.2, 10.0)).unwrap().colliding, "the pad's hole is too near the via's");
+    assert!(router.drag_finish(p(19.2, 10.0)).is_none(), "refused");
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_component(p(10.0, 10.0), &["J1".to_string()], true).unwrap();
+    // 1.0 mm away: 0.35 mm between the holes
+    assert!(!router.drag_preview(p(19.0, 10.0)).unwrap().colliding);
+    assert!(router.drag_finish(p(19.0, 10.0)).is_some());
+}
+
+/// `syncPad`'s `solid->SetNet( aPad->GetNet() )`: the pad of a pin the model has on no net is on the `unconnected-(..)` net KiCad's netlist gives a
+/// lone pin (Update PCB puts it on the pad), so a route started on it takes that net, and copper of no net keeps its clearance from it (two items of
+/// no net would be one net to the router: "same nets? no clearance!").
+#[test]
+fn a_lone_pins_pad_is_on_its_unconnected_net_for_the_router() {
+    let (design, model) = board(&[("R1", "PAD1", p(10.0, 10.0)), ("R2", "PAD1", p(20.0, 10.0))], &[]);
+    let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+    let net_of_pad = |r: &str| node.iter().find_map(|(_, it)| match it {
+        Item::Solid(s) if s.source == format!("{r}.1") => Some(s.net.as_deref().map(str::to_string)),
+        _ => None,
+    });
+    assert_eq!(net_of_pad("R1"), Some(Some("unconnected-(R1-Pad1)".to_string())));
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(10.0, 10.0), "F.Cu", mm(0.2)).expect("starts on the pad");
+    let commit = router.finish(p(14.0, 10.0)).expect("commits");
+    assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.net == "unconnected-(R1-Pad1)"), "{:?}", commit.tracks.iter().map(|t| &t.net).collect::<Vec<_>>());
+    // a track of no net across R2's pad collides with it
+    let across = eda_drc::kimath::Shape::Stadium { a: p(18.0, 10.0), b: p(22.0, 10.0), r: mm(0.1) };
+    let hits = node.colliding_with(&across, &None, eda_pns::layer::LayerRange::single(0), &model.board, &[], eda_pns::node::QueryOpts::default());
+    assert!(hits.iter().any(|o| matches!(node.get(o.id), Some(Item::Solid(s)) if s.source == "R2.1")), "{hits:?}");
+    // and a route of no net started beside it walks round it
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(17.0, 10.0), "F.Cu", mm(0.2)).expect("starts in empty space");
+    let pv = router.preview(p(23.0, 10.0)).expect("a route");
+    assert!(!pv.colliding, "{pv:?}");
+    assert!(pv.head.pts.iter().any(|q| (q.y - mm(10.0)).abs() > mm(0.5)), "it goes round R2.1: {:?}", pv.head.pts);
+}
+
+/// A pad's hole is an obstacle of its own (`NODE::addSolid`: `addHole( aSolid->Hole() )`, `HOLE_T`): a vertical slot that pokes out of a wide oval
+/// pad, with a hole clearance of 0.4 mm against the copper's 0.2 mm. A track of another net just above the pad meets the slot's hull first
+/// (`NearestObstacle` reports the hole), and a walk along it goes round the hole and the copper both (UI-LEFT-3 R3-11).
+#[test]
+fn a_hole_that_pokes_out_of_its_pad_is_an_obstacle_of_its_own() {
+    let (design, mut model) = board(&[("J1", "SLOT", p(20.0, 10.0)), ("R2", "PAD1", p(5.0, 10.65)), ("R3", "PAD1", p(35.0, 10.65))], &[("N1", &["J1.1"]), ("N2", &["R2.1", "R3.1"])]);
+    model.footprints.push(footprint("SLOT", vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (Nm::ZERO, Nm::ZERO), size: (mm(2.0), mm(0.8)), shape: PadShape::Oval, kind: PadKind::ThroughHole, drill: None, drill_slot: Some((mm(0.6), mm(1.4))), rot: 0, roundrect_ratio: None }]));
+    model.parts[0] = part("J1", "SLOT", 1);
+    model.board.clearance = mm(0.2);
+    model.board.hole_clearance_nm = mm(0.4);
+    let (node, _) = eda_pns::from_ir::build_node(&design, &model);
+    // above the copper's clearance, inside the slot's
+    let line = eda_pns::line::Line::from_points(eda_pns::item::net_of("N2"), 0, mm(0.2), vec![p(15.0, 10.85), p(25.0, 10.85)]);
+    let hit = node.nearest_obstacle(&line, None, &model.board, &[], eda_pns::node::QueryOpts::default()).expect("the slot");
+    assert!(hit.hole, "the hole is met first: {hit:?}");
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(5.0, 10.65), "F.Cu", mm(0.2)).expect("starts on R2");
+    let pv = router.preview(p(35.0, 10.65)).expect("a route");
+    assert!(!pv.colliding, "{pv:?}");
+    let commit = router.finish(p(35.0, 10.65)).expect("commits");
+    let after = apply(&design, &commit);
+    let (node, _) = eda_pns::from_ir::build_node(&after, &model);
+    assert!(violations(&node, &model.board).is_empty(), "clear of the pad's copper and of its hole: {:?}", violations(&node, &model.board));
+}
+
 /// D on two selected parallel tracks: `MULTI_DRAGGER`, the second following the first at its distance; the commit replaces both.
 #[test]
 fn a_multi_track_drag_moves_the_selected_tracks_together() {
@@ -234,6 +337,26 @@ fn a_multi_track_drag_moves_the_selected_tracks_together() {
         let (node, _) = eda_pns::from_ir::build_node(&after, &model);
         assert!(loose_ends(&node).is_empty(), "{mode:?}: {:?}", loose_ends(&node));
     }
+}
+
+/// `ROUTER::moveDragging`'s `updateView( m_dragger->CurrentNode(), .. )` of a multi-track position not resolved: `m_lastNode` is null (a drag started
+/// in Walk around switched to Shove has no `SHOVE`), so the view shows the world as it is -- nothing drawn over the board, no line flagged.
+#[test]
+fn an_unresolved_multi_track_position_shows_the_board_as_it_is() {
+    let (mut design, model) = board(&[("R1", "PAD1", p(5.0, 10.0)), ("R2", "PAD1", p(35.0, 10.0)), ("R3", "PAD1", p(5.0, 12.0)), ("R4", "PAD1", p(35.0, 12.0))], &[("N1", &["R1.1", "R2.1"]), ("N2", &["R3.1", "R4.1"])]);
+    let rt = design.routing.as_mut().unwrap();
+    for (id, net, y) in [("ta", "N1", 10.0), ("tb", "N2", 12.0)] {
+        rt.tracks.push(eda_model::ir::Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: mm(0.2), pts: vec![p(5.0, y), p(35.0, y)], arc_mid_offset: None });
+    }
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.drag_start_multi(p(20.0, 10.0), &["ta".to_string(), "tb".to_string()]).expect("starts");
+    router.settings.mode = Mode::Shove;
+    let pv = router.drag_preview(p(20.0, 8.0)).unwrap();
+    assert!(pv.fanout.is_empty() && pv.displaced_lines.is_empty() && !pv.colliding, "the world as it is: {pv:?}");
+    router.settings.mode = Mode::Walkaround;
+    let pv = router.drag_preview(p(20.0, 8.0)).unwrap();
+    assert_eq!(pv.fanout.len(), 2, "resolved again: the lines are drawn");
 }
 
 fn qa_board(name: &str) -> Option<(Design, ConstraintModel)> {

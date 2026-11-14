@@ -14,6 +14,36 @@ use crate::item::{ItemId, Net};
 use crate::seg_ops::{self, Seg2};
 use eda_model::ir::{Point, Nm};
 
+/// `SHAPE_LINE_CHAIN::Remove( k + 1, -1 )` / `Slice( 0, k )` / `Slice( k, -1 )` of the chain `pts` (whose arcs are `pool`, found by their points) at
+/// its vertex `k`: an arc whose run holds `k` strictly inside is cut there (`splitArc`), and each of its two pieces is an arc of its own on the same
+/// circle ([`ArcPts::sub_arc`]) -- so what the cut keeps of the arc stays an arc, as KiCad's does, not its chords. The arc in `pool` is replaced by
+/// the two pieces.
+pub fn split_arcs_at(pool: &mut Vec<ArcPts>, pts: &[Point], k: usize) {
+    for run in arc_runs_in(pool, pts).into_iter().rev() {
+        if run.first < k && k < run.last {
+            let a = pool[run.arc];
+            pool[run.arc] = a.sub_arc(a.start, pts[k]);
+            pool.push(a.sub_arc(pts[k], a.end));
+        }
+    }
+}
+
+/// `SHAPE_LINE_CHAIN::Split( p )` of the chain `pts` (whose arcs are `pool`) where `p` goes in before index `at` (on the chord `pts[at - 1]`-`pts[at]`):
+/// an arc whose run holds that chord is cut at `p` (`splitArc( newIndex, true )`, "Make the inserted point a shared point") into two arcs on the
+/// same circle sharing it, in place of the arc in `pool`.
+pub fn split_arcs_for_insert(pool: &mut Vec<ArcPts>, pts: &[Point], at: usize, p: Point) {
+    if at == 0 {
+        return;
+    }
+    for run in arc_runs_in(pool, pts).into_iter().rev() {
+        if run.first < at && at <= run.last {
+            let a = pool[run.arc];
+            pool[run.arc] = a.sub_arc(a.start, p);
+            pool.push(a.sub_arc(p, a.end));
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Line {
     pub net: Net,
@@ -38,7 +68,8 @@ pub struct Line {
     /// every piece of code that works on `pts` works on an arc as the chords it is; this list says which runs of `pts` are an arc. An arc
     /// is **found again by its points** ([`Self::arc_runs`]): whatever edits `pts` and leaves the points of an arc as they are leaves it an
     /// arc, and whatever cuts into them -- a vertex inserted, a point moved or dropped -- turns it into plain segments, as KiCad's
-    /// `SHAPE_LINE_CHAIN::Replace`, `Insert` and `Split` do with an arc they cut. So a copy of a line (`..line.clone()`, `Line { pts, ..line }`)
+    /// `SHAPE_LINE_CHAIN::Replace` does with an arc it cuts; the placer's cuts that KiCad makes with `splitArc` (`Remove`, `Slice`, `Split`) put
+    /// the pieces in the list instead ([`split_arcs_at`], [`split_arcs_for_insert`]: each piece found by the points it keeps, [`ArcPts::of`]). So a copy of a line (`..line.clone()`, `Line { pts, ..line }`)
     /// keeps the arcs that survive, and a line built from bare points ([`Self::from_points`]) has none.
     pub arcs: Vec<ArcPts>,
 }
@@ -700,6 +731,42 @@ fn on_segment(a: Point, c: Point, b: Point) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// `SHAPE_LINE_CHAIN::Remove` / `Slice` inside an arc (UI-LEFT-3 R3-9): `splitArc` keeps what the cut leaves of the arc as an arc on the same
+    /// circle -- ending at the vertex the cut is at, the chain's points as they were -- not as its chords. A line that runs straight into a
+    /// quarter circle, cut at a vertex in the middle of the arc: the part kept is one straight piece and one arc ending there, with the circle's
+    /// centre and radius; the rest is the other half, an arc too. A point inserted on one of the arc's chords (`Split`) cuts it in two the same way.
+    #[test]
+    fn a_cut_inside_an_arc_keeps_a_shorter_arc_on_the_same_circle() {
+        let pt = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+        let arc = ArcPts::new(pt(0, 0), pt(2_928_932, 7_071_068), pt(10_000_000, 10_000_000));
+        let mut pts = vec![pt(-5_000_000, 0)];
+        pts.extend(arc.polyline());
+        let k = pts.len() / 2;
+        let mut pool = vec![arc];
+        split_arcs_at(&mut pool, &pts, k);
+        let kept = Line { arcs: pool.clone(), ..Line::from_points(None, 0, Nm::new(200_000), pts[..=k].to_vec()) };
+        let pieces = kept.pieces();
+        assert_eq!(pieces.len(), 2, "{pieces:?}");
+        let LinePiece::Arc(first) = pieces[1] else { panic!("{pieces:?}") };
+        assert_eq!((first.start, first.end), (pt(0, 0), pts[k]));
+        // on the same circle, as near as a piece ending at a polyline vertex can be (the vertices are a little outside the arc, and KiCad's
+        // `SHAPE_ARC` of the piece goes through its end too: its centre moves by as much)
+        let (c, c0) = (first.center(), arc.center());
+        assert!((c.x - c0.x).abs() <= Nm::new(10_000) && (c.y - c0.y).abs() <= Nm::new(10_000), "{c:?} {c0:?}");
+        assert!((first.radius() - arc.radius()).abs() < 10_000.0);
+        let rest = Line { arcs: pool.clone(), ..Line::from_points(None, 0, Nm::new(200_000), pts[k..].to_vec()) };
+        assert!(matches!(rest.pieces()[..], [LinePiece::Arc(a)] if a.start == pts[k] && a.end == arc.end), "{:?}", rest.pieces());
+        // `Split( p )` on a chord: two arcs sharing p
+        let p = Point { x: (pts[3].x + pts[4].x) / 2, y: (pts[3].y + pts[4].y) / 2 };
+        let mut pool = vec![arc];
+        split_arcs_for_insert(&mut pool, &pts, 4, p);
+        let mut with = pts.clone();
+        with.insert(4, p);
+        let line = Line { arcs: pool, ..Line::from_points(None, 0, Nm::new(200_000), with) };
+        assert!(matches!(line.pieces()[..], [LinePiece::Poly(_), LinePiece::Arc(a), LinePiece::Arc(b)] if a.end == p && b.start == p), "{:?}", line.pieces());
+    }
 
     #[test]
     fn simplify_drops_collinear_midpoint() {

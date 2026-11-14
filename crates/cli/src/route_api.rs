@@ -402,9 +402,15 @@ fn entered_group(req: &Value) -> Option<String> {
 
 /// The commit of a route (or of what it had fixed) as the one undoable step `Cmd::CommitRoute`; with `append_undo`, joined to the step
 /// before it (a route restarted from the other end is one undo with the part committed when it restarted).
-fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool, group: Option<String>) -> Result<String, String> {
+/// The Strict switch the studio sends with a request that commits (`"strict"`, the status bar's: `state.strict`, as `/api/cmd` takes it); absent,
+/// strict, as before. A commit of the router follows the person's choice as every other edit does: with it off the gates judge nothing.
+fn strict_of(req: &Value) -> bool {
+    req.get("strict").and_then(Value::as_bool).unwrap_or(true)
+}
+
+fn commit_route(dir: &Path, commit: eda_pns::router::RouteCommit, append_undo: bool, group: Option<String>, strict: bool) -> Result<String, String> {
     let cmd = commit_cmd(commit, group);
-    let summary = board::step(dir, cmd, true, "ui").map_err(|e| board::reasons(&e))?;
+    let summary = board::step(dir, cmd, strict, "ui").map_err(|e| board::reasons(&e))?;
     if append_undo {
         board::append_to_previous_undo(dir);
     }
@@ -422,7 +428,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish(at) else {
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -431,7 +437,7 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         return json!({ "ok": false, "committed": committed, "message": message });
     };
     let cmd = commit_cmd(commit, router.entered_group.clone());
-    match board::step(dir, cmd, true, "ui") {
+    match board::step(dir, cmd, strict_of(&req), "ui") {
         Ok(summary) => {
             // a route restarted from the other end is one undo with the part that was committed when it restarted
             if router.append_undo {
@@ -461,7 +467,7 @@ pub fn attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             let (append_undo, group) = (router.append_undo, router.entered_group.clone());
             *guard = None;
             drop(guard);
-            match commit_route(dir, commit, append_undo, group) {
+            match commit_route(dir, commit, append_undo, group, strict_of(&req)) {
                 Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
                 Err(e) => err(e),
             }
@@ -497,7 +503,7 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
         let cmd = commit_cmd(continuation.commit, group.clone());
-        if let Err(e) = board::step(dir, cmd, true, "ui") {
+        if let Err(e) = board::step(dir, cmd, strict_of(&req), "ui") {
             return err(board::reasons(&e));
         }
         // a chain of restarts is one undo: this commit joins the one before it
@@ -533,9 +539,10 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 /// (`ROUTER_TOOL::performRouting`: the cancel branch only does `break;`, and after the loop `m_router->CommitRouting()` commits
 /// `m_lastNode`, every fixed leg and the shoves the clicks locked), one undo step, and replies `committed`; only the head is dropped.
 /// A drag leaves the board as it was (`performDragging`: `if( evt->IsCancelInteractive() ) { .. break; }` then `StopRouting()`).
-pub fn cancel(dir: &Path, cell: &RouteCell) -> Value {
+pub fn cancel(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
     let Some(mut router) = cell.lock().unwrap_or_else(|e| e.into_inner()).take() else { return json!({ "ok": true, "committed": false }) };
-    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
+    match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
         Some(Err(e)) => err(e),
         Some(Ok(_)) => json!({ "ok": true, "committed": true }),
         None => json!({ "ok": true, "committed": false }),
@@ -788,7 +795,7 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         // `InlineDrag`: "leaderSegments = m_router->GetLastCommittedLeaderSegments()", then `selectItems` of their parents -- the tracks the
         // commit made of them, or (a refused drag) the selected ones as they are
         let Some(commit) = commit else { return json!({ "ok": false, "dragging": false, "refused": true, "message": "", "select": tracks_holding(dir, &leaders) }) };
-        return match board::step(dir, commit_cmd(commit, group), true, "ui") {
+        return match board::step(dir, commit_cmd(commit, group), strict_of(&req), "ui") {
             Ok(summary) => json!({ "ok": true, "message": summary, "select": tracks_holding(dir, &leaders) }),
             Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
         };
@@ -804,7 +811,7 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     *guard = None;
     drop(guard);
     let cmd = commit_cmd(commit, group);
-    match board::step(dir, cmd, true, "ui") {
+    match board::step(dir, cmd, strict_of(&req), "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }
@@ -1021,7 +1028,7 @@ pub fn dp_attempt_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
             let (append_undo, group) = (router.append_undo, router.entered_group.clone());
             *guard = None;
             drop(guard);
-            match commit_route(dir, commit, append_undo, group) {
+            match commit_route(dir, commit, append_undo, group, strict_of(&req)) {
                 Ok(summary) => json!({ "ok": true, "finished": true, "message": summary }),
                 Err(e) => err(e),
             }
@@ -1043,7 +1050,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let Some(commit) = router.finish_diff_pair(at) else {
         // as a single track's finish: the legs fixed before are committed (`CommitRouting()` after the loop)
-        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone())) {
+        let committed = match router.commit_fixed().map(|c| commit_route(dir, c, router.append_undo, router.entered_group.clone(), strict_of(&req))) {
             Some(Err(e)) => return err(e),
             Some(Ok(_)) => true,
             None => false,
@@ -1052,7 +1059,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         return json!({ "ok": false, "committed": committed, "message": message });
     };
     let cmd = commit_cmd(commit, router.entered_group.clone());
-    match board::step(dir, cmd, true, "ui") {
+    match board::step(dir, cmd, strict_of(&req), "ui") {
         Ok(summary) => {
             // a pair restarted from the other end is one undo with the part that was committed when it restarted
             if router.append_undo {
@@ -1083,7 +1090,7 @@ pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value 
     let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
     if committed {
         let cmd = commit_cmd(continuation.commit, group.clone());
-        if let Err(e) = board::step(dir, cmd, true, "ui") {
+        if let Err(e) = board::step(dir, cmd, strict_of(&req), "ui") {
             return err(board::reasons(&e));
         }
         if append_undo {
@@ -1438,7 +1445,7 @@ mod tests {
         assert!(undo_redo_blocked(&cell, None).is_some() && undo_redo_blocked(&cell, Some(eda_ops::Domain::Schematic)).is_some());
         assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::FootprintEditor)).is_none());
         assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::SymbolEditor)).is_none());
-        cancel(&dir, &cell);
+        cancel(&dir, &cell, b"{}");
         assert!(undo_redo_blocked(&cell, Some(eda_ops::Domain::Pcb)).is_none(), "the session ended");
     }
 
@@ -1455,7 +1462,7 @@ mod tests {
             assert_eq!(fix(&cell, &body(json!({ "x": x, "y": y })))["blocked"], json!(false));
         }
         mv(&cell, &body(json!({ "x": 16_000_000, "y": 11_000_000 })));
-        let reply = cancel(&dir, &cell);
+        let reply = cancel(&dir, &cell, b"{}");
         assert_eq!((reply["ok"].clone(), reply["committed"].clone()), (json!(true), json!(true)), "{reply}");
         let (_, design, _) = board::load(&dir).unwrap();
         let sig: Vec<&Track> = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == "SIG" && t.id != "sig").collect();
@@ -1465,7 +1472,7 @@ mod tests {
         // nothing fixed: nothing committed
         start_with(&dir, &cell, json!({ "mode": "walkaround" }));
         mv(&cell, &body(json!({ "x": 13_000_000, "y": 8_000_000 })));
-        assert_eq!(cancel(&dir, &cell)["committed"], json!(false));
+        assert_eq!(cancel(&dir, &cell, b"{}")["committed"], json!(false));
     }
 
     /// The same when the finish is refused because the last head collides: the runs fixed before it are committed (`FixRoute( .. ); break;`,
@@ -1656,6 +1663,28 @@ mod tests {
         assert_eq!(via_selected["start"], json!([10_000_000, 5_000_000]), "a via snaps to its centre: {via_selected}");
         // an id the board has no track or via of
         assert_eq!(drag_start(&dir, &cell, &body(json!({ "x": 10_000_000, "y": 7_000_000, "layer": "F.Cu", "item": "nope" })))["ok"], json!(false));
+    }
+
+    /// A drag's commit follows the Strict switch the studio sends (`"strict"`, as `/api/cmd` takes it): Highlight collisions with Allow DRC violations
+    /// commits a segment dragged onto another net's track; with Strict on the gates refuse what that does to the board, with it off it is committed.
+    #[test]
+    fn a_drag_commit_follows_the_strict_switch() {
+        for strict in [true, false] {
+            let dir = scratch(if strict { "drag_strict_on" } else { "drag_strict_off" });
+            setup_board(&dir, vec![track("u", "SIG", &[p(mm(2.0), mm(12.0)), p(mm(2.0), mm(10.0)), p(mm(12.0), mm(10.0)), p(mm(12.0), mm(12.0))]), track("w", "GND", &[p(mm(4.0), mm(8.0)), p(mm(10.0), mm(8.0))])], vec![]);
+            let cell: RouteCell = Mutex::new(None);
+            let started = drag_start(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 10_000_000, "layer": "F.Cu", "item": "u", "settings": { "mode": "mark_obstacles", "allow_drc_violations": true } })));
+            assert_eq!(started["ok"], json!(true), "{started}");
+            drag_move(&cell, &body(json!({ "x": 7_000_000, "y": 8_000_000 })));
+            let done = drag_finish(&dir, &cell, &body(json!({ "x": 7_000_000, "y": 8_000_000, "strict": strict })));
+            if strict {
+                assert_eq!(done["ok"], json!(false), "{done}");
+                assert!(done["message"].as_str().is_some_and(|m| m.contains("refused because --strict")), "{done}");
+            } else {
+                assert_eq!(done["ok"], json!(true), "Strict off: committed, violation and all: {done}");
+                assert!(tracks_of(&dir).iter().any(|(net, pts)| net == "SIG" && pts.iter().any(|q| q.y == mm(8.0))));
+            }
+        }
     }
 
     /// `snapToItem` of the selected track: off its centre line the drag starts on the nearest point of the segment nearest the press (the polyline's

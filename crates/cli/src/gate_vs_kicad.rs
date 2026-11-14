@@ -494,6 +494,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// UI-LEFT-3 (router-2): the pad of a lone pin is on its `unconnected-(..)` net in the router (`syncPad`: the pad's net). A route started on it takes
+    /// that net and is committed with it, and kicad-cli -- whose board has the pad on that net -- finds no short or clearance violation; a route of
+    /// no net drawn straight through the pad walks round it, and kicad-cli finds it clear too.
+    #[test]
+    fn a_lone_pins_pad_is_on_its_unconnected_net_for_the_router_and_for_kicad_cli() {
+        if !kicad_available() {
+            return;
+        }
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let lone_board = |name: &str| {
+            let dir = scratch(name);
+            crate::board::tests::setup(&dir);
+            // U2.2 leaves VCC: a pin alone, `unconnected-(U2-Pad2)` by KiCad's names
+            let intent = dir.join("intent.yaml");
+            let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+            model.nets.iter_mut().find(|n| n.name == "VCC").unwrap().pins.retain(|p| p != "U2.2");
+            std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+            dir
+        };
+        let commit_and_check = |dir: &Path, commit: eda_pns::router::RouteCommit| {
+            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks, via_kinds: commit.via_kinds, track_sources: commit.track_sources, group: None, keep_track_ids: vec![] };
+            board::step(dir, cmd, false, "test").expect("the commit applies");
+            let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+            let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
+            for kind in ["clearance", "shorting_items", "tracks_crossing", "copper_edge_clearance"] {
+                assert_eq!(count(kind), 0, "{kind}: {}", report["violations"]);
+            }
+        };
+        // a route started on U2.2 takes its net
+        let dir = lone_board("lone_pad_route");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let mut router = eda_pns::router::Router::new(&design, &model);
+        router.settings.mode = eda_pns::settings::Mode::Walkaround;
+        router.start(p(mm(16.0), mm(5.0)), "F.Cu", mm(0.25)).expect("starts on U2.2");
+        let commit = router.finish(p(mm(16.0), mm(12.0))).expect("commits");
+        assert!(!commit.tracks.is_empty() && commit.tracks.iter().all(|t| t.net == "unconnected-(U2-Pad2)"), "{:?}", commit.tracks.iter().map(|t| &t.net).collect::<Vec<_>>());
+        commit_and_check(&dir, commit);
+        let (_, design, _) = board::load(&dir).unwrap();
+        assert!(design.routing.as_ref().unwrap().tracks.iter().all(|t| t.net == "unconnected-(U2-Pad2)"));
+        let _ = std::fs::remove_dir_all(&dir);
+        // a route of no net straight through U2.2 goes round it
+        let dir = lone_board("lone_pad_no_net");
+        let (_, design, model) = board::load(&dir).unwrap();
+        let mut router = eda_pns::router::Router::new(&design, &model);
+        router.settings.mode = eda_pns::settings::Mode::Walkaround;
+        router.start(p(mm(16.0), mm(1.5)), "F.Cu", mm(0.25)).expect("starts in empty space");
+        let commit = router.finish(p(mm(16.0), mm(9.0))).expect("commits");
+        assert!(commit.tracks.iter().all(|t| t.net.is_empty()), "a route of no net");
+        assert!(commit.tracks.iter().flat_map(|t| t.pts.iter()).any(|q| (q.x - mm(16.0)).abs() > mm(0.6)), "it goes round the pad: {:?}", commit.tracks.iter().map(|t| &t.pts).collect::<Vec<_>>());
+        commit_and_check(&dir, commit);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// One of KiCad's own boards with arc tracks (`pcbnew/issue12609.kicad_pcb`: 47 of them, `issue8407.kicad_pcb`: 40), imported the way the studio imports a `.kicad_pcb`.
     fn arc_board(name: &str) -> Option<(Design, ConstraintModel)> {
         let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew");

@@ -276,16 +276,26 @@ pub fn octagonal_hull(p0: Point, size: (Nm, Nm), cl: Nm, chamfer: Nm) -> Vec<Poi
     s
 }
 
+/// `IsSegment45Degree( aS )` (`pns_utils.cpp`): within a nanometre of horizontal, vertical or 45 degrees (`std::abs( dir.x ) <= 1`,
+/// `std::abs( dir.y ) <= 1`, `std::abs( dir.x ) - std::abs( dir.y )` in -1..=1).
 fn is_45(dx: Nm, dy: Nm) -> bool {
-    dx == Nm::ZERO || dy == Nm::ZERO || dx.abs() == dy.abs()
+    let one = Nm::new(1);
+    dx.abs() <= one || dy.abs() <= one || (dx.abs() - dy.abs()).abs() <= one
 }
 
-/// `SegmentHull( aSeg, aClearance, aWalkaroundThickness )`.
+/// `SegmentHull( aSeg, aClearance, aWalkaroundThickness )`: the octagon's sizes (`d`, `dr`, `xr2`) are taken from the clearance before a kink's
+/// bump (`cl ++`, `cl += 2`), which only the octagon of a segment that has become a point sees (`OctagonalHull( .., cl, xx2 )`); the length is
+/// `SEG::Length()`, rounded (`EuclideanNorm`).
 pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> Vec<Point> {
     let kink = clearance / 10;
     let mut cl = clearance + walk / 2;
+    // `double d = (double)aSeg.GetWidth() / 2.0 + cl; double x = 2.0 / ( 1.0 + M_SQRT2 ) * d; int dr = KiROUND( d ); int xr2 = KiROUND( x / 2.0 );`
+    let d = width.as_f64() / 2.0 + cl.as_f64();
+    let x = 2.0 / (1.0 + std::f64::consts::SQRT_2) * d;
+    let dr = kiround(d);
+    let xr2 = kiround(x / 2.0);
     let mut b = b0;
-    let len = Nm::new(((b.x - a.x).as_f64().powi(2) + (b.y - a.y).as_f64().powi(2)).sqrt() as i64);
+    let len = crate::kigeom::norm_i(b.x - a.x, b.y - a.y);
     let (mut w, mut h) = (b.x - a.x, b.y - a.y);
     if a != b {
         if !is_45(w, h) {
@@ -310,14 +320,10 @@ pub fn segment_hull(a: Point, b0: Point, width: Nm, clearance: Nm, walk: Nm) -> 
             b = Point { x: a.x + w, y: a.y + h };
         }
     }
-    let d = width.as_f64() / 2.0 + cl.as_f64();
     if a == b {
         let xx2 = kiround(2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * d);
         return make_clockwise(octagonal_hull(Point { x: a.x - width / 2, y: a.y - width / 2 }, (width, width), cl, xx2));
     }
-    let x = 2.0 / (1.0 + std::f64::consts::SQRT_2) * d;
-    let dr = kiround(d);
-    let xr2 = kiround(x / 2.0);
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let (px, py) = (-dy, dx); // Perpendicular()
     let p0 = resize(px, py, dr);
@@ -493,6 +499,17 @@ mod kicad_hull_tests {
         let arc = Shape::Strokes { segs: vec![eda_drc::kimath::Seg::new(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::ZERO }), eda_drc::kimath::Seg::new(Point { x: Nm::new(1000), y: Nm::ZERO }, Point { x: Nm::new(1000), y: Nm::new(1000) })], r: Nm::new(100) };
         let hull = primitive_hull(&arc, Nm::new(100), Nm::ZERO);
         assert!(hull.iter().any(|p| p.x >= Nm::new(1190)) && hull.iter().any(|p| p.y >= Nm::new(1190)), "{hull:?}");
+    }
+
+    /// `SegmentHull`'s kink (findings p5 F1-7, UI-LEFT-3 R3-11): a 7 nm stub one nanometre off vertical is "almost vertical" for
+    /// `IsSegment45Degree` (`std::abs( dir.x ) <= 1`), so it is made vertical (`w = 0; cl ++`) -- and the octagon keeps the sizes of the clearance
+    /// before that bump (`d`, `dr`, `xr2` are taken first). The points are KiCad's, worked by hand from `pns_utils.cpp`.
+    #[test]
+    fn a_kink_stub_is_straightened_with_the_sizes_of_the_clearance_before_the_bump() {
+        let h = segment_hull(Point { x: Nm::ZERO, y: Nm::ZERO }, Point { x: Nm::new(1), y: Nm::new(7) }, Nm::new(200), Nm::new(200), Nm::ZERO);
+        let q = |x: i64, y: i64| Point { x: Nm::new(x), y: Nm::new(y) };
+        let kicad = [q(-300, 131), q(-124, 307), q(124, 307), q(300, 131), q(300, -124), q(124, -300), q(-124, -300), q(-300, -124)];
+        assert_eq!(h, kicad.iter().rev().copied().collect::<Vec<_>>(), "the octagon, turned clockwise (`s.CSegment( 0 ).Side( a ) < 0`)");
     }
 
     #[test]

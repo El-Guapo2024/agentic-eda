@@ -20,9 +20,12 @@
 //! The pad-to-die length and delay of the pads the tuning path ends on count in the length and the delay (`m_padToDieLength`, `m_padToDieDelay`;
 //! [`crate::tuning_path::LengthEnv::pad_to_die`]).
 //!
+//! The world is cloned once at `Start` (`m_world = Router()->GetWorld()->Branch()`, the line taken out of it). KiCad's `doMove` branches it again at
+//! every move (`m_currentNode = m_world->Branch()`) and only reads that branch (`CheckFit`'s `m_currentNode->CheckColliding( &l )`; nothing in `doMove`
+//! adds to or removes from it), so the clone is that branch as each move reads it: as KiCad (UI-LEFT-3 R3-4). The pair and skew placers likewise.
+//!
 //! Differences from KiCad: the line stops where the track width
-//! changes (KiCad rewrites the whole of it at the first segment's width); the world is cloned once at `Start` instead of branched at every `Move`, as
-//! nothing in `Move` writes to it.
+//! changes (KiCad rewrites the whole of it at the first segment's width).
 
 use crate::chain::ShapeLineChain;
 use crate::delay::DelayParams;

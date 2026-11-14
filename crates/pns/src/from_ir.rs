@@ -99,6 +99,8 @@ fn build_node_with(design: &Design, model: &ConstraintModel, patterns_in_edit: b
             })
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
+        // `syncPad`: `solid->SetNet( aPad->GetNet() )` -- the net the board writes for the pad (`DrcPad::net`, `eda_engine::nets::written_pad_net`): a
+        // lone or no-connect pin's pad its `unconnected-(..)` net, so a route started on it takes that net and a track of no net keeps clear of it
         let net = if pad.kind == eda_model::PadKind::NonPlatedHole { crate::item::not_a_net() } else { pad.net.as_deref().map(&mut net_of).unwrap_or(None) };
         node.add(Item::Solid(Solid { net, layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false, rule: rules.rule_of(&pad.id), free_pad: pad.free, anchor_points: Vec::new() }));
     }

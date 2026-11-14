@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dragHighlight, dragStateFromPreview, inlineDragBegin, inlineDragEnd, routableSelection, type DragDrawState } from "./dragTool";
+import { dragEndsOnActivate, dragHighlight, routeHighlightBegin, routeHighlightEnd, dragStateFromPreview, inlineDragBegin, inlineDragEnd, routableSelection, routerStartHighlight, setRouterStartHighlight, type DragDrawState } from "./dragTool";
 import type { DragPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DragDrawState> = {}): DragDrawState {
@@ -142,4 +142,44 @@ test("C3-10: PCB_SELECTION_TOOL::Main's routable -- tracks and arcs, or one via,
   assert.equal(routableSelection(board, ["t1", "v1"]), true, "segs >= 1 and all of them routable");
   assert.equal(routableSelection(board, ["t1", "U1"]), false, "a footprint with them: Move");
   assert.equal(routableSelection(board, []), false);
+});
+
+// UI-LEFT-3 R3-10: `highlightNets( false )` at the end of every drag puts back the router tool's `m_startHighlightNetcodes` -- what the last drag with a
+// net left there, an empty set turning the highlight off -- a drag of no net included, which never sets it.
+test("a drag of no net puts back what the last drag with a net left, and the user's highlight goes when that is nothing", () => {
+  setRouterStartHighlight([]);
+  const none = inlineDragBegin(baseDraw({ dragKind: "multi" }), { selection: ["t1"], highlighted: ["GND"] }, true, null);
+  assert.equal(none.highlight, null, "no net: no highlightNets( true )");
+  assert.deepEqual(inlineDragEnd(none.draw, { cancelled: false }).highlight, [], "SetHighlight( {}, false ): off");
+  const kept = inlineDragBegin(baseDraw(), { selection: [], highlighted: ["GND", "SIG"] }, true, "SIG");
+  assert.deepEqual(kept.draw.restoreHighlight, ["GND", "SIG"]);
+  assert.deepEqual(routerStartHighlight(), ["GND", "SIG"]);
+  const later = inlineDragBegin(baseDraw({ dragKind: "multi" }), { selection: [], highlighted: [] }, true, null);
+  assert.deepEqual(inlineDragEnd(later.draw, { cancelled: true }).highlight, ["GND", "SIG"], "the last drag's set comes back");
+  setRouterStartHighlight([]);
+});
+
+// UI-LEFT-3 R3-10: `InlineDrag`'s click ends the drag whatever `FixRoute` says (`inline`); another tool's activation (`IsActivate()`) cancels it as
+// Esc does.
+test("an inline drag ends on a refused click and on another tool's activation", () => {
+  setRouterStartHighlight([]);
+  assert.equal(inlineDragBegin(baseDraw(), { selection: ["t1"], highlighted: [] }, true, "SIG").draw.inline, true);
+  assert.equal(inlineDragBegin(baseDraw(), { selection: [], highlighted: [] }, false, "SIG").draw.inline, undefined, "the router tool's drag goes on");
+  assert.equal(dragEndsOnActivate("drag", "route", "drag"), true);
+  assert.equal(dragEndsOnActivate("drag", "select", null), false, "a drag that ended");
+  assert.equal(dragEndsOnActivate("select", "drag", "drag"), false, "the drag starting");
+  setRouterStartHighlight([]);
+});
+
+// `prepareInteractive` / `finishInteractive`: a route highlights its net, a pair both, and the end puts back what the router tool remembers; a route of
+// no net highlights nothing and its end puts back what the last one left.
+test("a route highlights its net and its end puts back the router tool's remembered highlight", () => {
+  setRouterStartHighlight([]);
+  assert.deepEqual(routeHighlightBegin(["GND"], ["SIG"]), ["SIG"]);
+  assert.deepEqual(routeHighlightEnd(), [], "GND did not hold SIG: off");
+  assert.deepEqual(routeHighlightBegin(["P", "N"], ["P", "N"]), ["P", "N"]);
+  assert.deepEqual(routeHighlightEnd(), ["P", "N"]);
+  assert.equal(routeHighlightBegin(["X"], [""]), null, "no net: no call");
+  assert.deepEqual(routeHighlightEnd(), ["P", "N"], "the last route's set");
+  setRouterStartHighlight([]);
 });
