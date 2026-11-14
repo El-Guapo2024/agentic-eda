@@ -264,8 +264,13 @@ impl LibraryFootprintKeep {
         self.copy_zone_keep(from, to);
     }
 
-    /// A copied zone's fill (`ZONE::InitDataFromSrcInCopyCtor` copies `m_FilledPolysList`; it follows the copy where it is put), thieving and per-layer settings.
+    /// A copied zone's fill (`ZONE::InitDataFromSrcInCopyCtor` copies `m_FilledPolysList`; it follows the copy where it is put), thieving, per-layer settings and the
+    /// arcs of its outline (`m_Poly`, a `SHAPE_POLY_SET` whose chains keep their arcs: the copy has them, and they follow it as the fill does, UI-LEFT-3 F3-12).
     fn copy_zone_keep(&mut self, from: &str, to: &str) {
+        if let Some(a) = self.zone_arcs.iter().find(|a| a.id == from).cloned() {
+            self.zone_arcs.retain(|x| x.id != to);
+            self.zone_arcs.push(crate::ir::ZoneArcs { id: to.to_string(), ..a });
+        }
         if let Some(f) = self.zone_fills.get(from).cloned() {
             self.zone_fills.insert(to.to_string(), f);
         }
@@ -306,6 +311,9 @@ impl LibraryFootprintKeep {
         }
         if let Some(p) = other.zone_layer_props.get(from) {
             self.zone_layer_props.insert(to.to_string(), p.clone());
+        }
+        if let Some(a) = other.zone_arcs.iter().find(|a| a.id == from) {
+            self.zone_arcs.push(crate::ir::ZoneArcs { id: to.to_string(), ..a.clone() });
         }
     }
 

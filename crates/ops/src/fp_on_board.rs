@@ -52,6 +52,9 @@ pub(crate) struct LibraryRecord {
     pub attrs: Option<FootprintAttrs>,
     /// Its zones, in its frame, on no net.
     pub zones: Vec<Zone>,
+    /// The arcs of each of [`Self::zones`]' outlines, in step with them (`LibraryFootprintKeep::zone_arcs`: the board's footprint is a clone, its zones keep their
+    /// arcs, UI-LEFT-3 F3-12).
+    pub zone_arcs: Vec<Option<eda_model::ir::ZoneArcs>>,
 }
 
 impl LibraryRecord {
@@ -77,7 +80,10 @@ impl LibraryRecord {
                 }
             }
         }
-        Some(LibraryRecord { record, paste_margin: on.paste_margin, paste_ratio: on.paste_ratio, pad_margins, attrs: on.attrs, zones: on.zones })
+        // the arcs of the library's zones, which the writer writes (and the reader reads back) in the library's order: one each, while the counts agree
+        let written: Vec<&Zone> = lib.items.zones.iter().filter(|z| z.outline.len() >= 3).collect();
+        let zone_arcs = if written.len() == on.zones.len() { written.iter().map(|z| lib.kicad.zone_arcs.iter().find(|a| a.id == z.id).cloned()).collect() } else { Vec::new() };
+        Some(LibraryRecord { record, paste_margin: on.paste_margin, paste_ratio: on.paste_ratio, pad_margins, attrs: on.attrs, zones: on.zones, zone_arcs })
     }
 
     /// The record of a library footprint known only by its items (a footprint the engine resolves by itself, the tests): those items, nothing else of its file.
@@ -147,7 +153,7 @@ impl Board<'_> {
                 }
             }
         }
-        self.set_footprint_zones(reference, library.zones);
+        self.set_footprint_zones(reference, library.zones, library.zone_arcs);
     }
 
     /// The zones of the footprint `reference` (`Zone::parent_footprint`) in its frame, taken off the board for its pose: what Edit Footprint's copy holds of them
@@ -163,7 +169,29 @@ impl Board<'_> {
     /// a zone of the footprint (`Zone::parent_footprint`) with an id of its own; the record says the pose they were put for (`FootprintExtra::zones_pose`). A zone the
     /// footprint had keeps its uuid when the new one is in its place (`ExchangeFootprint`'s `matchItemsBySimilarity<ZONE>` keeps an old zone's uuid on its match;
     /// here a match is a zone on the same layers with the same outline).
-    pub(crate) fn set_footprint_zones(&mut self, reference: &str, zones: Vec<Zone>) {
+    ///
+    /// Each zone's outline arcs (`arcs`, in step with `zones`, in the frame the zones are given in; may be empty) are kept for the zone it becomes
+    /// (`DrawingsSection::zone_arcs`): they follow it to where the pose puts it ([`eda_kicad::zone_fills::arc_rings_current`]), as KiCad's clone keeps a zone's arcs
+    /// (UI-LEFT-3 F3-12).
+    pub(crate) fn set_footprint_zones(&mut self, reference: &str, zones: Vec<Zone>, arcs: Vec<Option<eda_model::ir::ZoneArcs>>) {
+        let count = zones.len();
+        self.place_footprint_zones(reference, zones);
+        let Some(rt) = self.design.routing.as_ref() else { return };
+        let placed: Vec<String> = rt.zones.iter().filter(|z| z.parent_footprint.as_deref() == Some(reference)).map(|z| z.id.clone()).collect();
+        if placed.len() != count || arcs.iter().all(Option::is_none) {
+            return;
+        }
+        let dr = self.drawings_mut();
+        for (id, a) in placed.into_iter().zip(arcs) {
+            dr.zone_arcs.retain(|x| x.id != id);
+            if let Some(a) = a {
+                dr.zone_arcs.push(eda_model::ir::ZoneArcs { id, ..a });
+            }
+        }
+    }
+
+    /// The placing of [`Self::set_footprint_zones`], the arcs aside.
+    fn place_footprint_zones(&mut self, reference: &str, zones: Vec<Zone>) {
         let Some(pose) = self.pose_of(reference).cloned() else { return };
         // nothing to put and nothing to take: the board is left as it is (a board with no routing section is not given one -- the routing checks run on a board that has
         // one, and a footprint placed on an unrouted board would make every net of it fail them)

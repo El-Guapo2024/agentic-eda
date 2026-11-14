@@ -412,8 +412,38 @@ struct ZoneExtras {
     arc_rings: Option<Vec<String>>,
 }
 
+/// `ARC_HIGH_DEF` (`pcbIUScale.mmToIU( 0.005 )`): the error a legacy segment fill's ovals are made with.
+const ARC_HIGH_DEF_NM: i64 = 5_000;
+
+/// `parseZONE`'s legacy segment fill (`T_fill_segments`: "Legacy zones only had one layer", each `(pts (xy a) (xy b))` a segment on `GetFirstLayer()`), as it makes
+/// the fill when the zone stores no `(filled_polygon ..)`: each segment `TransformOvalToPolygon( segPolygon, A, B, GetMinThickness(), ARC_HIGH_DEF, ERROR_OUTSIDE )`,
+/// `BooleanAdd`ed into the layer's fill (`SetFilledPolysList`). The fill is kept as `format( const ZONE* )` writes it: each outline of the set, as a `(filled_polygon
+/// ..)`, not an island. (KiCad's parse warning, "The legacy segment zone fill mode is no longer supported.", is a board load's; a footprint's has none to show.)
+fn legacy_segment_fill(child: &[Sexpr], zone: &eda_model::ir::Zone) -> Option<(String, Vec<(bool, Vec<[i64; 2]>)>)> {
+    use eda_shape_poly_set::basic_shapes::{oval_polygon, ErrorLoc};
+    use eda_shape_poly_set::ShapePolySet;
+    let xy = |l: &[Sexpr]| Some(eda_clipper2::Point64::new(crate::mm_to_nm(sexpr::num(l, 1)?).get(), crate::mm_to_nm(sexpr::num(l, 2)?).get()));
+    let mut fill = ShapePolySet::new();
+    let mut any = false;
+    for segs in sexpr::find_all(child, "fill_segments") {
+        for pts in segs[1..].iter().filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l) == Some("pts")) {
+            let ends: Vec<eda_clipper2::Point64> = sexpr::find_all(pts, "xy").filter_map(xy).collect();
+            let [a, b] = ends.as_slice() else { continue };
+            let mut seg = ShapePolySet::new();
+            seg.add_outline(oval_polygon(*a, *b, zone.min_thickness.get(), ARC_HIGH_DEF_NM, ErrorLoc::Outside, 0));
+            fill.boolean_add(&seg);
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    let rings = (0..fill.outline_count()).map(|i| (false, fill.outline(i).iter().map(|p| [p.x, p.y]).collect())).collect();
+    Some((zone.layer_set().first().map(|l| l.to_string()).unwrap_or_else(|| zone.layer.clone()), rings))
+}
+
 /// A zone's `(filled_polygon (layer ..) [(island yes)] (pts ..))`s and its `(fill yes ..)` flag (`parseZONE`'s `T_filled_polygon`, `SetIsFilled`), in the footprint's
-/// frame; `None` when it stores none.
+/// frame -- or, with none, the fill its legacy `(fill_segments ..)` make ([`legacy_segment_fill`]); `None` when it stores none.
 fn zone_fill_of(child: &[Sexpr], zone: &eda_model::ir::Zone) -> Option<eda_model::lib_keep::KeptZoneFill> {
     let mut layers: std::collections::BTreeMap<String, Vec<(bool, Vec<[i64; 2]>)>> = std::collections::BTreeMap::new();
     for fp in sexpr::find_all(child, "filled_polygon") {
@@ -424,8 +454,10 @@ fn zone_fill_of(child: &[Sexpr], zone: &eda_model::ir::Zone) -> Option<eda_model
             .unwrap_or_default();
         layers.entry(layer).or_default().push((island, pts));
     }
+    // `else if( legacySegs.size() > 0 )`: no polygons, just a segment fill (a rule area's too: the legacy branch does not ask)
     if layers.is_empty() {
-        return None;
+        let (layer, rings) = legacy_segment_fill(child, zone)?;
+        layers.insert(layer, rings);
     }
     let filled = sexpr::find(child, "fill").is_some_and(|f| f.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "yes")));
     Some(eda_model::lib_keep::KeptZoneFill { sig: crate::zone_fills::zone_signature(zone), unfilled: !filled, layers, outline: zone.outline.clone(), holes: zone.holes.clone(), zone_layers: zone.layer_set().into_iter().map(str::to_string).collect() })
@@ -436,8 +468,9 @@ impl ItemsRead {
     /// `parseFOOTPRINT_unchecked` reads it -- with the board's own parser of the item (`parseDIMENSION`, `parseZONE`, `parsePCB_TEXTBOX`, `parsePCB_POINT`,
     /// `parsePCB_REFERENCE_IMAGE`, `parsePCB_BARCODE`, `parsePCB_TABLE`), in the footprint's frame, which a library footprint's file is written in. `version` is the
     /// footprint file's (`m_requiredVersion`). False when the form says what the item cannot hold, and the caller keeps it as the file wrote it:
-    /// - the board's reader gives none (`parseDIMENSION`'s pre-6.0 form, a zone with no outline, a table whose cells are off its grid, an image that is no image),
-    /// - a zone's teardrop or `(filled_segments ..)` (a board's, and a file before 6.0's).
+    /// - the board's reader gives none (`parseDIMENSION`'s pre-6.0 form, a zone with no outline, a table whose cells are off its grid, an image that is no image).
+    /// A teardrop zone (`(attr (teardrop (type ..)))`, a board's) is a zone that says so (`Zone::teardrop`, `teardrop_track_end`: `SetTeardropAreaType`), and a
+    /// legacy segment fill (`(fill_segments (pts (xy ..) (xy ..)) ..)`, a file before 6.0) is the fill KiCad makes of it (UI-LEFT-3 F3-12; they were kept as text).
     /// A lock (`(locked yes)`) is kept by the item's id (`LibraryFootprintKeep::locked`), and a zone's fill (`(filled_polygon ..)`), copper thieving, per-layer settings
     /// and the arcs of its outline beside it (`LibraryFootprintKeep::zone_fills` ..), as the board keeps them (UI-LEFT-2 FF6). The hatch pitch and the layers' hatch
     /// offsets (`(property (layer ..) (hatch_position ..))`) are the zone's own (`Zone::border_hatch_pitch`, `Zone::hatch_offsets`).
@@ -473,12 +506,8 @@ impl ItemsRead {
                 self.dimensions.push(uuid);
             }
             "zone" => {
-                // a teardrop (`(attr (teardrop ..))`) is the board's; a footprint's file has none
-                let unheld = sexpr::find(child, "filled_segments").is_some() || sexpr::find(child, "attr").and_then(|a| sexpr::find(a, "teardrop")).is_some();
+                // (`parseZONE`'s `T_attr` / `T_teardrop` is `read_zone`'s: the zone says it is a teardrop and of which type)
                 let Some(read) = crate::import::read_zone(child, &Default::default(), &crate::padstack_io::library_copper_layers()) else { return false };
-                if unheld {
-                    return false;
-                }
                 let zone = eda_model::ir::Zone { net: String::new(), uuid: String::new(), ..read.zone };
                 let extras = ZoneExtras { fill: zone_fill_of(child, &zone), thieving: read.thieving, layer_props: read.layer_props, arc_rings: read.arc_rings };
                 if extras.fill.is_some() || extras.thieving.is_some() || extras.layer_props.is_some() || extras.arc_rings.is_some() {

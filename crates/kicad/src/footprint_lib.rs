@@ -692,7 +692,8 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
         let fill = if z.is_rule_area { None } else { fp.kicad.zone_fills.get(&z.id).and_then(|k| crate::zone_fills::kept_fill_current(k, z)) };
         let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> =
             fill.as_ref().map(|e| z.layer_set().into_iter().map(|l| (l.to_string(), e.layers.get(l).cloned().unwrap_or_default())).collect()).unwrap_or_default();
-        let arc_rings = fp.kicad.zone_arcs.iter().find(|a| a.id == z.id).filter(|a| a.shape == eda_model::ir::ZoneArcs::shape_of(z)).map(|a| a.rings.as_slice());
+        // (the arcs while the zone is where a move, turn or mirror of the outline they were read with puts it, UI-LEFT-3 F3-12)
+        let arc_rings = fp.kicad.zone_arcs.iter().find(|a| a.id == z.id).and_then(|a| crate::zone_fills::arc_rings_current(a, z));
         let args = crate::pcb_items::ZoneArgs {
             net: 0,
             locked: fp.kicad.locked.contains(&z.id),
@@ -701,8 +702,9 @@ pub fn export_kicad_mod_with(fp: &eda_model::ir::LibraryFootprint, embedded: &ed
             filled: fill.as_ref().is_some_and(|e| !e.unfilled),
             enabled_layers: None,
             thieving: fp.kicad.zone_thieving.get(&z.id).map(String::as_str),
-            arc_rings,
+            arc_rings: arc_rings.as_deref(),
             layer_props: fp.kicad.zone_layer_props.get(&z.id).map(String::as_str),
+            teardrop_as_read: true,
         };
         crate::pcb_items::write_zone(&mut out, z, &args);
         written.entry(z.id.clone()).or_default().push(uuid);

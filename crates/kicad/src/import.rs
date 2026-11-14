@@ -3630,7 +3630,11 @@ pub(crate) fn read_zone(z: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_l
 /// `eda_model::outline::Arc::polyline`): a polygon with rounded corners keeps them, where the chord between an arc's ends made chamfers of them. (A line
 /// joins the end of one arc to the start of the next, as in the file.)
 fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
-    let pts = sexpr::find(p, "pts")?;
+    pts_points(sexpr::find(p, "pts")?)
+}
+
+/// [`poly_points`] of a `(pts ...)` list itself (a zone's ring as `DrawingsSection::zone_arcs` keeps it).
+pub(crate) fn pts_points(pts: &[Sexpr]) -> Option<Vec<Point>> {
     let mut out: Vec<Point> = Vec::new();
     fn push(pt: Point, out: &mut Vec<Point>) {
         if out.last() != Some(&pt) {

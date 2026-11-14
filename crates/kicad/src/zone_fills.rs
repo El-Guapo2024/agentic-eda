@@ -385,6 +385,77 @@ pub fn fill_after_edit(before: &Zone, after: &Zone) -> FillAfterEdit {
 
 /// The rigid motion that takes the zone `was` to `zone`, and where each of its layers went: `Some((None, _))` when nothing moved (the fill stays as it was),
 /// `Some((Some(motion), layers))` for a move, turn, mirror or flip, `None` when the zone was reshaped or its layers changed otherwise.
+/// The move, turn and mirror that take the points `old` onto `new`, point for point (within [`MOTION_TOLERANCE_NM`]), or `None` when no rigid motion does.
+fn rigid_motion(old: &[[f64; 2]], new: &[[f64; 2]]) -> Option<Motion> {
+    if old.len() != new.len() || old.len() < 2 {
+        return None;
+    }
+    // The corner farthest from the first, so the angle is taken over the longest span.
+    let far = (1..old.len()).max_by(|&i, &j| dist2(old[0], old[i]).total_cmp(&dist2(old[0], old[j])))?;
+    let (u, v) = ([old[far][0] - old[0][0], old[far][1] - old[0][1]], [new[far][0] - new[0][0], new[far][1] - new[0][1]]);
+    if (u[0].hypot(u[1]) - v[0].hypot(v[1])).abs() > MOTION_TOLERANCE_NM {
+        return None;
+    }
+    let snap = |c: f64| if (c - c.round()).abs() < 1e-9 { c.round() } else { c };
+    [false, true].into_iter().find_map(|mirror| {
+        // A mirror first (y -> -y), then the turn that takes the mirrored span onto the new one.
+        let u = if mirror { [u[0], -u[1]] } else { u };
+        let a = v[1].atan2(v[0]) - u[1].atan2(u[0]);
+        let (c, s) = (snap(a.cos()), snap(a.sin()));
+        let m = if mirror { [[c, s], [s, -c]] } else { [[c, -s], [s, c]] };
+        let motion = Motion { from: old[0], to: new[0], m };
+        old.iter().zip(new).all(|(o, n)| {
+            let (dx, dy) = (o[0] - motion.from[0], o[1] - motion.from[1]);
+            let p = [motion.to[0] + m[0][0] * dx + m[0][1] * dy, motion.to[1] + m[1][0] * dx + m[1][1] * dy];
+            dist2(p, *n).sqrt() <= MOTION_TOLERANCE_NM
+        })
+        .then_some(motion)
+    })
+}
+
+/// The `(pts ..)` of each ring of a zone drawn with arcs (`ZoneArcs`, the board's `DrawingsSection::zone_arcs` or a library footprint's
+/// `LibraryFootprintKeep::zone_arcs`) as they hold for `zone` now (UI-LEFT-3 F3-12): as read while the zone has the outline and holes they were read with; moved,
+/// turned or mirrored with it when the zone is where a rigid motion of that outline puts it (`ZONE::Move`, `Rotate`, `Mirror`, `Flip` move the arcs of `m_Poly`'s
+/// chains with their points: `SHAPE_LINE_CHAIN::Move` / `Rotate` / `Mirror`), the motion found as a kept fill's is ([`KicadFills::current`]); `None` once it is
+/// reshaped (the zone is then written with its points).
+pub fn arc_rings_current(arcs: &eda_model::ir::ZoneArcs, zone: &Zone) -> Option<Vec<String>> {
+    if arcs.shape == eda_model::ir::ZoneArcs::shape_of(zone) {
+        return Some(arcs.rings.clone());
+    }
+    let rings: Vec<Vec<crate::sexpr::Sexpr>> = arcs.rings.iter().map(|r| match crate::sexpr::parse(r) {
+        Ok(crate::sexpr::Sexpr::List(l)) => Some(l),
+        _ => None,
+    }).collect::<Option<_>>()?;
+    // the outline and holes the rings were read as (`poly_points`, the reader's flattening)
+    let flat: Vec<Vec<eda_model::ir::Point>> = rings.iter().map(|l| crate::import::pts_points(l)).collect::<Option<_>>()?;
+    let (outline, holes) = flat.split_first()?;
+    if outline.len() != zone.outline.len() || holes.len() != zone.holes.len() || holes.iter().zip(&zone.holes).any(|(a, b)| a.len() != b.len()) {
+        return None;
+    }
+    let pts = |o: &[eda_model::ir::Point], h: &[Vec<eda_model::ir::Point>]| -> Vec<[f64; 2]> { o.iter().chain(h.iter().flatten()).map(|p| [p.x.as_f64(), p.y.as_f64()]).collect() };
+    let motion = rigid_motion(&pts(outline, holes), &pts(&zone.outline, &zone.holes))?;
+    Some(rings.iter().map(|l| crate::sexpr::to_text(&crate::sexpr::Sexpr::List(moved_points(l, &motion)))).collect())
+}
+
+/// Every `(xy x y)`, and an arc's `(start ..)`, `(mid ..)` and `(end ..)`, of a `(pts ..)` list put through `motion`, the rest as it is.
+fn moved_points(l: &[crate::sexpr::Sexpr], motion: &Motion) -> Vec<crate::sexpr::Sexpr> {
+    use crate::sexpr::Sexpr;
+    let tag = crate::sexpr::tag(l);
+    if matches!(tag, Some("xy" | "start" | "mid" | "end")) {
+        if let (Some(x), Some(y)) = (crate::sexpr::num(l, 1), crate::sexpr::num(l, 2)) {
+            let [x, y] = motion.apply([crate::mm_to_nm(x).get(), crate::mm_to_nm(y).get()]);
+            let mut out = l.to_vec();
+            out[1] = Sexpr::Atom(crate::mm(eda_model::ir::Nm::new(x)));
+            out[2] = Sexpr::Atom(crate::mm(eda_model::ir::Nm::new(y)));
+            return out;
+        }
+    }
+    l.iter().map(|c| match c {
+        Sexpr::List(inner) => Sexpr::List(moved_points(inner, motion)),
+        other => other.clone(),
+    }).collect()
+}
+
 fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<String, String>)> {
     let now_layers: Vec<String> = zone.layer_set().into_iter().map(str::to_string).collect();
     if was.outline.len() != zone.outline.len() || was.outline.len() < 3 || was.holes.len() != zone.holes.len() || was.holes.iter().zip(&zone.holes).any(|(a, b)| a.len() != b.len()) {
@@ -395,27 +466,7 @@ fn follow(was: &FilledShape, zone: &Zone) -> Option<(Option<Motion>, HashMap<Str
     if old == new {
         return (was.layers == now_layers).then(|| (None, HashMap::new()));
     }
-    // The corner farthest from the first, so the angle is taken over the longest span.
-    let far = (1..old.len()).max_by(|&i, &j| dist2(old[0], old[i]).total_cmp(&dist2(old[0], old[j])))?;
-    let (u, v) = ([old[far][0] - old[0][0], old[far][1] - old[0][1]], [new[far][0] - new[0][0], new[far][1] - new[0][1]]);
-    if (u[0].hypot(u[1]) - v[0].hypot(v[1])).abs() > MOTION_TOLERANCE_NM {
-        return None;
-    }
-    let snap = |c: f64| if (c - c.round()).abs() < 1e-9 { c.round() } else { c };
-    let motion = [false, true].into_iter().find_map(|mirror| {
-        // A mirror first (y -> -y), then the turn that takes the mirrored span onto the new one.
-        let u = if mirror { [u[0], -u[1]] } else { u };
-        let a = v[1].atan2(v[0]) - u[1].atan2(u[0]);
-        let (c, s) = (snap(a.cos()), snap(a.sin()));
-        let m = if mirror { [[c, s], [s, -c]] } else { [[c, -s], [s, c]] };
-        let motion = Motion { from: old[0], to: new[0], m };
-        old.iter().zip(&new).all(|(o, n)| {
-            let (dx, dy) = (o[0] - motion.from[0], o[1] - motion.from[1]);
-            let p = [motion.to[0] + m[0][0] * dx + m[0][1] * dy, motion.to[1] + m[1][0] * dx + m[1][1] * dy];
-            dist2(p, *n).sqrt() <= MOTION_TOLERANCE_NM
-        })
-        .then_some(motion)
-    })?;
+    let motion = rigid_motion(&old, &new)?;
     // A zone on both sides keeps its set through a flip: `Zone::flip_parity` says it was flipped (its fills then go to the other side), not mirrored.
     if same_set(&was.layers, &now_layers) && (was.flip_parity == zone.flip_parity || !motion.mirrors()) {
         return Some((Some(motion), HashMap::new()));

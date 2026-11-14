@@ -319,6 +319,70 @@ fn locks_fills_arcs_and_old_dimensions_are_held_and_written_back() {
     assert_eq!((&back.kicad.locked, &back.kicad.zone_fills, &back.kicad.zone_arcs), (&fp.kicad.locked, &fp.kicad.zone_fills, &fp.kicad.zone_arcs));
 }
 
+/// UI-LEFT-3 F3-12: a zone drawn with arcs keeps them when it is moved, turned or mirrored (`ZONE::Move` / `Rotate` / `Mirror` move its chains' arcs) and in a copy
+/// (`copy_looks_from`); a teardrop zone (`(attr (teardrop (type ..)))`) is a zone written with what it holds; a legacy segment fill (`(fill_segments ..)`) is the
+/// fill `parseZONE` makes of it (each segment an oval of the minimum width, `BooleanAdd`ed), written as `(filled_polygon ..)`.
+#[test]
+fn zone_arcs_follow_the_zone_and_teardrop_and_segment_filled_zones_are_zones() {
+    let extra = r#"	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000003") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (arc (start 1 0) (mid 1.5 0.5) (end 1 1)))))
+	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000007") (hatch full 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.3) (attr (teardrop (type track_end))) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 3 0) (xy 4 0) (xy 4 1))))
+	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000008") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.2) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 6 0) (xy 9 0) (xy 9 3) (xy 6 3))) (fill_segments (pts (xy 6.5 1) (xy 8.5 1)) (pts (xy 6.5 2) (xy 8.5 2))))
+	(embedded_fonts no)"#;
+    let text = fixture().replace("\t(embedded_fonts no)", extra);
+    let mut fp = read(&text);
+    assert!(fp.kicad.tokens.iter().all(|t| !t.starts_with("(zone")), "every zone is an item: {:?}", fp.kicad.tokens);
+    let by_uuid = |fp: &LibraryFootprint, u: &str| fp.items.zones.iter().position(|z| fp.kicad.uuids.get(&z.id).map(String::as_str) == Some(u)).expect(u);
+
+    // the teardrop: a zone that says so, written with its own settings (not the teardrop manager's)
+    let td = by_uuid(&fp, "d9000000-0000-4000-8000-000000000007");
+    assert!(fp.items.zones[td].teardrop && fp.items.zones[td].teardrop_track_end);
+    let written = export_kicad_mod(&fp);
+    let block = &written[written.find("(attr (teardrop").unwrap()..];
+    let block = &written[written[..written.find("(attr (teardrop").unwrap()].rfind("(zone").unwrap()..written.find("(attr (teardrop").unwrap() + block.find("(polygon").unwrap()];
+    assert!(!block.contains("(uuid"), "a teardrop is written with no uuid: {block}");
+    for needle in ["(attr (teardrop (type track_end)))", "(hatch full 0.5)", "(clearance 0.2)", "(min_thickness 0.3)"] {
+        assert!(block.contains(needle), "{needle}: {block}");
+    }
+
+    // the segment fill: two ovals 0.2 mm wide, apart, so two filled polygons on F.Cu, about 2.2 mm by 0.2 mm each
+    let sf = by_uuid(&fp, "d9000000-0000-4000-8000-000000000008");
+    let fill = fp.kicad.zone_fills.get(&fp.items.zones[sf].id).expect("the segment fill is the zone's fill");
+    let rings = &fill.layers["F.Cu"];
+    assert_eq!(rings.len(), 2, "{rings:?}");
+    let xs: Vec<i64> = rings[0].1.iter().map(|p| p[0]).collect();
+    let (lo, hi) = (*xs.iter().min().unwrap(), *xs.iter().max().unwrap());
+    assert!((lo - 6_400_000).abs() < 10_000 && (hi - 8_600_000).abs() < 10_000, "an oval from 6.4 to 8.6 mm: {lo} {hi}");
+    assert!(written.matches("(filled_polygon").count() >= 2 && !written.contains("fill_segments"), "{written}");
+
+    // the arcs: moved by (2, 3) mm, then turned a quarter about the origin, then mirrored left-right
+    let arc = by_uuid(&fp, "d9000000-0000-4000-8000-000000000003");
+    let moved = |fp: &mut LibraryFootprint, f: &dyn Fn(Point) -> Point| fp.items.zones[arc].outline.iter_mut().for_each(|p| *p = f(*p));
+    moved(&mut fp, &|p| Point { x: p.x + mm(2.0), y: p.y + mm(3.0) });
+    let w = export_kicad_mod(&fp);
+    assert!(w.contains("(arc (start 3 3) (mid 3.5 3.5) (end 3 4))"), "moved with the zone: {w}");
+    moved(&mut fp, &|p| Point { x: -p.y, y: p.x });
+    let w = export_kicad_mod(&fp);
+    assert!(w.contains("(arc (start -3 3) (mid -3.5 3.5) (end -4 3))"), "turned with it: {w}");
+    moved(&mut fp, &|p| Point { x: -p.x, y: p.y });
+    let w = export_kicad_mod(&fp);
+    assert!(w.contains("(arc (start 3 3) (mid 3.5 3.5) (end 4 3))"), "mirrored with it: {w}");
+    // read back: the arc is the zone's again, where it now is
+    let back = read(&w);
+    assert_eq!(back.kicad.zone_arcs.len(), 1);
+    // a copy of the zone (another footprint's, as Paste takes it) has the arcs too, and they follow it
+    let mut other = LibraryFootprint::default();
+    let mut z = fp.items.zones[arc].clone();
+    z.id = "zone_copy".into();
+    other.kicad.copy_looks_from(&fp.kicad, &fp.items.zones[arc].id, "zone_copy");
+    z.outline.iter_mut().for_each(|p| p.y = p.y + mm(10.0));
+    other.items.zones.push(z);
+    let w = export_kicad_mod(&other);
+    assert!(w.contains("(arc (start 3 13) (mid 3.5 13.5) (end 4 13))"), "the copy, moved, keeps its arc: {w}");
+    // reshaped: the points
+    other.items.zones[0].outline.pop();
+    assert!(!export_kicad_mod(&other).contains("(arc "), "a reshaped zone is its points");
+}
+
 /// KiCad's own library footprints with these items -- the keepouts of a connector, the dimensions and the leaders of a logo, the text boxes of a module, the group
 /// of a panelization mouse bite, the point of a package -- read, written and read again give back the same items. Skipped when the libraries are not installed.
 #[test]
@@ -407,5 +471,65 @@ fn kicad_cli_loads_and_keeps_every_item_our_writer_writes() {
     for (id, uuid) in &first.kicad.uuids {
         assert_eq!((from_ours.kicad.uuids.get(id), from_original.kicad.uuids.get(id)), (Some(uuid), Some(uuid)), "{id}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// UI-LEFT-3 F3-12 with kicad-cli (`EDA_SLOW_TESTS=1`): the footprint we write of a moved zone drawn with an arc, a teardrop zone and a zone with a legacy segment
+/// fill loads in kicad-cli, and its `fp upgrade` keeps the moved arc, the teardrop and our filled polygons where KiCad's own reading of the original puts them.
+#[test]
+fn kicad_cli_keeps_a_moved_zone_arc_a_teardrop_zone_and_a_segment_fill() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let extra = r#"	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000003") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 0 0) (arc (start 1 0) (mid 1.5 0.5) (end 1 1)))))
+	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000007") (hatch full 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.3) (attr (teardrop (type track_end))) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 3 0) (xy 4 0) (xy 4 1))))
+	(zone (layer "F.Cu") (uuid "d9000000-0000-4000-8000-000000000008") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.2) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 6 0) (xy 9 0) (xy 9 3) (xy 6 3))) (fill_segments (pts (xy 6.5 1) (xy 8.5 1)) (pts (xy 6.5 2) (xy 8.5 2))))
+	(embedded_fonts no)"#;
+    let original = fixture().replace("\t(embedded_fonts no)", extra);
+    let mut fp = read(&original);
+    // the arc's zone moved by (2, 3) mm, as the Footprint Editor's Move does
+    let i = fp.items.zones.iter().position(|z| fp.kicad.uuids.get(&z.id).map(String::as_str) == Some("d9000000-0000-4000-8000-000000000003")).unwrap();
+    fp.items.zones[i].outline.iter_mut().for_each(|p| *p = Point { x: p.x + mm(2.0), y: p.y + mm(3.0) });
+    let ours = export_kicad_mod(&fp);
+    let dir = std::env::temp_dir().join(format!("eda_fp_zone_forms_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut upgraded = Vec::new();
+    for (name, text) in [("original", &original), ("ours", &ours)] {
+        let lib = dir.join(format!("{name}.pretty"));
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("Zones.kicad_mod"), text).unwrap();
+        let up = dir.join(format!("{name}_up.pretty"));
+        let out = Command::new(&cli).args(["fp", "upgrade", "--force", "-o"]).arg(&up).arg(&lib).output().expect("runs kicad-cli");
+        assert!(out.status.success(), "kicad-cli fp upgrade of {name}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        upgraded.push(read(&std::fs::read_to_string(up.join("Zones.kicad_mod")).unwrap_or_else(|_| panic!("kicad-cli wrote no footprint for {name}"))));
+    }
+    let (kicad_original, kicad_ours) = (&upgraded[0], &upgraded[1]);
+    let zone = |fp: &LibraryFootprint, u: &str| fp.items.zones.iter().find(|z| fp.kicad.uuids.get(&z.id).map(String::as_str) == Some(u)).cloned().expect(u);
+    // the arc: we write it moved with its zone (`(arc (start 3 3) (mid 3.5 3.5) (end 3 4))`), and kicad-cli reads it as the arc of the original two and three
+    // millimetres on (kicad-cli 10.99's `fp upgrade` writes a footprint zone's arc as the points of its polyline, the original's as ours)
+    assert!(ours.contains("(arc (start 3 3) (mid 3.5 3.5) (end 3 4))"), "{ours}");
+    let (a, b) = (zone(kicad_original, "d9000000-0000-4000-8000-000000000003"), zone(kicad_ours, "d9000000-0000-4000-8000-000000000003"));
+    assert!(a.outline.len() > 4 && a.outline.len() == b.outline.len(), "{} {}", a.outline.len(), b.outline.len());
+    for (p, q) in a.outline.iter().zip(&b.outline) {
+        assert!((q.x - p.x - mm(2.0)).get().abs() <= 2 && (q.y - p.y - mm(3.0)).get().abs() <= 2, "{p:?} -> {q:?}");
+    }
+    // the teardrop: the same zone in both
+    // (`format( const ZONE* )` writes no uuid for a teardrop: it is the one teardrop of each)
+    let teardrop = |fp: &LibraryFootprint| fp.items.zones.iter().find(|z| z.teardrop).cloned().expect("the teardrop");
+    let (a, b) = (teardrop(kicad_original), teardrop(kicad_ours));
+    assert!(b.teardrop && b.teardrop_track_end);
+    assert_eq!((b.clearance, b.min_thickness, b.border_style), (a.clearance, a.min_thickness, a.border_style));
+    // the segment fill: KiCad's reading of the original makes the fill we write, near enough (the same ovals, the same union)
+    let fill = |fp: &LibraryFootprint| {
+        let z = zone(fp, "d9000000-0000-4000-8000-000000000008");
+        fp.kicad.zone_fills.get(&z.id).map(|f| f.layers["F.Cu"].iter().map(|(_, pts)| pts.len()).collect::<Vec<_>>())
+    };
+    let (fa, fb) = (fill(kicad_original), fill(kicad_ours));
+    assert!(fa.is_some() && fa.as_ref().map(Vec::len) == fb.as_ref().map(Vec::len), "{fa:?} {fb:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

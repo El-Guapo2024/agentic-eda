@@ -232,3 +232,106 @@ fn ctrl_e_shows_the_footprints_record_and_items_and_update_on_board_puts_back_wh
     let pad1 = fp.split("(pad ").find(|p| p.starts_with("\"1\"")).unwrap();
     assert!(pad1.contains("(layers \"F.Cu\" \"F.Mask\")"), "the pads' facts stay: {pad1}");
 }
+
+/// UI-LEFT-3 F3-11: Ctrl+E of a footprint on the back, turned, brings everything to the front at no angle (`LoadFootprintFromBoard`: `Flip` when it is not on F.Cu,
+/// then `SetOrientation( ANGLE_0 )`), its zones with the rest: the copy is the library footprint's frame, item for item.
+#[test]
+fn ctrl_e_of_a_turned_footprint_on_the_back_shows_its_zones_at_the_front_with_the_rest() {
+    let dir = board("f311_back");
+    step(&dir, Cmd::PlaceFootprint { footprint: "Lib:Kept".into(), at: Point { x: mm(70.0), y: mm(40.0) }, reference: "K1".into(), value: String::new(), definition: None }, false, "test").unwrap();
+    step(&dir, Cmd::RotateItems { ids: vec!["K1".into()], pivot: Point { x: mm(70.0), y: mm(40.0) }, angle_millideg: 30_000 }, false, "test").unwrap();
+    step(&dir, Cmd::FlipItems { ids: vec!["K1".into()], pivot: Point { x: mm(70.0), y: mm(40.0) }, direction: FlipDirection::LeftRight }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let z = design.routing.as_ref().unwrap().zones.iter().find(|z| z.parent_footprint.as_deref() == Some("K1")).unwrap();
+    assert_eq!(z.layer, "B.Cu", "the keepout went to the back with the footprint");
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "K1".into() }), false, "test").unwrap();
+    let key = BoardFootprintCopy::key_of("K1");
+    let (_, design, _) = load(&dir).unwrap();
+    let copy = design.footprint_library.as_ref().unwrap().by_name(&key).unwrap().clone();
+    let near = |a: Point, b: Point| (a.x.get() - b.x.get()).abs() <= 2 && (a.y.get() - b.y.get()).abs() <= 2;
+    let zone = &copy.items.zones[0];
+    assert_eq!(zone.layer, "F.Cu", "the keepout at the front, as the footprint");
+    let want = [(-3.0, 3.0), (3.0, 3.0), (3.0, 4.0), (-3.0, 4.0)].map(|(x, y)| Point { x: mm(x), y: mm(y) });
+    assert!(zone.outline.iter().zip(want).all(|(a, b)| near(*a, b)), "the library's outline: {:?}", zone.outline);
+    let pad1 = copy.pads.iter().find(|p| p.number == "1").unwrap();
+    assert!(near(pad1.at, Point { x: mm(-1.0), y: mm(0.0) }), "pad 1 where the library has it: {:?}", pad1.at);
+    let dim = &copy.items.dimensions[0];
+    assert!(near(dim.start, Point { x: mm(-1.0), y: mm(2.0) }) && dim.layer == "F.Fab", "the dimension too: {:?} {}", dim.start, dim.layer);
+}
+
+/// UI-LEFT-3 F3-11: a footprint group holding a field (`PCB_FIELD` is groupable) keeps it in Ctrl+E's copy, and Update Footprint on Board writes it back in the group.
+#[test]
+fn a_footprint_group_keeps_its_field_through_ctrl_e_and_update_on_board() {
+    let dir = scratch("f311_group_field");
+    let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6) (legacy_teardrops no))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (1 "F.Mask" user) (3 "B.Mask" user) (5 "F.SilkS" user) (7 "B.SilkS" user) (35 "F.Fab" user) (37 "B.Fab" user) (31 "F.CrtYd" user) (29 "B.CrtYd" user) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_rect (start 0 0) (end 100 80) (stroke (width 0.1) (type solid)) (fill no) (layer "Edge.Cuts") (uuid "00000000-0000-0000-0000-0000000000e1"))
+  (footprint "Lib:Logo" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000011") (at 50 40 0)
+    (property "Reference" "U1" (at 0 -6 0) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-000000000012") (effects (font (size 1 1) (thickness 0.15))))
+    (property "Value" "Logo" (at 0 6 0) (layer "F.Fab") (uuid "00000000-0000-0000-0000-000000000013") (effects (font (size 1 1) (thickness 0.15))))
+    (attr smd)
+    (fp_line (start -2 -2) (end 2 -2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-000000000014"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-000000000019"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "00000000-0000-0000-0000-00000000001a"))
+    (group "G" (uuid "00000000-0000-0000-0000-0000000000f1") (members "00000000-0000-0000-0000-000000000012" "00000000-0000-0000-0000-000000000014" "00000000-0000-0000-0000-000000000019"))
+  )
+)"#;
+    let file = dir.join("group.kicad_pcb");
+    std::fs::write(&file, text).unwrap();
+    let out = dir.join("board");
+    crate::import_kicad::run(&[file.display().to_string(), "-o".into(), out.display().to_string()]).unwrap();
+    step(&out, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "U1".into() }), false, "test").unwrap();
+    let key = BoardFootprintCopy::key_of("U1");
+    let (_, design, _) = load(&out).unwrap();
+    let copy = design.footprint_library.as_ref().unwrap().by_name(&key).unwrap().clone();
+    assert_eq!(copy.items.groups.len(), 1, "{:?}", copy.items.groups);
+    let members = &copy.items.groups[0].member_ids;
+    assert!(members.iter().any(|m| m == "field:Reference"), "the Reference stays in the group: {members:?}");
+    assert_eq!(members.len(), 3, "the field, the line and the pad: {members:?}");
+    // nothing edited: Update Footprint on Board writes the group back with its three members
+    step(&out, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key }), false, "test").unwrap();
+    let text = pcb(&out);
+    let fp = footprint_of(&text, "U1");
+    let group = &fp[fp.find("(group").expect("the group")..];
+    let reference = &fp[fp.find("(property \"Reference\"").unwrap()..];
+    let uuid = &reference[reference.find("(uuid \"").unwrap() + 7..];
+    let uuid = &uuid[..uuid.find('"').unwrap()];
+    assert!(group.contains(uuid), "the Reference's uuid ({uuid}) among the members: {group}");
+    let members_text = &group[group.find("(members").unwrap()..];
+    assert_eq!(members_text[..members_text.find(')').unwrap()].matches('"').count(), 6, "three members: {members_text}");
+}
+
+/// UI-LEFT-3 F3-12: a library footprint's zone drawn with an arc keeps it on the board (the board's footprint is a clone of the library's), where the footprint puts it
+/// and as it turns and flips; Ctrl+E's copy has it in the footprint's frame, the copy's Move takes it along, and Update Footprint on Board puts it back.
+#[test]
+fn a_footprint_zones_arc_goes_onto_the_board_into_ctrl_e_and_back() {
+    let dir = board("f312_arcs");
+    let arcs = KEPT
+        .replace("(footprint \"Kept\"", "(footprint \"Arcs\"")
+        .replace("(polygon (pts (xy -3 3) (xy 3 3) (xy 3 4) (xy -3 4)))", "(polygon (pts (xy -3 3) (xy 3 3) (arc (start 3 4) (mid 0 5) (end -3 4))))");
+    std::fs::write(dir.join("libs").join("Lib.pretty").join("Arcs.kicad_mod"), arcs).unwrap();
+    step(&dir, Cmd::PlaceFootprint { footprint: "Lib:Arcs".into(), at: Point { x: mm(70.0), y: mm(40.0) }, reference: "K1".into(), value: String::new(), definition: None }, false, "test").unwrap();
+    let fp = pcb(&dir);
+    assert!(footprint_of(&fp, "K1").contains("(arc (start 73 44) (mid 70 45) (end 67 44))"), "the arc where the footprint puts it: {}", footprint_of(&fp, "K1"));
+    step(&dir, Cmd::RotateItems { ids: vec!["K1".into()], pivot: Point { x: mm(70.0), y: mm(40.0) }, angle_millideg: 90_000 }, false, "test").unwrap();
+    step(&dir, Cmd::FlipItems { ids: vec!["K1".into()], pivot: Point { x: mm(70.0), y: mm(40.0) }, direction: FlipDirection::LeftRight }, false, "test").unwrap();
+    let fp = pcb(&dir);
+    assert!(footprint_of(&fp, "K1").contains("(arc "), "turned and flipped, the arc stays: {}", footprint_of(&fp, "K1"));
+    step(&dir, Cmd::FpEditor(FpEditorCmd::OpenFromBoard { reference: "K1".into() }), false, "test").unwrap();
+    let key = BoardFootprintCopy::key_of("K1");
+    let copy = load(&dir).unwrap().1.footprint_library.unwrap().by_name(&key).unwrap().clone();
+    let lib_text = eda_kicad::export_kicad_mod(&copy);
+    assert!(lib_text.contains("(arc (start 3 4) (mid 0 5) (end -3 4))"), "the copy's zone has the library's arc, in its frame: {lib_text}");
+    // the copy's zone moved: its arc with it; then put back on the board
+    let zid = copy.items.zones[0].id.clone();
+    step(&dir, Cmd::FpItem(FpItemCmd::Move { footprint: key.clone(), ids: vec![zid], dx: mm(1.0), dy: mm(0.0) }), false, "test").unwrap();
+    let moved = load(&dir).unwrap().1.footprint_library.unwrap().by_name(&key).unwrap().clone();
+    assert!(eda_kicad::export_kicad_mod(&moved).contains("(arc (start 4 4) (mid 1 5) (end -2 4))"), "{}", eda_kicad::export_kicad_mod(&moved));
+    step(&dir, Cmd::FpEditor(FpEditorCmd::SaveToBoard { footprint: key }), false, "test").unwrap();
+    let fp = pcb(&dir);
+    assert!(footprint_of(&fp, "K1").contains("(arc "), "Update Footprint on Board keeps it: {}", footprint_of(&fp, "K1"));
+}

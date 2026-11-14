@@ -63,6 +63,9 @@ pub(crate) struct ZoneArgs<'a> {
     /// The zone's own per-layer settings as the file wrote them (`DrawingsSection::zone_layer_props`), one per line: written after the fill for the layers the
     /// zone is on (`for( const auto& [layer, properties] : aZone->LayerProperties() ) format( properties, 0, layer )`).
     pub layer_props: Option<&'a str>,
+    /// A teardrop zone is written with what it holds (`format( const ZONE* )` writes the zone's own hatch, clearance, minimum width, pad connection and island
+    /// mode), not the settings the board's teardrop manager gives the teardrops it makes: a library footprint's teardrop zone, read from its file (UI-LEFT-3 F3-12).
+    pub teardrop_as_read: bool,
 }
 
 /// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
@@ -106,17 +109,19 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     // The layer set, on the layers the board has: `(layers ..)` for more than one, else `(layer <the first layer of the set>)`.
     let set = z.layer_set();
     let shown: Vec<&str> = set.iter().copied().filter(|l| a.enabled_layers.map_or(true, |e| e.contains(*l))).collect();
+    // `if( !aZone->IsTeardropArea() ) KICAD_FORMAT::FormatUuid( .. )`: a teardrop written as it is read has none
+    let uuid = if z.teardrop && a.teardrop_as_read { String::new() } else { format!(" (uuid \"{}\")", a.uuid) };
     if shown.len() > 1 {
-        writeln!(out, " {} (uuid \"{}\")", zone_layers_token(&shown, copper_zone), a.uuid).unwrap();
+        writeln!(out, " {}{uuid}", zone_layers_token(&shown, copper_zone)).unwrap();
     } else {
-        writeln!(out, " (layer {}) (uuid \"{}\")", sexpr_str(&z.layer), a.uuid).unwrap();
+        writeln!(out, " (layer {}){uuid}", sexpr_str(&z.layer)).unwrap();
     }
     if !z.name.is_empty() && !z.teardrop {
         writeln!(out, "\t\t(name {})", sexpr_str(&z.name)).unwrap();
     }
     // `INVISIBLE_BORDER` (what `TEARDROP_MANAGER::createTeardrop` gives the teardrops it makes) is written as `none`, like `NO_HATCH`. A teardrop read from a file
     // (it has the file's uuid) keeps the style the file gave it, as `parseZONE` keeps a `(hatch full|edge ..)` (r3-board-io F9: `issue11814`'s 547 `full` ones).
-    let hatch = if z.teardrop && z.uuid.is_empty() {
+    let hatch = if z.teardrop && z.uuid.is_empty() && !a.teardrop_as_read {
         "none"
     } else {
         match z.border_style {
@@ -135,7 +140,7 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         writeln!(out, "\t\t(attr (teardrop (type {})))", if z.teardrop_track_end { "track_end" } else { "padvia" }).unwrap();
     }
 
-    let (clearance, min_thickness, connection, island_mode) = if z.teardrop {
+    let (clearance, min_thickness, connection, island_mode) = if z.teardrop && !a.teardrop_as_read {
         // A mask teardrop (`createTeardropMask`) is as thick as the track's mask expansion at least (`SetMinThickness( std::max( GetMinThickness(), expansion ) )`).
         let min_thickness = if copper_zone || z.min_thickness <= eda_model::ir::Nm::new(25_400) { TEARDROP_MIN_THICKNESS.to_string() } else { mm(z.min_thickness) };
         ("0".to_string(), min_thickness, PadConnection::Full, IslandRemovalMode::Never)
