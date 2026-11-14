@@ -65,3 +65,17 @@ export function unfoldRotate(unfolding: { spin?: UnfoldSpin } | null, ccw: boole
   persistentSpin = next;
   return next;
 }
+
+/**
+ * X / Y in the wire tool while the member's label rides the cursor (UI-LEFT-3 S3-13): `doDrawSegments` passes them on (`evt->SetPassEvent()`), and
+ * `SCH_EDIT_TOOL::Mirror` mirrors the selection, which holds the riding label (`m_selectionTool->AddItemToSel( m_busUnfold.label, true )` until the click places
+ * it): `SCH_TEXT::MirrorSpinStyle( !vertical )` flips a horizontal label's justification with X (`mirrorH`: right <-> left) and a vertical one's with Y
+ * (`mirrorV`: up <-> bottom); the other key leaves it as it is. Unlike R it is not kept for the next unfold (`label_spin_style` is set by the rotate branch
+ * only). Returns the label's new spin, or null when no label rides (the key is the edit tool's as ever).
+ */
+export function unfoldMirror(unfolding: { spin?: UnfoldSpin; labelAt?: unknown } | null, leftRight: boolean): UnfoldSpin | null {
+  if (!unfolding || unfolding.labelAt) return null;
+  const spin = unfolding.spin ?? "right";
+  const flip: Record<UnfoldSpin, UnfoldSpin> = leftRight ? { right: "left", left: "right", up: "up", bottom: "bottom" } : { right: "right", left: "left", up: "bottom", bottom: "up" };
+  return flip[spin];
+}

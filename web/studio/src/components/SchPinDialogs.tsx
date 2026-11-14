@@ -9,7 +9,8 @@
 // `m_dialogSyncSheetPin->Show( true )`; at the tool's end `EndPlacement()` then `Show( true )`, UI-LEFT-2 SS15), on the sheets it had, which stay on their sheet
 // path while the sheet in view is the one the labels went into: its reads and edits are addressed to that path (`on_sheet`). Sync All Sheet Pins lists the whole
 // hierarchy's sheets (`SyncAllSheetsPins`' sheet paths, kicad-port/schSyncSheetList.ts), each read from and edited on its own sheet path.
-// Differs: Esc drops every label still in the hand at once (KiCad's first Esc drops the one riding, the next click makes the next, the second Esc ends the tool).
+// Esc drops the riding label only: the next click makes it again and the rest follow; the second Esc, with nothing in the hand, ends the tool and the dialog
+// comes back (`TwoClickPlace`'s `cleanup()`, `GetPlacementTemplate`, `EndPlacement`; UI-LEFT-3 S3-13, state/schCarryStore.ts `SyncTemplates`).
 // Not here: renaming or reshaping a label from the dialog.
 import { useEffect, useState } from "react";
 import type { SchToolDialog } from "../api/schEditTypes";
@@ -22,7 +23,7 @@ import { carryItem } from "../actions/schPlaceActions";
 import { lastPlaced } from "../kicad-port/schLastPlaced";
 import type { CarriedItem } from "../kicad-port/schPlaceTool";
 import { samePath } from "../kicad-port/sheetPages";
-import { getSchCarry, subscribeSchCarry } from "../state/schCarryStore";
+import { getSchCarry, getSyncTemplates, setSyncTemplates, subscribeSchCarry } from "../state/schCarryStore";
 import { fetchSchematic } from "../api/client";
 
 export function CleanupPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "cleanup_pins" }> }) {
@@ -138,11 +139,13 @@ export function SyncPinsDialog({ dialog }: { dialog: Extract<SchToolDialog, { ki
     dispatch({ type: "SET_DRAW_STATE", draw: null });
     dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_label_hier" });
     const c = api.getState().cursorNm;
+    setSyncTemplates({ sheet: [...api.getState().currentSheetPath], items });
     carryItem({ api }, "sch_label_hier", items[0]!, c ? [c.x, c.y] : [sheet.at[0], sheet.at[1]], items.slice(1));
-    // `EndPlaceItem` / `CanPlaceMore` / `EndPlacement`, then `Show( true )`: the dialog again, on this sheet, once the hand is empty
+    // `EndPlaceItem` / `CanPlaceMore` / `EndPlacement`, then `Show( true )`: the dialog again, on this sheet, once no label rides and none is left to place
+    // (the last placed, or the tool ended by a second Esc)
     const again: SchToolDialog = { kind: "sync_pins", sheetIds: dialog.sheetIds, first: current.key, path: [...base] };
     const stop = subscribeSchCarry(() => {
-      if (getSchCarry()) return;
+      if (getSchCarry() || getSyncTemplates()) return;
       stop();
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: again });
     });

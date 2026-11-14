@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoplacePins, constrainOnEdge, hasUndefinedPins, nextLabelToPlace, pinsToCleanUp, strNumCmp, syncRows, unplacedLabels, type HierLabel } from "./schSheetPins";
+import { autoplacePins, constrainOnEdge, hasUndefinedPins, nextLabelToPlace, pinsToCleanUp, strNumCmp, syncRows, unplacedLabels, type HierLabel, syncTemplatesAfter } from "./schSheetPins";
 
 const sheet = { at: [10_000, 10_000] as const, size: [20_000, 10_000] as const };
 const label = (name: string): HierLabel => ({ name, shape: "input" });
@@ -74,4 +74,11 @@ test("autoplace continues after the pin that sorts last", () => {
   const placed = autoplacePins(sheet, [{ name: "X", at: [10_000, 10_000] }, { name: "Y", at: [15_000, 10_000] }], [label("X"), label("Y"), label("Z")], extent);
   assert.deepEqual(placed.map((p) => p.label.name), ["Z"]);
   assert.deepEqual(placed[0]!.at, [20_000, 10_000]);
+});
+
+test("Sync Sheet Pins' labels in the hand: a click ends the riding one's template, Esc drops only the riding label (UI-LEFT-3 S3-13)", () => {
+  assert.deepEqual(syncTemplatesAfter("placed", "A", ["B", "C"]), ["B", "C"], "`EndPlaceItem`, then the next rides");
+  assert.equal(syncTemplatesAfter("placed", "C", []), null, "the last placed: `EndPlacement`");
+  assert.deepEqual(syncTemplatesAfter("dropped", "B", ["C"]), ["B", "C"], "`cleanup()`: B is still the current template, the next click makes it again");
+  assert.deepEqual(syncTemplatesAfter("dropped", "C", []), ["C"]);
 });
