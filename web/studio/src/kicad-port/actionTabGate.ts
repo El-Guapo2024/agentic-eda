@@ -167,18 +167,25 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   // View > Show Pin Alternate Icons: `SCH_EDITOR_CONTROL::TogglePinAltIcons` (`show_pin_alt_icons`) and `SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`, each with its own setting
   // (UI-LEFT S5: a placed symbol's pins carry their alternates).
   "eeschema.EditorControl.togglePinAltIcons",
+  // KiCad 25ec2335's five Draw Arc modes and Delete Last Point: `EE_GRAPHIC_TOOL`, which both editors run (UI-LEFT-3 Y3-8)
+  "eeschema.InteractiveDrawing.drawArcCenter",
+  "eeschema.InteractiveDrawing.drawArcStartEndMid",
+  "eeschema.InteractiveDrawing.drawArcStartEndCenter",
+  "eeschema.InteractiveDrawing.drawArcTangent",
+  "eeschema.InteractiveDrawing.drawArcStartDirEnd",
+  "eeschema.InteractiveDrawing.deleteLastPoint",
 ]);
 
 /**
  * `/` (`arcPosture`): 8303b2ad's `pcbnew.InteractiveDrawing.arcPosture`, the board's and the footprint editor's; KiCad 25ec2335 makes it the common
- * `common.InteractiveDrawing.arcPosture` that the schematic's Draw Arc (`EE_GRAPHIC_TOOL::DrawArc`, three clicks since UI-LEFT S13) reads too. The schematic
- * registers it only while an arc is being drawn.
+ * `common.InteractiveDrawing.arcPosture` that the schematic's and the Symbol Editor's Draw Arc (`EE_GRAPHIC_TOOL::DrawArc`, UI-LEFT S13, UI-LEFT-3 Y3-8) read too. The
+ * schematic registers it only while an arc is being drawn; the Symbol Editor's does nothing without one.
  */
 export const ARC_POSTURE = "pcbnew.InteractiveDrawing.arcPosture";
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
-  if (name === ARC_POSTURE) return tab === "pcb" || tab === "footprint" || tab === "schematic";
+  if (name === ARC_POSTURE) return tab === "pcb" || tab === "footprint" || tab === "schematic" || tab === "symbol";
   if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
   if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
   if (FOOTPRINT_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "footprint";

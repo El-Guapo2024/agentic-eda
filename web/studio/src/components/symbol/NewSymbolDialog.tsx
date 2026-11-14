@@ -1,5 +1,5 @@
 // `DIALOG_LIB_NEW_SYMBOL` as `SYMBOL_EDIT_FRAME::CreateNewSymbol` opens it with no parent (eeschema/dialogs/dialog_lib_new_symbol.cpp):
-// the symbol's name -- the validator's "Symbol must have a name.", and a name the library already has is refused -- and the properties the
+// the symbol's name -- the validator's "Symbol must have a name." (a message box), and a name the library already has asks "Overwrite" (UI-LEFT-3 Y3-7) -- and the properties the
 // new symbol starts with: the default reference designator, the units per package with "All units are interchangeable" (unchecked, so a
 // multi-unit symbol's units are locked, `LockUnits( !aProps.unitsInterchangeable )`), the alternate body style, "Create symbol as power
 // symbol" (which, as KiCad's dialog does, also excludes it from the BOM and the board and locks those two boxes), the pin name position
@@ -15,6 +15,7 @@ import { fetchLibraryItemsNow } from "../../api/librarySaveClient";
 import { getLibraryTree } from "../../state/libraryTree";
 import { newSymbolNameCheck, symbolExistsMessage, uniqueSymbolLibId } from "../../kicad-port/symEditActions";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
+import { askConfirm, showError } from "../library/libraryDialogs";
 import { useStudioState } from "../../state/store";
 import { nmFrom, nmTo } from "../../state/units";
 
@@ -43,7 +44,6 @@ export function NewSymbolDialog() {
   const [namesInside, setNamesInside] = useState(true);
   const [showPinNumbers, setShowPinNumbers] = useState(true);
   const [showPinNames, setShowPinNames] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** `getTargetLib()`: the library the new symbol goes in -- the tree's selected library row or symbol's, else the open symbol's, else the project library. */
   const [lib, setLib] = useState("eda");
@@ -63,7 +63,6 @@ export function NewSymbolDialog() {
     setNamesInside(true);
     setShowPinNumbers(true);
     setShowPinNames(true);
-    setError(null);
     setBusy(false);
     let stopped = false;
     const st = api.getState();
@@ -98,12 +97,15 @@ export function NewSymbolDialog() {
       /* backend busy: the `new_symbol` verb refuses a duplicate name anyway */
     }
     const check = newSymbolNameCheck(name, existing, lib);
-    if (check.error) return setError(check.error);
-    // KiCad's validator words for a taken name. Its dialog would then offer "Overwrite"; `new_symbol` has no such option (the project
-    // library's entry would be replaced by an empty one), so ours says the same words and asks for another name.
-    if (check.exists) return setError(symbolExistsMessage(check.name, splitLibName(check.libId).lib));
+    // the validator's refusals in KiCad's boxes (UI-LEFT-3 Y3-7): `wxMessageBox( _( "Symbol must have a name." ) )`, and a name the library has asks "Overwrite"
+    // (`KIDIALOG errorDlg( this, msg, _( "Confirmation" ), wxOK | wxCANCEL | wxICON_WARNING )`); Cancel keeps the dialog open
+    if (check.error) return void (await showError(check.error, undefined, "Message"));
+    let overwrite = false;
+    if (check.exists) {
+      if (!(await askConfirm({ title: "Confirmation", message: symbolExistsMessage(check.name, splitLibName(check.libId).lib), okLabel: "Overwrite" }))) return;
+      overwrite = true;
+    }
     setBusy(true);
-    setError(null);
     try {
       // `CreateSymbol`: `if( aProps.pinNameInside ) { SetPinNameOffset( aProps.pinTextPosition ); if( GetPinNameOffset() == 0 ) SetPinNameOffset( 1 ); }
       // else SetPinNameOffset( 0 );` -- an inside offset of 0 is 1 internal unit, 0.0001 mm.
@@ -112,6 +114,7 @@ export function NewSymbolDialog() {
         lib,
         name: check.name,
         reference,
+        overwrite,
         unitCount,
         unitsInterchangeable: interchangeable,
         alternateBodyStyle,
@@ -124,7 +127,7 @@ export function NewSymbolDialog() {
       });
       if (done) close();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      await showError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -215,11 +218,6 @@ export function NewSymbolDialog() {
               <input type="checkbox" checked={namesInside} onChange={(e) => setNamesInside(e.target.checked)} data-testid="new-symbol-names-inside" /> Pin name inside
             </label>
           </div>
-          {error && (
-            <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="new-symbol-error">
-              {error}
-            </p>
-          )}
         </div>
         <div className="dialog-footer">
           <button onClick={close} data-testid="new-symbol-cancel">

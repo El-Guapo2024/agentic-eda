@@ -5,14 +5,18 @@
 // symbol has no drawing of its own, so its OK says "Read Only" and is off, as `IsSymbolAlias()` makes it in KiCad. The rules live in kicad-port/symShapeProps.ts.
 import { useEffect, useState } from "react";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
-import { BORDER_HELP, FILL_CHOICES, shapeEditOf, shapeFormOf, shapeTitle, type ShapeForm } from "../../kicad-port/symShapeProps";
+import { BORDER_HELP, FILL_CHOICES, schColorOfCss, shapeEditOf, shapeFormOf, shapeTitle, withBorderColor, withFillChoice, withFillColor, type DeviceColors, type ShapeForm } from "../../kicad-port/symShapeProps";
+import { layerColorIn } from "../canvas/layers";
 import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
 import { graphicLooksCmd, graphicStateOf, LINE_STYLE_CHOICES } from "../../kicad-port/symLooks";
 import { ColorSwatch } from "../TextLookControls";
 import type { Cmd } from "../../api/types";
+import { borderOnWidthMm } from "../../kicad-port/symEditorDefaults";
+import { useStudioState } from "../../state/store";
 
 export function SymbolShapePropertiesDialog() {
   const state = useSymState();
+  const studioPrefs = useStudioState().prefs;
   const dispatch = useSymDispatch();
   const api = useSymApi();
   const id = state.shapeDialogId;
@@ -20,10 +24,12 @@ export function SymbolShapePropertiesDialog() {
   const g = id ? symbol?.graphics.find((x) => x.id === id) : undefined;
   const shape = g && g.kind !== "text" && g.kind !== "text_box" ? g : undefined;
   const [form, setForm] = useState<ShapeForm | null>(null);
+  // the fill swatch's colours of the body fills, in the editor's theme (`m_frame->GetRenderSettings()->GetLayerColor( LAYER_DEVICE / LAYER_DEVICE_BACKGROUND )`, UI-LEFT-3 Y3-5)
+  const layer = (): DeviceColors => ({ device: schColorOfCss(layerColorIn("symbol", "LAYER_DEVICE")), deviceBackground: schColorOfCss(layerColorIn("symbol", "LAYER_DEVICE_BACKGROUND")) });
 
   // the form is filled when the dialog opens on a shape, and keeps what is typed through the editor's polling
   useEffect(() => {
-    if (shape && symbol && id) setForm(shapeFormOf(shape, symbol, graphicStateOf(symbol, id)));
+    if (shape && symbol && id) setForm(shapeFormOf(shape, symbol, graphicStateOf(symbol, id), layer()));
     else setForm(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -31,6 +37,8 @@ export function SymbolShapePropertiesDialog() {
   if (!id || !shape || !symbol || !form) return null;
   const readOnly = !!state.derivedOwn;
   const set = <K extends keyof ShapeForm>(key: K, value: ShapeForm[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  // `onBorderChecked`: a border switched on from "no border" takes Preferences > Symbol Editor > Editing Options' "Default line width:"
+  const setBorder = (on: boolean) => setForm((f) => (f ? { ...f, border: on, ...(on && shape !== undefined && shape.stroke_mm < 0 ? { widthMm: borderOnWidthMm(studioPrefs) } : {}) } : f));
   const close = () => dispatch({ type: "SET_SHAPE_DIALOG_ID", id: null });
   const ok = async () => {
     const before = graphicStateOf(symbol, id);
@@ -53,7 +61,7 @@ export function SymbolShapePropertiesDialog() {
           <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr" }}>
             <span>Border</span>
             <span>
-              <input type="checkbox" checked={form.border} onChange={(e) => set("border", e.target.checked)} data-testid="shape-border" aria-label="Border" />
+              <input type="checkbox" checked={form.border} onChange={(e) => setBorder(e.target.checked)} data-testid="shape-border" aria-label="Border" />
               <span style={{ marginLeft: 8, opacity: form.border ? 1 : 0.5 }}>
                 Width:{" "}
                 <input
@@ -74,7 +82,7 @@ export function SymbolShapePropertiesDialog() {
           <div className="kv-grid" style={{ gridTemplateColumns: "100px 1fr", opacity: form.border ? 1 : 0.5, pointerEvents: form.border ? undefined : "none" }}>
             <span>Color:</span>
             <span data-testid="shape-border-color">
-              <ColorSwatch label="Border color" color={form.borderColor} onChange={(c) => set("borderColor", c)} />
+              <ColorSwatch label="Border color" color={form.borderColor} onChange={(c) => setForm((x) => (x ? withBorderColor(x, c, layer()) : x))} />
             </span>
             <span>Style:</span>
             <select value={form.style} disabled={!form.border} onChange={(e) => set("style", e.target.value)} data-testid="shape-border-style" aria-label="Border style">
@@ -90,11 +98,30 @@ export function SymbolShapePropertiesDialog() {
             <legend>Fill Style</legend>
             {FILL_CHOICES.map((f) => (
               <label key={f.value} style={{ display: "block" }}>
-                <input type="radio" name="shape-fill" checked={form.fill === f.value} onChange={() => set("fill", f.value)} data-testid={`shape-fill-${f.value}`} /> {f.label}
+                <input
+                  type="radio"
+                  name="shape-fill"
+                  checked={form.fill === f.value}
+                  onChange={(e) => {
+                    setForm((x) => (x ? withFillChoice(x, f.value, layer()) : x));
+                    // `m_customColorSwatch->GetNewSwatchColor()`: "Fill with:" asks for the colour at once
+                    // (the browser refuses a chooser of a disabled swatch, or one without a user gesture: the swatch then stays as it is)
+                    if (f.value === "color") {
+                      const input = e.currentTarget.closest("label")?.querySelector('input[type="color"]') as (HTMLInputElement & { showPicker?: () => void }) | null;
+                      try {
+                        if (input && !input.disabled) input.showPicker?.();
+                      } catch {
+                        /* no chooser */
+                      }
+                    }
+                  }}
+                  data-testid={`shape-fill-${f.value}`}
+                />{" "}
+                {f.label}
                 {f.value === "color" && (
-                  // `m_customColorSwatch`: picking a colour chooses the radio (`onCustomColorSwatch`)
+                  // `m_customColorSwatch`: the colour of the fill chosen (the layer's for the body fills); picking a colour chooses the radio (`onCustomColorSwatch`)
                   <span data-testid="shape-fill-swatch" style={{ display: "inline-block", marginLeft: 8 }}>
-                    <ColorSwatch label="Fill color" color={form.fillColor} onChange={(c) => setForm((x) => (x ? { ...x, fillColor: c, fill: "color" } : x))} />
+                    <ColorSwatch label="Fill color" color={form.fillColor} onChange={(c) => setForm((x) => (x ? withFillColor(x, c) : x))} />
                   </span>
                 )}
               </label>

@@ -106,3 +106,11 @@ test("the Footprint Editor's line mode, display modes and Appearance pane show a
   assert.deepEqual(["pcbnew.Control.padDisplayMode", "pcbnew.Control.graphicOutlines", "pcbnew.Control.textOutlines", "pcbnew.Control.showLayersManager"].map((n) => actionChecked(n, fp)), [true, false, true, false]);
   assert.equal(actionChecked("pcbnew.EditorControl.lineModeFree", { ...fp, fpView: { ...fpView, lineMode: "direct" } }), true);
 });
+
+test("the Symbol Editor's Draw Arc mode in force is pressed while its arc tool runs (KiCad 25ec2335's `TOOLBAR_STATE::TOGGLE`, UI-LEFT-3 Y3-8)", () => {
+  const c: CheckedContext = { ...base, tab: "symbol", symTool: "draw_arc", sym: { ...base.sym, arcDrawMode: "tangent" } };
+  assert.equal(actionChecked("eeschema.InteractiveDrawing.drawArcTangent", c), true);
+  assert.equal(actionChecked("eeschema.InteractiveDrawing.drawArcCenter", c), false);
+  assert.equal(actionChecked("eeschema.InteractiveDrawing.drawArcTangent", { ...c, symTool: "select" }), false);
+  assert.equal(actionChecked("eeschema.InteractiveDrawing.drawArc", c), true, "the 8303b2ad action arms the same tool");
+});

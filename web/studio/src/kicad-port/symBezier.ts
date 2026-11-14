@@ -4,7 +4,7 @@
 //   (common/eda_shape.cpp `beginEdit` / `calcEdit` / `continueEdit` / `endEdit`): the first click sets all four points (state 1); the cursor then drags the end and the
 //   second control point together; the second click fixes them (state 2) and the cursor drags the first control point; the third (state 3) and the cursor drags the second
 //   control point; the fourth click ends it (`continueEdit` returns false at state 3). A double click or Enter (`finishInteractive`) ends it where the cursor has it.
-//   Unfilled (`m_lastFillStyle`), "Add Curve";
+//   with the tool's last stroke and fill (`m_lastStroke`, `m_lastFillStyle`: kicad-port/symTextBox.ts `lastShapeStyle`), "Add Curve";
 // - edited by the point editor (`EDA_BEZIER_POINT_EDIT_BEHAVIOR`, common/tool/point_editor_behavior.cpp): four points -- start, control 1, control 2, end -- with the
 //   indicator lines start to control 1 and control 2 to end; dragging one point sets that point only.
 //

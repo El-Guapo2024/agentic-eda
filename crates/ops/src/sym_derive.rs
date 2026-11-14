@@ -125,7 +125,13 @@ impl Board<'_> {
             }
             kept.push(f.clone());
         }
-        self.library_symbol_mut(lib_id)?.set_fields(kept);
+        let sym = self.library_symbol_mut(lib_id)?;
+        sym.set_fields(kept);
+        // KiCad keeps a field's face, pen and colour on the field itself (`SCH_FIELD`, an `EDA_TEXT`), so a field that is removed or renamed takes them with it: the
+        // looks kept beside the symbol by the field's name (`LibrarySymbolKeep::field_looks`) go when no field has that name any more (UI-LEFT-3 Y3-3; a rename's
+        // caller gives the new name the old one's looks with `SetSymbolFieldLooks` after this verb, in the same batch).
+        let names: std::collections::BTreeSet<String> = sym.all_fields().into_iter().map(|f| f.name).collect();
+        sym.kicad.field_looks.retain(|name, _| names.contains(name));
         Ok(())
     }
 

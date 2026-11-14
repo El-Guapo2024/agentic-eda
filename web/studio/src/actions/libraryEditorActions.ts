@@ -9,6 +9,11 @@
 // Viewer). The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
+import { ARC_DRAW_MODES, arcToggleClockwise, incrementArcDrawMode, type ArcDrawMode } from "../kicad-port/arcGeom";
+import { ARC_MODE_ACTIONS, CYCLE_ARC_DRAW_MODE } from "../kicad-port/schArcDraw";
+import { arcSessionBack, arcSessionSetMode } from "../kicad-port/arcDrawSession";
+import { symArcDrawMode } from "../kicad-port/symArcDraw";
+import { ARC_POSTURE } from "../kicad-port/actionTabGate";
 import type { Action as StudioAction, StudioApi } from "../state/store";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
@@ -48,7 +53,6 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     if (ctx.tab === "symbol") void fn();
   };
   const fpToast = (message: string) => ctx.fpDispatch({ type: "TOAST", message, kind: "info" });
-  const symToast = (message: string) => ctx.symDispatch({ type: "TOAST", message, kind: "info" });
   const selectedPads = () => {
     const st = ctx.fpApi.getState();
     return [...st.selection].filter((id) => st.footprint?.pads.some((p) => p.id === id));
@@ -251,7 +255,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // Pin Table... (Edit menu) -- SYMBOL_EDITOR_EDIT_TOOL::PinTable (DIALOG_LIB_EDIT_PIN_TABLE): the open symbol's pins in a table. Registered on the Symbol tab only, so
   // the schematic's own Edit menu does not show a live entry that does nothing there.
   if (ctx.tab === "symbol") {
-    m.set("eeschema.InteractiveEdit.pinTable", () => (ctx.symApi.getState().symbol ? ctx.symDispatch({ type: "SET_PIN_TABLE_OPEN", open: true }) : symToast("Open a symbol first.")));
+    // without a symbol the action is disabled in KiCad (`haveSymbolCond`): nothing happens, nothing is said (UI-LEFT-3 Y3-7)
+    m.set("eeschema.InteractiveEdit.pinTable", () => void (ctx.symApi.getState().symbol && ctx.symDispatch({ type: "SET_PIN_TABLE_OPEN", open: true })));
   }
   // Place > Rectangle / Circle / Arc of the Symbol Editor's menu are the schematic's `drawRectangle` / `drawCircle` / `drawArc` actions: on the
   // Symbol tab they arm this editor's own shape tool (the same action, the same tool in KiCad -- `SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape`).
@@ -260,7 +265,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     m.set(name, () => {
       if (ctx.tab !== "symbol") return schematic?.();
       const st = ctx.symApi.getState();
-      if (!st.symbol) return symToast("Open a symbol first.");
+      // `EDIT_TOOL( .. )`'s `isGraphicallyEditableCond`: no symbol, no tool
+      if (!st.symbol) return;
       ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
     });
   };
@@ -269,6 +275,38 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawArc", "draw_arc");
   // Draw Bezier Curve (`SCH_ACTIONS::drawBezier` -> `DrawShape( SHAPE_T::BEZIER )`, kicad-port/symBezier.ts)
   armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawBezier", "draw_bezier");
+
+  // KiCad 25ec2335's Draw Arc in the Symbol Editor (UI-LEFT-3 Y3-8; kicad-port/arcDrawSession.ts, symArcDraw.ts): the five mode actions (`SCH_ACTIONS::drawArcCenter` ..
+  // `drawArcStartDirEnd`) set the editor's own mode and arm the tool (`StartArcDrawMode`), or switch the arc being drawn (`ARC_MODE_SESSION::HandleModeEvent` -> `SetMode`);
+  // Cycle Arc Drawing Mode (Alt+/) goes to the next while the tool is armed; `/` (`arcPosture`) turns the arc the other way, Backspace (`deleteLastPoint`) takes the last
+  // point back. On the other tabs each name keeps the handler registered before.
+  const onSymbolTab = (name: string, fn: () => void) => {
+    const other = m.get(name);
+    m.set(name, () => (ctx.tab === "symbol" ? fn() : other?.()));
+  };
+  const setSymArcMode = (mode: ArcDrawMode) => {
+    const st = ctx.symApi.getState();
+    if (!st.symbol) return;
+    symArcDrawMode.set(mode);
+    ctx.symDispatch({ type: "SET_ARC_DRAW_MODE", mode });
+    if (st.activeTool !== "draw_arc") ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: "draw_arc" });
+    else if (st.drawState?.arc) ctx.symDispatch({ type: "SET_DRAW_STATE", draw: { ...st.drawState, arc: arcSessionSetMode(st.drawState.arc, mode)! } });
+  };
+  for (const mode of ARC_DRAW_MODES) onSymbolTab(ARC_MODE_ACTIONS[mode].action, () => setSymArcMode(mode));
+  onSymbolTab(CYCLE_ARC_DRAW_MODE, () => {
+    const st = ctx.symApi.getState();
+    if (st.activeTool === "draw_arc") setSymArcMode(incrementArcDrawMode(st.arcDrawMode));
+  });
+  onSymbolTab(ARC_POSTURE, () => {
+    const d = ctx.symApi.getState().drawState;
+    if (d?.arc) ctx.symDispatch({ type: "SET_DRAW_STATE", draw: { ...d, arc: arcToggleClockwise(d.arc) } });
+  });
+  onSymbolTab("eeschema.InteractiveDrawing.deleteLastPoint", () => {
+    const d = ctx.symApi.getState().drawState;
+    if (!d?.arc) return;
+    const back = arcSessionBack(d.arc);
+    ctx.symDispatch({ type: "SET_DRAW_STATE", draw: back ? { ...d, arc: back } : null });
+  });
 
   // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the selection's first item, when it is a pin
   // (`dynamic_cast<SCH_PIN*>( selection.Front() )`; else nothing), to every other pin, one undo step. The menu shows the rows for a single selected pin of an

@@ -278,7 +278,11 @@ function build(latest: { current: Latest }): EdaTestHook {
         view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : studio.tab === "footprint" ? { ...L.fp.view } : studio.tab === "symbol" ? { ...L.sym.view } : null,
         activeLayer: studio.tab === "pcb" ? studio.activeLayer : null,
         // the Symbol Editor's open symbol and the unit and body style it shows (`GetCurSymbol`, `GetUnit`, `GetBodyStyle`)
-        symbolEditor: studio.tab === "symbol" ? { libId: L.sym.libId, unit: L.sym.activeUnit, bodyStyle: L.sym.activeBodyStyle, brightened: L.sym.brightened?.id ?? null } : null,
+        // and its Draw Arc mode, whether a shape is being drawn, and what its info bar says (UI-LEFT-3 Y3-7, Y3-8)
+        symbolEditor:
+          studio.tab === "symbol"
+            ? { libId: L.sym.libId, unit: L.sym.activeUnit, bodyStyle: L.sym.activeBodyStyle, brightened: L.sym.brightened?.id ?? null, arcDrawMode: L.sym.arcDrawMode, drawing: L.sym.drawState ? (L.sym.drawState.arc ? "arc" : L.sym.drawState.shapeKind) : null, infoBar: L.sym.infoBar?.message ?? null }
+            : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
         carry: (() => {

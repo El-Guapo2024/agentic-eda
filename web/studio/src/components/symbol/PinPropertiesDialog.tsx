@@ -25,7 +25,7 @@ import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS a
 import { pinTemplateOf } from "../../kicad-port/symPinTemplate";
 import { changePinLength } from "../../kicad-port/symPinSync";
 import { commonBodyStylesBox, commonUnitsBox, pinOffGridMessage, pinUnitsOnOk, syncPinsMessage } from "../../kicad-port/symPinDialog";
-import { askConfirm } from "../library/libraryDialogs";
+import { askConfirm, showError } from "../library/libraryDialogs";
 import { PinAlternatesGrid } from "./PinAlternatesGrid";
 import { displayY, storedY } from "../../kicad-port/pinTable";
 import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
@@ -55,14 +55,12 @@ export function PinPropertiesDialog() {
   };
 
   const [form, setForm] = useState<LibrarySymbolPin | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   // Populate the editable copy only when the dialog opens on a (possibly
   // different) pin -- same convention every other dialog in this app
   // uses, so a mid-edit keystroke survives the next ~700ms poll.
   useEffect(() => {
     if (pin) setForm(pin);
-    setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, pending]);
 
@@ -83,8 +81,9 @@ export function PinPropertiesDialog() {
 
   const submit = async () => {
     // `TransferDataFromWindow`: a row of the alternates grid needs a name
+    // `DisplayErrorMessage( this, _( "Alternate pin definitions must have a name." ) )`: KiCad's Error box, the dialog stays (UI-LEFT-3 Y3-7)
     const problem = alternatesError(form.alternates ?? []);
-    if (problem) return setError(problem);
+    if (problem) return void (await showError(problem));
     // "Only show the warning if the position has been changed": a pin off KiCad's standard grid asks first; No keeps the dialog open
     const offGrid = pinOffGridMessage(pin.at, form.at);
     if (offGrid && !(await askConfirm({ title: "Confirmation", message: offGrid, okLabel: "Yes", cancelLabel: "No" }))) return; // `IsOK`: Yes / No
@@ -181,12 +180,7 @@ export function PinPropertiesDialog() {
               <input type="checkbox" checked={!form.hidden} onChange={(e) => set("hidden", !e.target.checked)} />
             </label>
           </div>
-          <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!isMultiBodyStyle(state.symbol)} onError={setError} />
-          {error && (
-            <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="pin-props-error">
-              {error}
-            </p>
-          )}
+          <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!isMultiBodyStyle(state.symbol)} onError={() => undefined} />
         </div>
         <div className="dialog-footer">
           <button onClick={close} data-testid="pin-props-cancel">

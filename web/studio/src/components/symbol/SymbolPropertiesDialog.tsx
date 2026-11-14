@@ -28,7 +28,8 @@ import { useEffect, useState } from "react";
 import type { Cmd, LibrarySymbol, SymbolPropertiesFields } from "../../api/types";
 import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../../api/client";
 import { bareName, parentCandidates, wireField } from "../../kicad-port/symFields";
-import { gridProblem, gridRowsFor, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
+import { gridProblem, gridRowsFor, renamedFields, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
+import { renamedFieldLooksCmds } from "../../kicad-port/symLooks";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { notifyLibraryChanged } from "../library/useLibraryNames";
 import { askConfirm, showError } from "../library/libraryDialogs";
@@ -36,6 +37,8 @@ import { escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolName
 import { unescapeString } from "../../kicad-port/schNetName";
 import { symbolPropertiesQuestions } from "../../kicad-port/symUnits";
 import { SymbolFieldsGrid } from "./SymbolFieldsGrid";
+import { globalTemplateRows, withoutEmptyTemplateRows } from "../../kicad-port/symEditorDefaults";
+import { useStudioState } from "../../state/store";
 import { bodyStyleChoiceRefusal, bodyStyleCountOf, bodyStyleModeOf, jumperRowsOf, resizeUnitNameRows, unitNameRowsOf, unitsAndBodyStylesProblem, type BodyStyleMode } from "../../kicad-port/symBodyStyles";
 import { letterSubReference } from "../../kicad-port/unitLetter";
 import { PinNumbers } from "../../kicad-port/pinNumbersSummary";
@@ -124,9 +127,11 @@ export function LibrarySymbolPropertiesDialog() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
-  const own = state.derivedOwn;
+  /** A tree symbol that is not the one loaded is edited without loading it (`editSymbolPropertiesFromLibrary`, UI-LEFT-3 Y3-2): the canvas keeps its own. */
+  const foreign = state.propertiesSubject;
+  const own = foreign ? foreign.own : state.derivedOwn;
   /** What the dialog edits: the symbol's own entry (a derived symbol's fields are its own; the editor draws the flat one). */
-  const subject = own ?? state.symbol;
+  const subject = own ?? (foreign ? foreign.symbol : state.symbol);
   const derived = own !== null;
   const close = () => dispatch({ type: "SET_PROPERTIES_OPEN", open: false });
 
@@ -135,6 +140,9 @@ export function LibrarySymbolPropertiesDialog() {
   const [unitCountText, setUnitCountText] = useState<string | null>(null);
   const [filtersText, setFiltersText] = useState("");
   const [rows, setRows] = useState<GridRow[]>([]);
+  /** The global templates' rows the dialog added (`m_addedTemplateFields`): one still empty at OK is not kept. */
+  const [addedTemplates, setAddedTemplates] = useState<ReadonlySet<string>>(new Set());
+  const studioPrefs = useStudioState().prefs;
   const [parent, setParent] = useState("");
   const [candidates, setCandidates] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +175,14 @@ export function LibrarySymbolPropertiesDialog() {
     setFiltersText(subject.footprint_filters.join(" "));
     setError(null);
     setParent(subject.extends ?? "");
-    setRows(gridRowsFor(subject, null));
+    // "Add in any template fieldnames not yet defined": a row for each global template (Preferences > Schematic Editor > Field Name Templates) the symbol lacks
+    const withTemplates = (base: GridRow[]) => {
+      let key = base.reduce((m, r) => Math.max(m, r.key), 0);
+      const t = globalTemplateRows(base, studioPrefs.schGlobalFieldNames, () => ++key);
+      setAddedTemplates(t.added);
+      return [...base, ...t.rows];
+    };
+    setRows(withTemplates(gridRowsFor(subject, null)));
     setUnitRows(unitNameRowsOf(subject));
     const styles = bodyStyleModeOf(subject);
     setBodyMode(styles.mode);
@@ -177,7 +192,7 @@ export function LibrarySymbolPropertiesDialog() {
     if (subject.extends) {
       // the parent's own fields join the grid as inherited rows (`addInheritedFields`)
       void fetchLibrarySymbolFlat(subject.extends)
-        .then((flat) => !stopped && setRows(gridRowsFor(subject, flat)))
+        .then((flat) => !stopped && setRows(withTemplates(gridRowsFor(subject, flat))))
         .catch(() => undefined);
       // the symbols it can derive from (`m_inheritanceSelectCombo`)
       void fetchSymbolEditorNames()
@@ -280,11 +295,20 @@ export function LibrarySymbolPropertiesDialog() {
         jumper_rows: jumperRows,
       });
     }
-    cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(out).map(wireField) });
+    cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(withoutEmptyTemplateRows(out, addedTemplates)).map(wireField) });
+    // a renamed field keeps its face, colour and pen (KiCad's are on the `SCH_FIELD`; UI-LEFT-3 Y3-3)
+    cmds.push(...renamedFieldLooksCmds(target, subject, renamedFields(out)));
     setBusy(true);
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
+      if (foreign) {
+        // `editSymbolPropertiesFromLibrary`: `UpdateSymbol` in the library's buffer and `UpdateLibraryTree( treeItem, &tempSymbol )` -- the tree follows a rename; the canvas
+        // and its unit, body style and drawing scope are the loaded symbol's and stay
+        if (ok && renamed) dispatch({ type: "SET_TREE_SELECTION", names: [target] });
+        if (ok) close();
+        return;
+      }
       if (ok && renamed) await api.openSymbol(target, undefined, { keepHistory: true }); // `UNDO_REDO::LIB_RENAME` is an undo step: the reopening keeps the history
       // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
       if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });

@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
 import { MANDATORY_FIELDS, isMandatoryField } from "../../kicad-port/symFields";
 import { moveRow, newUserField, type GridRow } from "../../kicad-port/symFieldsGrid";
+import { newTextSizeMm } from "../../kicad-port/symEditorDefaults";
+import { useStudioState } from "../../state/store";
 
 const H_ALIGNS: FieldHAlign[] = ["left", "center", "right"];
 const V_ALIGNS: FieldVAlign[] = ["top", "center", "bottom"];
@@ -41,8 +43,10 @@ export function SymbolFieldsGrid({ rows, onChange, parentName, onError, initialF
   const nextKey = () => rows.reduce((m, r) => Math.max(m, r.key), 0) + 1;
   const edit = (index: number, patch: Partial<GridRow>) => onChange(rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
 
+  // `OnAddField`: `newField.SetTextSize( MilsToIU( settings->m_Defaults.text_size ) )` (Preferences > Symbol Editor > Editing Options' "Default text size:")
+  const textSize = newTextSizeMm(useStudioState().prefs);
   const add = () => {
-    onChange([...rows, newUserField(rows.length, nextKey())]);
+    onChange([...rows, newUserField(rows.length, nextKey(), textSize)]);
     setSelected(rows.length);
     onError(null);
   };

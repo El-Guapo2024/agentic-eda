@@ -43,10 +43,15 @@ test("isActionEnabledForTab: actions both pcbnew frames register work on the pcb
   }
 });
 
-test("isActionEnabledForTab: `/` (arcPosture) also turns the schematic's arc (KiCad 25ec2335's common action, UI-LEFT S13)", () => {
+test("isActionEnabledForTab: `/` (arcPosture) also turns the schematic's and the Symbol Editor's arc (KiCad 25ec2335's common action, UI-LEFT S13, UI-LEFT-3 Y3-8)", () => {
   const name = "pcbnew.InteractiveDrawing.arcPosture";
-  for (const tab of ["pcb", "footprint", "schematic"]) assert.equal(isActionEnabledForTab(name, tab, true), true, tab);
-  assert.equal(isActionEnabledForTab(name, "symbol", true), false);
+  for (const tab of ["pcb", "footprint", "schematic", "symbol"]) assert.equal(isActionEnabledForTab(name, tab, true), true, tab);
+  assert.equal(isActionEnabledForTab(name, "3d", true), false);
+  // the five Draw Arc modes and Delete Last Point are both editors' (`EE_GRAPHIC_TOOL`)
+  for (const mode of ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "deleteLastPoint"]) {
+    assert.equal(isActionEnabledForTab(`eeschema.InteractiveDrawing.${mode}`, "symbol", true), true, mode);
+    assert.equal(isActionEnabledForTab(`eeschema.InteractiveDrawing.${mode}`, "pcb", true), false, mode);
+  }
   assert.equal(isActionEnabledForTab(name, "schematic", false), false, "only while the schematic registers it");
 });
 

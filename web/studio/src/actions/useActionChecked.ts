@@ -33,7 +33,7 @@ export function useActionChecked(): (name: string) => boolean | undefined {
     gridOverrides,
     fpTool: fp.activeTool,
     symTool: sym.activeTool,
-    sym: { showElectricalTypes: sym.showElectricalTypes, showHiddenPins: sym.showHiddenPins, syncPins: sym.syncPins, showHiddenFields: sym.showHiddenFields, showPinAltIcons: sym.showPinAltIcons },
+    sym: { showElectricalTypes: sym.showElectricalTypes, showHiddenPins: sym.showHiddenPins, syncPins: sym.syncPins, showHiddenFields: sym.showHiddenFields, showPinAltIcons: sym.showPinAltIcons, arcDrawMode: sym.arcDrawMode },
     dock,
     rightDockTab: state.rightDockTab,
     highContrast,
@@ -44,5 +44,5 @@ export function useActionChecked(): (name: string) => boolean | undefined {
   };
   // The context is rebuilt every render; the callback only changes when a fact it reads does.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, dock, state.rightDockTab, highContrast, zoomArmed, polarCoords, measureArmed, fp.lineMode, fp.sketchPads, fp.sketchGraphics, fp.sketchText, fp.appearanceShown]);
+  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, sym.showHiddenFields, sym.showPinAltIcons, sym.arcDrawMode, dock, state.rightDockTab, highContrast, zoomArmed, polarCoords, measureArmed, fp.lineMode, fp.sketchPads, fp.sketchGraphics, fp.sketchText, fp.appearanceShown]);
 }

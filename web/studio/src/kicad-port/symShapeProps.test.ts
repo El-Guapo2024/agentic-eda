@@ -52,3 +52,27 @@ test("UI-LEFT-2 YY2: the border's colour and style, a colour fill of its own and
   // the default style opens as Solid
   assert.equal(shapeFormOf({ stroke_mm: 0.2, fill: "none", unit: 1, body_style: 1 }, sym).style, "solid");
 });
+
+test("the fill swatch shows the chosen fill's colour: the border's or LAYER_DEVICE's for the outline, LAYER_DEVICE_BACKGROUND's for the background; OK keeps it (UI-LEFT-3 Y3-5)", async () => {
+  const { fillSwatch, withBorderColor, withFillChoice, withFillColor, schColorOfCss } = await import("./symShapeProps");
+  const layer = { device: { r: 132, g: 0, b: 0, a: 255 }, deviceBackground: { r: 255, g: 255, b: 194, a: 255 } };
+  const red = { r: 255, g: 0, b: 0, a: 255 };
+  assert.deepEqual(fillSwatch("outline", null, null, layer), layer.device);
+  assert.deepEqual(fillSwatch("outline", red, null, layer), red);
+  assert.deepEqual(fillSwatch("background", red, null, layer), layer.deviceBackground);
+  assert.equal(fillSwatch("none", red, red, layer), null);
+  assert.deepEqual(fillSwatch("color", null, red, layer), red);
+  const g = { stroke_mm: 0, fill: "outline" as const, unit: 0, body_style: 0 };
+  const form = shapeFormOf(g, { unit_count: 1 }, { looks: {}, lineStyle: null, thicknessMm: null }, layer);
+  assert.deepEqual(form.fillColor, layer.device);
+  const bordered = withBorderColor(form, red, layer);
+  assert.deepEqual(bordered.fillColor, red, "the outline swatch follows the border colour (`onBorderSwatch`)");
+  assert.deepEqual(withFillChoice(bordered, "background", layer).fillColor, layer.deviceBackground);
+  assert.equal(withFillChoice(bordered, "none", layer).fillColor, null);
+  assert.deepEqual(withFillChoice(bordered, "color", layer).fillColor, red, "Fill with: keeps the swatch and asks for a colour");
+  const picked = withFillColor(form, { r: 1, g: 2, b: 3, a: 255 });
+  assert.equal(picked.fill, "color");
+  assert.deepEqual(shapeEditOf(bordered, { unit: 1, bodyStyle: 1 }).state.looks.fill_color, red, "`SetFillColor( m_customColorSwatch->GetSwatchColor() )`");
+  assert.deepEqual(schColorOfCss("#840000ff"), layer.device);
+  assert.deepEqual(schColorOfCss("#ffffc2"), layer.deviceBackground);
+});

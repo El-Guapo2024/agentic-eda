@@ -9,9 +9,11 @@
 // (`m_hyperlinkCb->Hide()` outside it). The font and colour are kept and written (UI-LEFT Y4); the canvas draws the text in its face (UI-LEFT-2 CC1: kicad-port/schTextSpecs.ts, an outline font once the browser has it).
 import { useEffect, useRef, useState } from "react";
 import { drawTarget, useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
-import { DEFAULT_SYMBOL_TEXT_SIZE_MM, noPrintableChars, textFormOf, textFromForm, type LibText, type TextForm } from "../../kicad-port/symText";
+import { noPrintableChars, textFormOf, textFromForm, type LibText, type TextForm } from "../../kicad-port/symText";
 import { H_ALIGNS, V_ALIGNS } from "../../kicad-port/symTextBox";
 import { nmPointToMm } from "./symbolPainter";
+import { useStudioState } from "../../state/store";
+import { newTextSizeMm } from "../../kicad-port/symEditorDefaults";
 import { isMultiBodyStyle } from "../../kicad-port/symBodyStyles";
 import { ColorSwatch, FontSelect, useFontFamilies } from "../TextLookControls";
 
@@ -21,6 +23,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function SymbolTextDialog() {
   const state = useSymState();
+  const studioPrefs = useStudioState().prefs;
   const dispatch = useSymDispatch();
   const api = useSymApi();
   const req = state.textDialog;
@@ -39,7 +42,8 @@ export function SymbolTextDialog() {
       return g?.kind === "text" ? g : null;
     }
     const at = drawTarget(state);
-    return { kind: "text", unit: at.unit, body_style: at.bodyStyle, text: "", at: nmPointToMm(req.atNm[0], req.atNm[1]), angle_deg: state.lastTextAngle, size_mm: DEFAULT_SYMBOL_TEXT_SIZE_MM };
+    // `text->SetTextSize( MilsToIU( cfg->m_Defaults.text_size ) )`: Preferences > Symbol Editor > Editing Options' "Default text size:"
+    return { kind: "text", unit: at.unit, body_style: at.bodyStyle, text: "", at: nmPointToMm(req.atNm[0], req.atNm[1]), angle_deg: state.lastTextAngle, size_mm: newTextSizeMm(studioPrefs) };
   };
 
   // the form starts from the text when the dialog opens, and keeps what is typed through the editor's polling

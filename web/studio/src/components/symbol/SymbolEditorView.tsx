@@ -23,6 +23,7 @@ import { DeriveSymbolDialog } from "./DeriveSymbolDialog";
 import { NewSymbolDialog } from "./NewSymbolDialog";
 import { UpdateSymbolFieldsDialog } from "./UpdateSymbolFieldsDialog";
 import { DerivedSymbolBanner } from "./DerivedSymbolBanner";
+import { SymbolInfoBar } from "./SymbolInfoBar";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn, DockPanel } from "../panels/Dock";
 import { SymbolPropertiesPane } from "./SymbolPropertiesPane";
@@ -72,6 +73,7 @@ export function SymbolEditorView() {
         <div className="editor-canvas-col">
           <SymbolEditorCanvas />
           <DerivedSymbolBanner />
+          <SymbolInfoBar />
         </div>
         <Toolbar id="drawing" editor="symbol" />
       </div>

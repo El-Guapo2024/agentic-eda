@@ -61,3 +61,21 @@ test("OK is one batch of the verbs that make the pins the rows, with no sync (r7
   assert.equal((cmds[1] as { id: string }).id, "a");
   assert.deepEqual(pinTableCommands("L:S", [a, b], [a, b]), [], "an unchanged table sends nothing");
 });
+
+test("focusOnLocation: a pin behind a dialog over the canvas is off the view; the view puts it in the largest part the dialogs leave free (UI-LEFT-3 Y3-5)", async () => {
+  const { focusOnLocation, unobscuredCentre } = await import("./pinTable");
+  const view = { scale: 1e-4, x: 500, y: 400 }; // the origin in the middle of a 1000 x 800 canvas
+  assert.equal(focusOnLocation(view, [0, 0], 1000, 800), null, "in the middle and nothing over it: left as it is");
+  const dialog = { x: 400, y: 100, w: 500, h: 600 };
+  const moved = focusOnLocation(view, [0, 0], 1000, 800, [dialog]);
+  assert.ok(moved, "behind the dialog: moved");
+  // the free part left of the dialog is the largest: the pin goes to its middle
+  assert.ok(Math.abs(moved!.x - 200) < 20 && Math.abs(moved!.y - 400) < 20, `out from behind it: ${JSON.stringify(moved)}`);
+  // a dialog on the right half: the free left half's middle
+  const [cx, cy] = unobscuredCentre(1000, 800, [{ x: 500, y: 0, w: 500, h: 800 }]);
+  assert.ok(Math.abs(cx - 250) < 15 && Math.abs(cy - 400) < 15, `${cx}, ${cy}`);
+  assert.deepEqual(unobscuredCentre(1000, 800, []), [500, 400]);
+  // near a dialog's edge (within a tenth of its width) counts as behind it
+  assert.ok(focusOnLocation(view, [-1_200_000, 0], 1000, 800, [dialog]), "a point 20 px left of the dialog");
+  assert.equal(focusOnLocation(view, [-2_500_000, 0], 1000, 800, [dialog]), null, "one well clear of it stays");
+});

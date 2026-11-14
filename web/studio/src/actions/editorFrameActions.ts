@@ -372,9 +372,10 @@ export function registerEditorFrameActions(m: Map<string, () => void>, ctx: Edit
     // Show Datasheet (`ACTIONS::showDatasheet`): the open symbol's datasheet field, opened like the schematic's does.
     m.set("common.Control.showDatasheet", () => {
       const sym = ctx.symApi.getState().symbol;
-      if (!sym) return toast("Open a symbol first.");
+      // `SCH_INSPECTION_TOOL::ShowDatasheet`: `if( !symbol ) return 0;`, and "No datasheet defined." in the frame's info bar (`ShowInfoBarError`, UI-LEFT-3 Y3-7)
+      if (!sym) return;
       const target = datasheetTarget(sym.datasheet);
-      if (target.kind === "none") toast("No datasheet defined.", "error");
+      if (target.kind === "none") ctx.symDispatch({ type: "SHOW_INFOBAR", message: "No datasheet defined.", kind: "error" });
       else if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
       // `filesStack.push_back( entry )`: the library symbol's files
       else if (target.kind === "embedded") {

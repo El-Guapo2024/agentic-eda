@@ -309,7 +309,9 @@
       await dragFromTo([-2 * G, -2 * G], [0, -2 * G]);
       g = (await symbol(SYM)).graphics ?? [];
       const moved = g.find((x) => x.kind === "rectangle");
-      t(!!moved && near(moved.start.x, 0) && near(moved.end.x, 7.62), `the drag moved it 2 grid right (${JSON.stringify(moved && [moved.start, moved.end])})`);
+      // (to a few nm: a shape has no anchor, so the drag is held where the pointer pressed, `BestDragOrigin`'s mouse, which the screen's pixels round)
+      const nearNm = (a, b) => Math.abs(a - b) < 1e-5;
+      t(!!moved && nearNm(moved.start.x, 0) && nearNm(moved.end.x, 7.62), `the drag moved it 2 grid right (${JSON.stringify(moved && [moved.start, moved.end])})`);
       // the circle by its edge, Del
       await clickAt(9 * G, 0);
       await press("Delete", 900);

@@ -13,8 +13,8 @@
 //   Escape                  the shape being drawn is dropped, the tool stays armed (a second Escape leaves the tool)
 //
 // The studio keeps only the *fixed* vertices (the floating one is the cursor, drawn at paint time), so the machine below works on those.
-// A new shape takes `m_lastFillStyle`, which starts as `FILL_T::NO_FILL` and is only ever re-set from the shapes the tool itself made, so a
-// line or polygon drawn here is never filled until its Properties say so.
+// A new shape takes `m_lastFillStyle` and `m_lastStroke`, which start as `FILL_T::NO_FILL` and a default stroke and follow the last text box the tool made
+// (its dialog sets them; UI-LEFT-3 Y3-4, kicad-port/symTextBox.ts `lastShapeStyle`).
 //
 // Two honest differences, both about things KiCad cannot show: a closed outline is stored as a polyline that ends where it starts (the
 // `.kicad_sym` format has no "closed" flag, `formatPoly` writes only the points -- so `[A, B, C, A]`; KiCad's own chain would then hold a

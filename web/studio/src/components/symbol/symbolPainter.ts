@@ -46,6 +46,10 @@ import { dashPattern } from "../schematic/schGraphicsPainter";
 import { hatchLines, type SchHatchFill } from "../../kicad-port/schHatch";
 import { arcCenter as symArcCenter } from "../../kicad-port/symTransform";
 import type { FieldLooks, GraphicState } from "../../kicad-port/symLooks";
+import type { ArcGeom } from "../../kicad-port/arcGeom";
+import { arcSessionShape } from "../../kicad-port/arcDrawSession";
+import { drawArcPreview } from "../canvas/arcPreview";
+import type { LengthUnit } from "../../state/units";
 import type { SchLineStyle } from "../../api/schEditTypes";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
@@ -134,7 +138,7 @@ export function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, wid
 function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
   const r = hairlineNm(view, 10);
   ctx.save();
-  ctx.strokeStyle = layerColor("anchor");
+  ctx.strokeStyle = layerColor("LAYER_SCHEMATIC_ANCHOR");
   ctx.lineWidth = hairlineNm(view, 1.5);
   ctx.beginPath();
   ctx.moveTo(-r, 0);
@@ -270,8 +274,28 @@ function drawLibShape(ctx: CanvasRenderingContext2D, g: Exclude<LibrarySymbolGra
 }
 
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorNm: { x: number; y: number } | null) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][]; arc?: ArcGeom } | null, cursorNm: { x: number; y: number } | null, units: LengthUnit) {
   if (!draw) return;
+  if (draw.arc) {
+    // the arc as it would be drawn (`AddToPreview`), then `ARC_ASSISTANT`: the radius lines, the centre, the readout (UI-LEFT-3 Y3-8)
+    const a = arcSessionShape(draw.arc);
+    if (a) {
+      ctx.save();
+      ctx.strokeStyle = layerColor("selection");
+      ctx.lineWidth = hairlineNm(view, 1.5);
+      const [cx, cy] = a.center;
+      const ang = (p: readonly [number, number]) => Math.atan2(p[1] - cy, p[0] - cx);
+      ctx.beginPath();
+      // from start to end through mid, the way round that passes the middle
+      const s0 = ang(a.start), m0 = ang(a.mid), e0 = ang(a.end);
+      const ccw = ((m0 - s0 + 4 * Math.PI) % (2 * Math.PI)) > ((e0 - s0 + 4 * Math.PI) % (2 * Math.PI));
+      ctx.arc(cx, cy, a.radius, s0, e0, ccw);
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawArcPreview(ctx, draw.arc, { color: layerColor("LAYER_DEVICE"), hair: (px) => hairlineNm(view, px), units });
+    return;
+  }
   if (draw.shapeKind === "bezier") {
     // `CalcEdit( cursorPos )` of the bezier's edit state, as `AddToPreview( item->Clone() )` shows it
     const b = bezierFromClicks(draw.pts, cursorNm ? [cursorNm.x, cursorNm.y] : null);
@@ -328,7 +352,9 @@ export interface SymPaintOptions {
   gridDisplay?: GridDisplay;
   activeUnit: number;
   activeBodyStyle: number;
-  drawState: { shapeKind: SymShapeKind; pts: [number, number][] } | null;
+  drawState: { shapeKind: SymShapeKind; pts: [number, number][]; arc?: ArcGeom } | null;
+  /** The user's units, for Draw Arc's readout (`ARC_ASSISTANT`). */
+  units?: LengthUnit;
   cursorNm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxNm: number; dyNm: number } | null;
   /** `m_ShowPinsElectricalType`: the electrical type's name beside every pin. */
@@ -410,7 +436,7 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   // (`SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME` and `SwitchCanvas`: `SetAxesColor( m_colorSettings->GetColor( LAYER_SCHEMATIC_GRID_AXES ) )`); the grid itself only when shown
   if (!opts.itemsOnly) {
     const d = opts.gridDisplay ?? DEFAULT_GRID_DISPLAY;
-    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("grid"), undefined, "symbol", layerColor("LAYER_SCHEMATIC_GRID_AXES"));
+    paintEditorGrid(ctx, view, widthPx, heightPx, { size: { x: opts.gridNm, y: opts.gridYNm ?? opts.gridNm }, origin: [0, 0], style: d.style, lineWidthPx: d.lineWidthPx, minSpacingPx: d.minSpacingPx, visible: opts.gridVisible, axes: d.axes ?? true }, layerColor("LAYER_SCHEMATIC_GRID"), undefined, "symbol", layerColor("LAYER_SCHEMATIC_GRID_AXES"));
   }
   if (!symbol) {
     drawOrigin(ctx, view);
@@ -499,9 +525,10 @@ function paintSymbolDefaults(ctx: CanvasRenderingContext2D, view: ViewTransform,
   }
 
   if (!opts.itemsOnly) drawOrigin(ctx, view);
-  drawInProgress(ctx, view, opts.drawState, opts.cursorNm);
+  drawInProgress(ctx, view, opts.drawState, opts.cursorNm, opts.units ?? "mm");
   // `EDIT_POINTS::ViewDraw`: the indicator lines, then a square at each edit point and a round handle in the middle of each side (components/schematic/schArcEditPaint.ts)
-  if (opts.pointEditor) paintEditPoints(ctx, view, opts.pointEditor.edit, { fill: "#1a1a1a", stroke: layerColor("selection") });
+  // the handles as the schematic's (`EDIT_POINTS::ViewDraw`): filled with the theme's background (UI-LEFT-3 Y3-1)
+  if (opts.pointEditor) paintEditPoints(ctx, view, opts.pointEditor.edit);
 
   // what the cursor carries, where it is now, as the selection (`AddToPreview`)
   if (opts.carried) {

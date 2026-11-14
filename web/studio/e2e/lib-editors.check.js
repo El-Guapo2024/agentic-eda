@@ -426,7 +426,10 @@
     const none = await __eda.run("eeschema.SymbolLibraryControl.updateSymbolFields");
     await sleep(300);
     t(!tid("update-symbol-fields"), "no dialog for a symbol that is not derived");
-    t(/Symbol is not derived from another symbol\./.test(toastText() + (none.toast ?? "")), `KiCad's message: ${toastText() || none.toast}`);
+    // `m_frame->ShowInfoBarError( .. )`: the frame's info bar (UI-LEFT-3 Y3-7)
+    await until(() => tid("sym-infobar-text")?.textContent, 2000);
+    const bar = tid("sym-infobar-text")?.textContent;
+    t(/Symbol is not derived from another symbol\./.test((bar ?? "") + toastText() + (none.toast ?? "")), `KiCad's message in the info bar: ${bar}`);
   }, [/Symbol is not derived from another symbol\./]);
 
   await scenario("Bulk Edit Related Symbol Fields lists the root and what is derived from it; the Library scope lists them all; OK writes the cells", async (t) => {
@@ -438,10 +441,14 @@
     const rowsOf = () => [...document.querySelectorAll('[data-testid^="fields-row-"]')].map((e) => e.getAttribute("data-testid").replace("fields-row-", ""));
     t(same(rowsOf().sort(), ["P17Base", "P17Leaf"]), `only the related symbols: ${rowsOf().join(", ")}`);
     const headers = [...document.querySelectorAll('[data-testid="fields-table"] th')].map((h) => h.textContent.trim());
-    t(["Reference", "Value", "Footprint", "Datasheet", "Description", "MPN"].every((h) => headers.includes(h)), `the columns include Value, Footprint and the user field: ${headers.join(", ")}`);
+    // `UpdateFieldList`: Reference and Description start hidden (UI-LEFT-3 Y3-5)
+    t(["Value", "Footprint", "Datasheet", "MPN"].every((h) => headers.some((x) => x.replace(/[▲▼]/g, "").trim() === h)) && !headers.includes("Reference") && !headers.includes("Description"), `the columns include Value, Footprint and the user field, not Reference and Description: ${headers.join(", ")}`);
     await type(tid("cell-P17Leaf-Footprint"), "Package_SO:SOIC-16");
     await type(tid("cell-P17Base-MPN"), "B-3");
-    tid("fields-new-name").value; await type(tid("fields-new-name"), "Supplier"); tid("fields-add-field").click(); await sleep(150);
+    // Add Field: "New field name:" (`OnAddField`'s `wxTextEntryDialog`)
+    tid("fields-add-field").click(); await sleep(200);
+    const prompt = document.querySelector('[role=dialog][aria-label="Add Field"]');
+    if (prompt) { await type(prompt.querySelector("input"), "Supplier"); [...prompt.querySelectorAll("button")].find((b) => b.textContent.trim() === "OK")?.click(); await sleep(200); }
     t([...document.querySelectorAll('[data-testid="fields-table"] th')].some((h) => h.textContent.trim() === "Supplier"), "Add Field makes a column");
     await type(tid("cell-P17Leaf-Supplier"), "Acme");
     await click(tid("fields-ok"), 1300);
@@ -826,7 +833,9 @@
       const [sx, sy] = toScreen(wx, wy); const rect = c.getBoundingClientRect();
       const x = Math.round((sx - rect.left - radiusPx) * dpr), y = Math.round((sy - rect.top - radiusPx) * dpr), w = Math.round(2 * radiusPx * dpr);
       const d = ctx.getImageData(Math.max(0, x), Math.max(0, y), w, w).data;
-      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 26) + Math.abs(d[i + 1] - 26) + Math.abs(d[i + 2] - 26) > 90) n++;
+      // the background is the theme's (UI-LEFT-3 Y3-1): read off the canvas's corner
+      const bg = ctx.getImageData(1, 1, 1, 1).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) > 90) n++;
       return n;
     };
     const REF = [0, -5_080_000], MPN = [10_160_000, 0], VAL = [0, 5_080_000];
@@ -1073,7 +1082,11 @@
     t(tid("alt-name-0")?.value === "" && tid("alt-type-0")?.value === "bidirectional" && tid("alt-shape-0")?.value === "line", `a new row has no name and the pin's type and style: ${JSON.stringify([tid("alt-name-0")?.value, tid("alt-type-0")?.value, tid("alt-shape-0")?.value])}`);
     // OK with a nameless row: refused in the dialog's words
     await click(tid("pin-props-ok"), 300);
-    t(/Alternate pin definitions must have a name\./.test(tid("pin-props-error")?.textContent ?? "") && !!tid("pin-alternates"), `refused: ${tid("pin-props-error")?.textContent}`);
+    // `DisplayErrorMessage`: KiCad's Error box, the dialog stays (UI-LEFT-3 Y3-7)
+    await until(() => tid("message-box-text")?.textContent, 3000);
+    const refusedText = tid("message-box-text")?.textContent;
+    t(/Alternate pin definitions must have a name\./.test(refusedText ?? "") && tid("message-box")?.getAttribute("aria-label") === "Error" && !!tid("pin-alternates"), `refused: ${refusedText}`);
+    tid("message-box-ok")?.click(); await sleep(150);
     await type(tid("alt-name-0"), "UART_TX");
     await choose(tid("alt-type-0"), "output");
     tid("pin-alternates-add").click(); await sleep(150);
@@ -1215,7 +1228,9 @@
       const px = Math.max(0, Math.round((Math.min(ax, bx) - rect.left) * dpr)), py = Math.max(0, Math.round((Math.min(ay, by) - rect.top) * dpr));
       const w = Math.max(1, Math.round(Math.abs(bx - ax) * dpr)), h = Math.max(1, Math.round(Math.abs(by - ay) * dpr));
       const d = ctx.getImageData(px, py, w, h).data;
-      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 26) + Math.abs(d[i + 1] - 26) + Math.abs(d[i + 2] - 26) > 90) n++;
+      // the background is the theme's (UI-LEFT-3 Y3-1): read off the canvas's corner
+      const bg = ctx.getImageData(1, 1, 1, 1).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) > 90) n++;
       return n;
     };
     const boxes = async () => (await symbol(id)).graphics.filter((g) => g.kind === "text_box");

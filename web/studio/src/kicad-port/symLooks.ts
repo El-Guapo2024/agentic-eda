@@ -91,6 +91,20 @@ export function fieldLooksWith(libId: string, sym: LibrarySymbol, name: string, 
   return [{ op: "set_symbol_field_looks", lib_id: libId, name, looks: clean(next) }];
 }
 
+/**
+ * The looks of renamed fields given to their new names (UI-LEFT-3 Y3-3): KiCad keeps a field's face, colour and pen on the `SCH_FIELD`, so they follow a rename; the studio keeps them
+ * by the field's name, and `edit_library_symbol_fields` drops a name no field has any more. These go after that verb in the same batch. `sym` is the symbol as it was.
+ */
+export function renamedFieldLooksCmds(libId: string, sym: LibrarySymbol, renames: readonly { from: string; to: string }[]): Cmd[] {
+  const out: Cmd[] = [];
+  for (const { from, to } of renames) {
+    const looks = keepOf(sym).field_looks?.[from];
+    // the looks against none: the verb with the defaults left out, or nothing when they are all defaults
+    if (looks) out.push(...fieldLooksWith(libId, { ...sym, kicad: {} }, to, looks));
+  }
+  return out;
+}
+
 /** Whether a graphic is "Private to Symbol Editor": a text's and a text box's own flag, a shape's kept beside it. */
 export function isPrivateGraphic(sym: LibrarySymbol, g: LibrarySymbolGraphic): boolean {
   if (g.kind === "text" || g.kind === "text_box") return !!g.private;

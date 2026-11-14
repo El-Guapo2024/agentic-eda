@@ -23,7 +23,7 @@ export const KICAD10_ACTIONS: readonly Kicad10Action[] = [
 export const KICAD10_ICONS: Readonly<Record<string, string>> = Object.fromEntries(KICAD10_ACTIONS.flatMap((a) => (a.icon ? [[a.icon, `${a.icon}.svg`]] : [])));
 
 /**
- * KiCad 25ec2335's schematic and Symbol Editor drawing toolbars put the five arc modes in one group ("Arc", `TOOLBAR_GROUP_CONFIG`) where 8303b2ad has Draw Arcs; the
- * schematic's tool draws in all five, the Symbol Editor's still in 8303b2ad's way, so only the schematic's toolbar takes the group.
+ * KiCad 25ec2335's schematic and Symbol Editor drawing toolbars put the five arc modes in one group ("Arc", `TOOLBAR_GROUP_CONFIG`) where 8303b2ad has Draw Arcs; both tools
+ * draw in all five (the Symbol Editor's since UI-LEFT-3 Y3-8), so both toolbars take the group.
  */
 export const SCH_ARC_GROUP = { type: "group" as const, label: "Arc", icon: "add_arc_center", items: KICAD10_ACTIONS.filter((a) => a.icon).map((a) => a.name) };

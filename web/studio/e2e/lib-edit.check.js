@@ -245,8 +245,11 @@
       setValue(fieldOf("Symbol name"), "   ");
       buttonText(dialog(), "OK")?.click();
       await sleep(300);
-      const err = document.querySelector('[data-testid="new-symbol-error"]');
-      t(/Symbol must have a name\./.test(err?.textContent ?? ""), `an empty name is refused in KiCad's words (${err?.textContent})`);
+      // `wxMessageBox( _( "Symbol must have a name." ) )` (UI-LEFT-3 Y3-7)
+      const said = await until(() => document.querySelector('[data-testid="message-box-text"]')?.textContent, 3000);
+      t(/Symbol must have a name\./.test(said ?? "") && document.querySelector('[data-testid="message-box"]')?.getAttribute("aria-label") === "Message", `an empty name is refused in KiCad's message box (${said})`);
+      document.querySelector('[data-testid="message-box-ok"]')?.click();
+      await sleep(200);
       t(!!dialog(), "and the dialog stays open");
       const name = `P20New${Date.now() % 100000}`;
       setValue(fieldOf("Symbol name"), name);
@@ -259,7 +262,7 @@
       await frame();
     });
 
-    await scenario("New Symbol refuses a name the library has, in the dialog; Cancel makes nothing", async (t) => {
+    await scenario("New Symbol asks Overwrite for a name the library has (KiCad's Confirmation); Cancel there keeps the dialog, Cancel then makes nothing", async (t) => {
       if (!SYM) return t(false, "no symbol");
       const item = SYM.includes(":") ? SYM.slice(SYM.indexOf(":") + 1) : SYM;
       const n0 = (await symNames()).length;
@@ -269,10 +272,12 @@
       setValue(fieldOf("Symbol name"), item);
       buttonText(dialog(), "OK")?.click();
       await sleep(400);
-      const err = document.querySelector('[data-testid="new-symbol-error"]');
-      t(/Symbol '.+' already exists in library 'eda'\./.test(err?.textContent ?? ""), `the taken name is refused in KiCad's words (${err?.textContent})`);
-      t(!/Overwrite/.test(err?.textContent ?? ""), "and offers no Overwrite, which the verb cannot do");
-      t(!!dialog(), "the dialog stays open");
+      // `KIDIALOG errorDlg( this, msg, _( "Confirmation" ), wxOK | wxCANCEL | wxICON_WARNING )` with "Overwrite" (UI-LEFT-3 Y3-7)
+      const asked = await until(() => [...document.querySelectorAll('[role="dialog"]')].find((d) => /already exists in library 'eda'/.test(d.textContent ?? "")), 3000);
+      t(!!asked && /Symbol '.+' already exists in library 'eda'\./.test(asked.textContent ?? "") && !!buttonText(asked, "Overwrite"), `the taken name asks Overwrite in KiCad's words (${asked?.textContent})`);
+      if (asked) buttonText(asked, "Cancel")?.click();
+      await sleep(300);
+      t(!!dialog() && /New Symbol/.test(dialog()?.querySelector(".dialog-header")?.textContent ?? ""), "Cancel keeps New Symbol open");
       buttonText(dialog(), "Cancel")?.click();
       await sleep(400);
       t(!dialog(), "Cancel closes it");

@@ -8,8 +8,8 @@
 // Duplicate and Save Copy As read any symbol; Delete and Rename need a project-library entry.
 import type { Dispatch } from "react";
 import type { Cmd, LibrarySymbol } from "../api/types";
-import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../api/client";
-import { fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
+import { fetchLibrarySymbolFlat, fetchSymbolEditorNames, fetchSymbolForEditor } from "../api/client";
+import { ensureSymbolInProject, fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
 import { ensureUniqueLibId, escapeLibIdName, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError, symbolNameInUse, symbolNameInUseAs } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { deleteBaseMessage, deleteModifiedQuestion, isTableLibrary, libraryOfId, notWritableMessage, symbolLibraryNotFound, symbolTarget } from "../kicad-port/librarySave";
@@ -30,6 +30,8 @@ export interface SymCtx {
 
 const info = (c: SymCtx, message: string) => c.dispatch({ type: "TOAST", message, kind: "info" });
 const fail = (c: SymCtx, e: unknown) => c.dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+/** `m_frame->ShowInfoBarError( msg )`: a library action's refusal, in the frame's info bar over the canvas (UI-LEFT-3 Y3-7). */
+const infoBarError = (c: SymCtx, message: string) => c.dispatch({ type: "SHOW_INFOBAR", message, kind: "error" });
 
 /** `GetTargetLibId` / `GetSelectedLibIds`: what the library tree has selected, else the open symbol. */
 export function targetIds(c: SymCtx): string[] {
@@ -71,10 +73,10 @@ function select(c: SymCtx, ids: string[]) {
   c.dispatch({ type: "SET_TREE_SELECTION", names: ids });
 }
 
-/** `SYMBOL_EDITOR_CONTROL::EditSymbol`: show the tree's selected symbol on the editor canvas. */
+/** `SYMBOL_EDITOR_CONTROL::EditSymbol`: show the tree's selected symbol on the editor canvas (nothing selected: nothing, as KiCad's action does). */
 export async function editSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "Select a symbol in the library tree first.");
+  if (!id) return;
   try {
     await c.api.openSymbol(id);
     notifyLibraryChanged();
@@ -84,16 +86,24 @@ export async function editSymbol(c: SymCtx): Promise<void> {
 }
 
 /**
- * `SCH_ACTIONS::symbolProperties` from the tree's context menu (`symbolSelectedCondition`): the Symbol Properties dialog is about the symbol on
- * the canvas, so a target that is not the open symbol is opened first.
+ * `SYMBOL_EDITOR_EDIT_TOOL::Properties` on `SCH_ACTIONS::symbolProperties` (the tree's context menu, File > Symbol Properties...): a tree symbol that is not the one loaded
+ * is edited in the library's buffer without being loaded (`editSymbolPropertiesFromLibrary`: `GetBufferedSymbol`, then `DIALOG_LIB_SYMBOL_PROPERTIES` on a copy, and
+ * `UpdateSymbol` on OK) -- the canvas keeps the symbol it shows; else the loaded symbol's (`editSymbolProperties`). A symbol of an installed library is put in the
+ * project library first, as opening it would (the studio's buffer); one that cannot be read is nothing (`if( !bufferedSymbol ) return;`). Nothing selected and nothing
+ * loaded is nothing too (UI-LEFT-3 Y3-2).
  */
 export async function symbolProperties(c: SymCtx): Promise<void> {
   const target = targetIds(c)[0];
-  if (!target) return info(c, "Select a symbol in the library tree first.");
+  if (!target) return;
   try {
     if (c.api.getState().libId !== target) {
-      await c.api.openSymbol(target);
-      notifyLibraryChanged();
+      if (await ensureSymbolInProject(target)) return;
+      const { symbol, own } = await fetchSymbolForEditor(target);
+      // `ACTIONS::cancelInteractive`, `ACTIONS::selectionClear`
+      c.dispatch({ type: "SET_DRAW_STATE", draw: null });
+      c.dispatch({ type: "SET_SELECTION", refs: [] });
+      c.dispatch({ type: "SET_PROPERTIES_OPEN", open: true, subject: { symbol, own } });
+      return;
     }
     c.dispatch({ type: "SET_PROPERTIES_OPEN", open: true });
   } catch (e) {
@@ -138,7 +148,7 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
     const { activeUnit, activeBodyStyle } = st;
     // the library is checked before the clipboard is read (`m_frame->ShowInfoBarError( msg )`)
     const refused = await libraryRefusal(targetLibrary(c));
-    if (refused) return fail(c, new Error(refused));
+    if (refused) return infoBarError(c, refused);
     const text = await readClipboardText();
     let symbols: LibrarySymbol[];
     if (st.copied && (text === null || text === st.copied.text)) {
@@ -166,12 +176,12 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
 /** `SYMBOL_EDIT_FRAME::DuplicateSymbol( false )`: a copy of the target under the next free name (`name_1`, ...), opened at the unit and body style being edited. */
 export async function duplicateSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  // "When duplicating a symbol, a source symbol must exists."
-  if (!id) return fail(c, new Error("No symbol selected"));
+  // "When duplicating a symbol, a source symbol must exists." (`ShowInfoBarError`)
+  if (!id) return infoBarError(c, "No symbol selected");
   try {
     const { activeUnit, activeBodyStyle } = c.api.getState();
     const refused = await libraryRefusal(splitLibName(id).lib || PROJECT_SYMBOL_LIB);
-    if (refused) return fail(c, new Error(refused));
+    if (refused) return infoBarError(c, refused);
     const { symbol } = await fetchAnySymbol(id);
     const { all } = await names();
     const libId = ensureUniqueLibId(id, all, true);
@@ -191,7 +201,8 @@ export async function duplicateSymbol(c: SymCtx): Promise<void> {
  */
 export async function deleteSymbols(c: SymCtx): Promise<void> {
   const ids = targetIds(c);
-  if (ids.length === 0) return info(c, "No symbol selected.");
+  // `for( LIB_ID& sel : editFrame->GetSelectedLibIds() )` over nothing: no message, nothing writable, `return 0`
+  if (ids.length === 0) return;
   try {
     const [writable, { items: modifiedItems }] = await Promise.all([fetchWritableLibraries("symbol"), fetchModified("symbol")]);
     const rows = new Map(writable.map((l) => [l.name, l.writable]));
@@ -203,7 +214,7 @@ export async function deleteSymbols(c: SymCtx): Promise<void> {
       else if (rows.get(lib) === false) msg = `${notWritableMessage(lib)}`;
       else hasWritableLibs = true;
     }
-    if (msg) fail(c, new Error(msg));
+    if (msg) infoBarError(c, msg);
     if (!hasWritableLibs) return;
     const deletable: string[] = [];
     const chains = new Map<string, string[]>();
@@ -238,7 +249,8 @@ export async function deleteSymbols(c: SymCtx): Promise<void> {
  */
 export async function renameSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "Select a symbol in the library tree first.");
+  // `if( !libMgr.LibraryExists( libName ) ) return 0;`: no symbol, no library, no message
+  if (!id) return;
   try {
     const r = await fetchSymbolEditorNames();
     const all = r.names;
@@ -246,7 +258,7 @@ export async function renameSymbol(c: SymCtx): Promise<void> {
     const { lib, item } = splitLibName(id);
     const tableLib = isTableLibrary(lib);
     // `if( !libMgr.LibraryExists( libName ) ) return 0;`: a symbol only the board's model or the built-in table defines has no library
-    if (!tableLib && !project.has(id)) return fail(c, new Error(`${id} is not in the project library (it comes from a library file or the built-in table); save a copy of it under a new name instead.`));
+    if (!tableLib && !project.has(id)) return;
     if (tableLib && !(await fetchWritableLibraries("symbol")).some((l) => l.name === lib)) return;
     const entered = await askText({
       title: "Change Symbol Name",
@@ -281,7 +293,8 @@ export async function renameSymbol(c: SymCtx): Promise<void> {
 /** `SYMBOL_EDIT_FRAME::ExportSymbol`: the symbol as a `.kicad_sym` file, named after it in lower case. */
 export async function exportSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "There is no symbol selected to save.");
+  // `ShowInfoBarError( _( "There is no symbol selected to save." ) )`
+  if (!id) return infoBarError(c, "There is no symbol selected to save.");
   try {
     saveTextFile(await fetchSymbolKicadSymText(id), `${splitLibName(id).item.toLowerCase()}.kicad_sym`);
   } catch (e) {
@@ -353,7 +366,8 @@ export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbo
 /** `SYMBOL_EDIT_FRAME::saveSymbolCopyAs`: open the Save As dialog for the target symbol (`openCopy` = Save As, which loads the copy afterwards). */
 export function saveSymbolAs(c: SymCtx, openCopy: boolean): void {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "There is no symbol selected to save.");
+  // `if( !symbol ) return;`
+  if (!id) return;
   c.dispatch({ type: "SET_SAVE_AS", request: { openCopy, libId: id } });
 }
 
@@ -400,17 +414,20 @@ export async function askSaveAsConflicts(lib: string, symbolName: string, typed:
 /** `SYMBOL_EDITOR_CONTROL::AddSymbol` for `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog on the tree's selected symbol (`CreateNewSymbol( target.GetLibItemName() )`). */
 export function deriveFromExisting(c: SymCtx): void {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "Select a symbol in the library tree first.");
+  // `AddSymbol`: `if( libName.IsEmpty() ) { ShowInfoBarError( _( "No symbol library selected." ) ); return 0; }`
+  if (!id) return infoBarError(c, "No symbol library selected.");
   c.dispatch({ type: "SET_DERIVE_REQUEST", parent: id });
 }
 
 /** `SYMBOL_EDITOR_CONTROL::FlattenSymbol`: the tree's selected symbol becomes the flat symbol it stands for (`UpdateSymbol( libMgr, Flatten() )`). */
 export async function flattenSymbol(c: SymCtx): Promise<void> {
   const id = targetIds(c)[0];
-  if (!id) return info(c, "No symbol to flatten");
+  // `wxMessageBox( _( "No symbol to flatten" ) )`
+  if (!id) return void (await showError("No symbol to flatten", undefined, "Message"));
   try {
     const { derived } = await names();
-    if (!treeConditions(derived, id).isDerived) return fail(c, new Error("Symbol is not derived from another symbol."));
+    // the action is the tree's `derivedSymbolSelectedCondition`: a root symbol's Flatten changes nothing
+    if (!treeConditions(derived, id).isDerived) return;
     await runBatch(c, [{ op: "flatten_symbol", lib_id: id }]);
   } catch (e) {
     fail(c, e);
@@ -421,7 +438,8 @@ export async function flattenSymbol(c: SymCtx): Promise<void> {
 export function updateSymbolFields(c: SymCtx): void {
   const st = c.api.getState();
   if (!st.symbol) return;
-  if (!st.derivedOwn) return fail(c, new Error("Symbol is not derived from another symbol."));
+  // `m_frame->ShowInfoBarError( _( "Symbol is not derived from another symbol." ) )`
+  if (!st.derivedOwn) return infoBarError(c, "Symbol is not derived from another symbol.");
   c.dispatch({ type: "SET_UPDATE_FIELDS_OPEN", open: true });
 }
 

@@ -36,7 +36,7 @@ import {
 
 const STORAGE_KEY = "eda-studio.toolbars.v1";
 
-/** The schematic's drawing toolbar with KiCad 25ec2335's Arc group (the five draw modes) where 8303b2ad's Draw Arcs button is. */
+/** The schematic's and the Symbol Editor's drawing toolbars with KiCad 25ec2335's Arc group (the five draw modes) where 8303b2ad's Draw Arcs button is. */
 function withKicad10ArcGroup(file: ToolbarsFile): ToolbarsFile {
   const swap = (it: ToolbarItem): ToolbarItem => (it.type === "action" && it.action === "eeschema.InteractiveDrawing.drawArc" ? SCH_ARC_GROUP : it);
   return { ...file, toolbars: file.toolbars.map((t) => ({ ...t, items: t.items.map(swap) })) };
@@ -50,7 +50,8 @@ export const DEFAULT_TOOLBAR_FILES: Record<ToolbarFrame, ToolbarsFile> = {
   // eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's TOOLBAR_LOC::TOP_AUX case returns std::nullopt)
   schematic: withKicad10ArcGroup(schToolbarsData as ToolbarsFile),
   footprint: fpToolbarsData as ToolbarsFile,
-  symbol: symToolbarsData as ToolbarsFile,
+  // the Symbol Editor's drawing toolbar takes KiCad 25ec2335's Arc group too (`toolbars_symbol_editor.cpp`; UI-LEFT-3 Y3-8)
+  symbol: withKicad10ArcGroup(symToolbarsData as ToolbarsFile),
   "3d": viewer3dFile,
 };
 

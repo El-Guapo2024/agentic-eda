@@ -101,6 +101,8 @@ export async function refreshSymFindHighlights(api: SymbolEditorApi): Promise<vo
   const { items: list } = items(api, current.selectedOnly);
   try {
     const reply = await askMatcher(current.search, textsOf(list).texts, false);
+    // a reply that comes after the dialog closed brightens nothing (`OnFindDialogClose` cleared them)
+    if (!current.open) return;
     const matched = matchedItems(list, reply.matches ?? []);
     const bright = list.filter((_, i) => matched[i]).map((it) => it.id);
     if (JSON.stringify(bright) !== JSON.stringify(current.bright)) set({ bright });
