@@ -28,7 +28,8 @@ import { useEffect, useState } from "react";
 import type { Cmd, LibrarySymbol, SymbolPropertiesFields } from "../../api/types";
 import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../../api/client";
 import { bareName, parentCandidates, wireField } from "../../kicad-port/symFields";
-import { gridProblem, gridRowsFor, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
+import { gridProblem, gridRowsFor, renamedFields, savedFields, type GridRow } from "../../kicad-port/symFieldsGrid";
+import { renamedFieldLooksCmds } from "../../kicad-port/symLooks";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { notifyLibraryChanged } from "../library/useLibraryNames";
 import { askConfirm, showError } from "../library/libraryDialogs";
@@ -124,9 +125,11 @@ export function LibrarySymbolPropertiesDialog() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
-  const own = state.derivedOwn;
+  /** A tree symbol that is not the one loaded is edited without loading it (`editSymbolPropertiesFromLibrary`, UI-LEFT-3 Y3-2): the canvas keeps its own. */
+  const foreign = state.propertiesSubject;
+  const own = foreign ? foreign.own : state.derivedOwn;
   /** What the dialog edits: the symbol's own entry (a derived symbol's fields are its own; the editor draws the flat one). */
-  const subject = own ?? state.symbol;
+  const subject = own ?? (foreign ? foreign.symbol : state.symbol);
   const derived = own !== null;
   const close = () => dispatch({ type: "SET_PROPERTIES_OPEN", open: false });
 
@@ -281,10 +284,19 @@ export function LibrarySymbolPropertiesDialog() {
       });
     }
     cmds.push({ op: "edit_library_symbol_fields", lib_id: target, fields: savedFields(out).map(wireField) });
+    // a renamed field keeps its face, colour and pen (KiCad's are on the `SCH_FIELD`; UI-LEFT-3 Y3-3)
+    cmds.push(...renamedFieldLooksCmds(target, subject, renamedFields(out)));
     setBusy(true);
     try {
       const ok = await api.cmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
       notifyLibraryChanged();
+      if (foreign) {
+        // `editSymbolPropertiesFromLibrary`: `UpdateSymbol` in the library's buffer and `UpdateLibraryTree( treeItem, &tempSymbol )` -- the tree follows a rename; the canvas
+        // and its unit, body style and drawing scope are the loaded symbol's and stay
+        if (ok && renamed) dispatch({ type: "SET_TREE_SELECTION", names: [target] });
+        if (ok) close();
+        return;
+      }
       if (ok && renamed) await api.openSymbol(target, undefined, { keepHistory: true }); // `UNDO_REDO::LIB_RENAME` is an undo step: the reopening keeps the history
       // `RebuildSymbolUnitAndBodyStyleLists`: a unit or body style the symbol no longer has goes back to the first
       if (ok && !derived && state.activeUnit > form.unit_count) dispatch({ type: "SET_ACTIVE_UNIT", unit: 1 });

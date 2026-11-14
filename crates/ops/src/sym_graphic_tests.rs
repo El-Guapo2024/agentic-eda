@@ -279,3 +279,34 @@ fn a_graphics_looks_and_line_style_are_set_as_given_and_go_with_the_graphic() {
     b.apply(&Cmd::DeleteSymbolGraphic { lib_id: "Lib:S".into(), id }).unwrap();
     assert!(sym(&b).kicad.graphic_looks.is_empty() && sym(&b).kicad.stroke_types.is_empty(), "gone with the shape");
 }
+
+#[test]
+fn a_fields_looks_go_with_the_field_when_it_is_renamed_or_removed() {
+    use eda_model::lib_keep::KeptFieldLooks;
+    use eda_model::sch_extras::SchColor;
+    use eda_model::sym_fields::LibrarySymbolField;
+    let m = ConstraintModel::default();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewSymbol { lib_id: "Lib:S".into() }).unwrap();
+    let sym = |b: &Board<'_>| b.design().symbol_library.as_ref().unwrap().by_lib_id("Lib:S").unwrap().clone();
+    let mut fields = sym(&b).all_fields();
+    fields.push(LibrarySymbolField::named("MPN", "X1"));
+    b.apply(&Cmd::EditLibrarySymbolFields { lib_id: "Lib:S".into(), fields: fields.clone() }).unwrap();
+    let looks = KeptFieldLooks { font: Some("DejaVu Sans".into()), color: Some(SchColor { r: 10, g: 20, b: 30, a: 255 }), ..Default::default() };
+    b.apply(&Cmd::SetSymbolFieldLooks { lib_id: "Lib:S".into(), name: "MPN".into(), looks: looks.clone() }).unwrap();
+    b.apply(&Cmd::SetSymbolFieldLooks { lib_id: "Lib:S".into(), name: "Value".into(), looks: looks.clone() }).unwrap();
+    // renamed: the old name's looks go with the verb, and the batch gives them to the new name (the Symbol Properties' OK)
+    let renamed: Vec<LibrarySymbolField> = fields.iter().map(|f| if f.name == "MPN" { LibrarySymbolField { name: "PartNumber".into(), ..f.clone() } } else { f.clone() }).collect();
+    b.apply(&Cmd::Batch { cmds: vec![
+        Cmd::EditLibrarySymbolFields { lib_id: "Lib:S".into(), fields: renamed.clone() },
+        Cmd::SetSymbolFieldLooks { lib_id: "Lib:S".into(), name: "PartNumber".into(), looks: looks.clone() },
+    ] })
+    .unwrap();
+    assert!(!sym(&b).kicad.field_looks.contains_key("MPN"), "the old name keeps nothing");
+    assert_eq!(sym(&b).kicad.field_looks.get("PartNumber"), Some(&looks));
+    assert_eq!(sym(&b).kicad.field_looks.get("Value"), Some(&looks), "a mandatory field is always there");
+    // removed: its looks go with it, so a field added later under the name starts plain
+    let removed: Vec<LibrarySymbolField> = renamed.into_iter().filter(|f| f.name != "PartNumber").collect();
+    b.apply(&Cmd::EditLibrarySymbolFields { lib_id: "Lib:S".into(), fields: removed }).unwrap();
+    assert!(!sym(&b).kicad.field_looks.contains_key("PartNumber"));
+}

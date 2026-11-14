@@ -20,6 +20,8 @@ export interface GridRow extends FieldRow {
   inherited: boolean;
   /** The parent's field this row inherits; `null` for the symbol's own fields. */
   parent: FieldRow | null;
+  /** The name the field had when the dialog opened (absent for a row added in it): a renamed field takes its looks along (UI-LEFT-3 Y3-3). */
+  was?: string;
 }
 
 /** `GetRefDesPrefix`: the reference without its trailing digits and question marks. */
@@ -49,7 +51,7 @@ export function sameField(a: FieldRow, b: FieldRow): boolean {
 /** The rows the grid starts with. `parentFlat` is the derived symbol's parent with everything it inherits (`null` for a root symbol). */
 export function gridRowsFor(own: LibrarySymbol, parentFlat: LibrarySymbol | null): GridRow[] {
   let key = 1;
-  const rows: GridRow[] = allFields(own).map((f) => ({ ...f, key: key++, inherited: false, parent: null }));
+  const rows: GridRow[] = allFields(own).map((f) => ({ ...f, key: key++, inherited: false, parent: null, was: f.name }));
   if (!parentFlat) return rows;
   for (const pf of allFields(parentFlat)) {
     if (isMandatoryField(pf.name)) continue; // "Don't inherit mandatory fields"
@@ -57,18 +59,24 @@ export function gridRowsFor(own: LibrarySymbol, parentFlat: LibrarySymbol | null
     if (i >= 0) {
       rows[i] = { ...rows[i]!, inherited: true, parent: pf }; // `SetFieldInherited`
     } else {
-      rows.push({ ...pf, key: key++, inherited: true, parent: pf }); // `AddInheritedField`
+      rows.push({ ...pf, key: key++, inherited: true, parent: pf, was: pf.name }); // `AddInheritedField`
     }
   }
   return rows;
+}
+
+/** The fields the rows renamed: the name each had and the one it has now (`SCH_FIELD::SetName` of the grid's Name cell), the kept rows only. */
+export function renamedFields(rows: readonly GridRow[]): { from: string; to: string }[] {
+  return rows.filter((r) => r.was !== undefined && r.was !== "" && r.name !== "" && r.was !== r.name).map((r) => ({ from: r.was!, to: r.name }));
 }
 
 /** What OK keeps of the rows, in order, as the symbol's own fields. */
 export function savedFields(rows: readonly GridRow[]): FieldRow[] {
   const out: FieldRow[] = [];
   for (const r of rows) {
-    const { key: _key, inherited, parent, ...field } = r;
+    const { key: _key, inherited, parent, was: _was, ...field } = r;
     void _key;
+    void _was;
     if (inherited && parent && sameField(field, parent)) continue; // "Skip inherited fields"
     if (!isMandatoryField(field.name) && field.text === "" && field.name === "") continue; // an empty row of the grid
     out.push(field);
