@@ -183,10 +183,13 @@ impl Driver {
     }
 }
 
-/// `SCH_CONNECTION::IsBusLabel`: the text is a bus vector or a bus group as `NET_SETTINGS::ParseBusVector` / `ParseBusGroup` read it (the exact ports in
-/// [`eda_model::bus_pattern`]: `_{`, `^{` and `~{` are formatting, any other `{` opens a group). A bare bus alias name is not one (a net in KiCad too).
+/// `SCH_CONNECTION::IsBusLabel` of the label's shown text: the text is a bus vector or a bus group as `NET_SETTINGS::ParseBusVector` / `ParseBusGroup` read it
+/// (the exact ports in [`eda_model::bus_pattern`]: `_{`, `^{` and `~{` are formatting, any other `{` opens a group). The shown text is unescaped
+/// (`EDA_TEXT::GetShownText`: `UnescapeString`), so a stored `VREF1{slash}2` is `VREF1/2`, no group (KiCad's QA issue19646). A bare bus alias name is not one
+/// (a net in KiCad too).
 fn reads_as_bus(text: &str) -> bool {
-    eda_model::bus_pattern::parse_bus_vector(text).is_some() || eda_model::bus_pattern::parse_bus_group(text).is_some()
+    let shown = eda_model::text_vars::unescape_string(text);
+    eda_model::bus_pattern::parse_bus_vector(&shown).is_some() || eda_model::bus_pattern::parse_bus_group(&shown).is_some()
 }
 
 /// A subgraph: the points that are one node on one screen.
@@ -1234,10 +1237,11 @@ mod tests {
 
     /// UI-LEFT-3 S3-20: a label whose `@{..}` failed (left as written: `N@{1/0}`, `X@{foo}y`) reads as a bus group, as `M{A B}` and `D[0..1]` do, so the
     /// pins of its net are on no net (kicad-cli's netlist lists none of them); a formatting brace (`V_{CC}`) is no bus; a stronger name beside it (`GOOD`
-    /// before `M..` by `CLAIM_LESS`'s name order) keeps the net, a weaker one (`A..` first) does not; a `/` in the text (escaped `{slash}`) is no group.
+    /// before `M..` by `CLAIM_LESS`'s name order) keeps the net, a weaker one (`A..` first) does not; a `/` in the text, stored escaped (`VREF1{slash}2`, as
+    /// a KiCad file has it), is no group.
     #[test]
     fn a_label_that_reads_as_a_bus_leaves_its_pins_on_no_net() {
-        for (text, other, on_a_net) in [("N@{1/0}", None, false), ("X@{foo}y", None, false), ("M{A B}", None, false), ("D[0..1]", None, false), ("V_{CC}", None, true), ("A/B", None, true), ("M@{5-}", Some("GOOD"), true), ("A@{5-}", Some("GOOD"), false)] {
+        for (text, other, on_a_net) in [("N@{1/0}", None, false), ("X@{foo}y", None, false), ("M{A B}", None, false), ("D[0..1]", None, false), ("V_{CC}", None, true), ("A/B", None, true), ("VREF1{slash}2", None, true), ("M@{5-}", Some("GOOD"), true), ("A@{5-}", Some("GOOD"), false)] {
             let mut root = section();
             root.wires.push(wire("", &[p(0, 0), p(1000, 0)]));
             root.labels.push(label(text, p(1000, 0), LabelKind::Local));
