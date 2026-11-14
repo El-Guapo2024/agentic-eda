@@ -54,7 +54,7 @@ import { modificationSnapFor } from "../../state/modificationSnap";
 import { PcbSnap, type PointOpts, type SnapMods } from "./pcbSnap";
 import { paintSnapOverlay } from "./snapOverlayPainter";
 import { useGridOverrides } from "../../state/gridOverrides";
-import { useGridSettings } from "../../state/gridSettings";
+import { useGridSettings, useLastGridIndex } from "../../state/gridSettings";
 import { useColorThemeStamp } from "../../state/colorThemeStore";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
 import { withTrackSnapping } from "../../kicad-port/routerSettings";
@@ -368,13 +368,15 @@ export function Canvas() {
   if (!snapRef.current) snapRef.current = new PcbSnap();
   const snap = snapRef.current;
   const gridSettingsList = useGridSettings("pcb");
+  // the row last chosen (`last_size_idx`): of two grids with the same X, the one chosen is current (UI-LEFT-3 C3-6)
+  const gridIdx = useLastGridIndex("pcb");
   const gridList = gridSettingsList.grids;
   // the editor's own Display Options > Grid Display, and the Y of its grid (Edit Grids' "Y:")
   const gridDisplay = useGridDisplay("pcb");
-  const gridYNm = gridYOf(gridSettingsList, state.gridNm);
+  const gridYNm = gridYOf(gridSettingsList, state.gridNm, gridIdx);
   const gridOverrides = useGridOverrides("pcb");
   const [, bumpSnap] = useState(0);
-  snap.update({ board, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
+  snap.update({ board, scale: state.view.scale, gridNm: state.gridNm, grids: gridList, gridYs: gridSettingsList.ys, gridIdx, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer, selection: state.selection });
   snap.onChange = () => bumpSnap((n) => n + 1);
   // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
   useEffect(() => {

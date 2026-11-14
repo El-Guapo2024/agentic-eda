@@ -16,6 +16,8 @@
 //
 // Units: the studio's um.
 
+import { currentGridIndex } from "./gridSettings";
+
 /** `GRID_HELPER_GRIDS`. */
 export type GridCategory = "current" | "connectable" | "wires" | "vias" | "text" | "graphics";
 
@@ -81,10 +83,13 @@ export function gridSizeYFor(category: GridCategory, currentY: number, grids: re
   return currentY;
 }
 
-/** The Y sizes the grid helpers' `GridEnv` takes for a list whose grids may not be square: the current grid's (the first grid with the current X) and each category's. */
-export function gridEnvY(v: { gridNm: number; grids: readonly number[]; gridYs?: readonly number[]; overrides: GridOverrides | null | undefined }): { gridYNm?: number; gridSizeYOf?: (c: GridCategory) => number } {
+/**
+ * The Y sizes the grid helpers' `GridEnv` takes for a list whose grids may not be square: the current grid's (its row `last_size_idx` when that row has the current
+ * X, else the first grid with it: gridSettings.ts `currentGridIndex`) and each category's.
+ */
+export function gridEnvY(v: { gridNm: number; grids: readonly number[]; gridYs?: readonly number[]; gridIdx?: number; overrides: GridOverrides | null | undefined }): { gridYNm?: number; gridSizeYOf?: (c: GridCategory) => number } {
   if (!v.gridYs) return {};
-  const at = v.grids.findIndex((g) => Math.abs(g - v.gridNm) < 1e-9);
+  const at = currentGridIndex(v.grids, v.gridNm, v.gridIdx);
   const currentY = at >= 0 ? (v.gridYs[at] ?? v.gridNm) : v.gridNm;
   return { gridYNm: currentY, gridSizeYOf: (c) => gridSizeYFor(c, currentY, v.grids, v.gridYs, v.overrides) };
 }

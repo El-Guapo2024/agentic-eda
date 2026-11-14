@@ -6,7 +6,7 @@ import type { MenuNode } from "../../kicad/types";
 import type { BoardState } from "../../api/types";
 import type { StudioState } from "../../state/store";
 import { picker } from "../../actions/pcbPicker";
-import { getGridSettings } from "../../state/gridSettings";
+import { getGridSettings, getLastGridIndex } from "../../state/gridSettings";
 import { formatLength, type LengthUnit } from "../../state/units";
 import { zoomListFor, zoomMenuEntries } from "../../kicad-port/zoomFit";
 import { gridMenuEntries } from "../../kicad-port/gridSettings";
@@ -51,7 +51,7 @@ function zoomEntries(state: StudioState): PcbMenuContext["zoom"] {
 
 /** `GRID_MENU::update` and `BuildChoiceList`: each grid ("name: " and X, or X x Y) in the display unit and, in brackets, the other system's; the current one checked. */
 function gridEntries(state: StudioState): PcbMenuContext["grid"] {
-  return gridMenuEntries(getGridSettings("pcb"), state.gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, otherUnit(state.units)));
+  return gridMenuEntries(getGridSettings("pcb"), state.gridNm, (nm) => formatLength(nm, state.units), (nm) => formatLength(nm, otherUnit(state.units)), getLastGridIndex("pcb"));
 }
 
 /** The point editor's handle under the pointer (`PCB_POINT_EDITOR::HasCorner / HasMidpoint / CanRemoveCorner`). */

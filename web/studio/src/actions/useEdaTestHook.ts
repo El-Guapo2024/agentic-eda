@@ -217,7 +217,6 @@ function openNames(L: Latest): string[] {
   if (L.common.page) out.push(`common.page:${L.common.page}`);
   if (L.common.group) out.push("common.group");
   if (L.common.gridOrigin) out.push("common.gridOrigin");
-  if (L.common.grids) out.push(`common.grids:${L.common.grids}`);
   return out.sort();
 }
 

@@ -31,6 +31,8 @@ export interface PcbSnapView {
   grids: readonly number[];
   /** The grids' Y sizes beside `grids` (`GridSettings::ys`), when a grid is not square. */
   gridYs?: readonly number[];
+  /** The row of the current grid last chosen (`last_size_idx`, state/gridSettings.ts): of two grids of the same X, which one's Y (UI-LEFT-3 C3-6). */
+  gridIdx?: number;
   overrides: GridOverrides | null;
   magnetic: PcbMagnetic;
   /** `state.layerVisible`: a layer is hidden only when it is `false`. */

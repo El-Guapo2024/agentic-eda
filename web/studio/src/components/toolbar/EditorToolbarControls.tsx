@@ -6,7 +6,7 @@ import { zoomAbout } from "../../kicad-port/view";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { useFpLayerChoices } from "../footprint/useFpLayerChoices";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
-import { useGridSettings } from "../../state/gridSettings";
+import { setLastGridIndex, useGridSettings, useLastGridIndex } from "../../state/gridSettings";
 import { useStudioState } from "../../state/store";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { bodyStyleSelectorEntries, isMultiBodyStyle, unitDisplayName } from "../../kicad-port/symBodyStyles";
@@ -30,8 +30,10 @@ const EDIT_GRIDS = "edit-grids";
 export function GridSelect({ editor, gridNm, onChange }: { editor: GridEditor; gridNm: number; onChange: (um: number) => void }) {
   const { units } = useStudioState();
   const settings = useGridSettings(editor);
+  // `last_size_idx`: the row chosen, so of two grids with the same X the one picked stays the box's (UI-LEFT-3 C3-6)
+  const lastIdx = useLastGridIndex(editor);
   const { run, isEnabled } = useActionRunner();
-  const entries = gridMenuEntries(settings, gridNm, (nm) => formatLength(nm, units), (nm) => formatLength(nm, units === "mm" ? "mil" : "mm"));
+  const entries = gridMenuEntries(settings, gridNm, (nm) => formatLength(nm, units), (nm) => formatLength(nm, units === "mm" ? "mil" : "mm"), lastIdx);
   const current = entries.findIndex((e) => e.checked);
   // A grid that left the list (it was edited away in another editor's session) stays on screen as the box's current value until another is chosen.
   const stray = current < 0 ? "stray" : null;
@@ -41,7 +43,11 @@ export function GridSelect({ editor, gridNm, onChange }: { editor: GridEditor; g
         value={current >= 0 ? String(current) : "stray"}
         onChange={(e) => {
           if (e.target.value === EDIT_GRIDS) run("common.Control.editGrids");
-          else if (e.target.value !== "stray") onChange(settings.grids[Number(e.target.value)]!);
+          else if (e.target.value !== "stray") {
+            // `OnSelectGrid`: `GridPreset( idx )` -- `last_size_idx = idx`, then the grid
+            setLastGridIndex(editor, Number(e.target.value));
+            onChange(settings.grids[Number(e.target.value)]!);
+          }
         }}
       >
         {entries.map((entry, i) => (

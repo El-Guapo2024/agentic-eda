@@ -51,6 +51,7 @@ import { useToolbarsPage } from "./ToolbarsPage";
 import { useFpFieldDefaultsPage, useFpLayerNamesPage } from "./FpDefaultsPages";
 import { PcbEditingOptionsPage, SchEditingOptionsPage, SymEditingOptionsPage, type EditingExtra } from "./EditingOptionsPages";
 import { GridsPageBody, useGridsPages } from "./GridsDialog";
+import { takePreferencesStartPage } from "../state/preferencesStart";
 import type { GridEditor } from "../kicad-port/gridSettings";
 import type { PreferencesPageHandle } from "./preferencesPage";
 import { GlobalFieldNamesPage, SimulatorPrefsPage } from "./SchPreferencesPages";
@@ -269,6 +270,9 @@ export function PreferencesDialog() {
 
   useEffect(() => {
     if (open) {
+      // `ShowPreferences( aStartPage, aStartParentPage )`: a page a tool asked for (Edit Grids: the editor's Grids page), else the last one (`g_lastPage`)
+      const start = takePreferencesStartPage();
+      if (start) lastPage = (Object.keys(GRIDS_PAGE) as PrefsPage[]).find((p) => GRIDS_PAGE[p] === start.grids) ?? lastPage;
       setDraft(state.prefs);
       setRotationText(String(state.prefs.rotationStepDeg));
       setFpRotationText(String(state.prefs.fpRotationStepDeg));
