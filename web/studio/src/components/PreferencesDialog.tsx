@@ -58,6 +58,8 @@ import { DEFAULT_SIM_WHEEL_ACTIONS } from "../kicad-port/sim/simWheel";
 import { transferGlobalTemplates } from "../kicad-port/fieldNameTemplates";
 import { WHITESPACE_EXTENDED, WHITESPACE_KEEP, WHITESPACE_REMOVE } from "../kicad-port/schSetup";
 import { askConfirm } from "./library/libraryDialogs";
+import { useFontFamilies } from "./TextLookControls";
+import { fontChoices } from "../kicad-port/textLooks";
 
 /** The pages of the dialog's tree (`PAGED_DIALOG`'s `wxTreebook`). */
 type PrefsPage =
@@ -262,6 +264,8 @@ export function PreferencesDialog() {
   const [windows, setWindows] = useState<Record<EditorWindow, WindowOptions>>(getCommonOptions().window);
   /** The 3D viewer's settings being edited (state/viewer3dUserSettings.ts), taken on OK as the other pages are. */
   const [draft3d, setDraft3d] = useState<Viewer3DPrefs>(getViewer3DUserSettings().prefs);
+  // the machine's font families, for Display Options' "Default font:"
+  const fontFamilies = useFontFamilies();
 
   useEffect(() => {
     if (open) {
@@ -369,7 +373,8 @@ export function PreferencesDialog() {
         };
         return { run, tooltip: RESET_TOOLTIP };
       }
-      return { run: () => setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })), tooltip: RESET_TOOLTIP };
+      // the schematic's `PANEL_EESCHEMA_DISPLAY_OPTIONS::ResetPanel` also its Appearance ("Default font:" of a fresh `EESCHEMA_SETTINGS`)
+      return { run: () => { if (e === "schematic") set({ schDefaultFont: DEFAULT_PREFERENCES.schDefaultFont }); setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })); }, tooltip: RESET_TOOLTIP };
     }
     if (page === "fp_graphics") return { run: () => set({ fpTextGraphics: null }), tooltip: `Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values` };
     return null;
@@ -461,7 +466,32 @@ export function PreferencesDialog() {
           Always show crosshairs
         </label>
         {editor === "pcb" && pcbDisplayOptions()}
+        {editor === "schematic" && schDisplayOptions()}
       </div>
+    );
+  };
+
+  /**
+   * `PANEL_EESCHEMA_DISPLAY_OPTIONS`' Appearance "Default font:" (`m_defaultFontCtrl`, a `FONT_CHOICE`: "KiCad Font", then the machine's families): `loadEEschemaSettings` selects
+   * `m_Appearance.default_font` (the first entry when it is not in the list), `TransferDataFromWindow` keeps the selection, "KiCad Font" for the first (UI-LEFT-3 S3-29).
+   */
+  const schDisplayOptions = () => {
+    const choices = fontChoices(fontFamilies, null, false).choices;
+    const shown = choices.includes(draft.schDefaultFont) ? draft.schDefaultFont : choices[0]!;
+    return (
+      <>
+        {heading("Appearance")}
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Default font:</span>
+          <select aria-label="Default font:" data-testid="pref-sch-default-font" value={shown} onChange={(e) => set({ schDefaultFont: e.target.value })}>
+            {choices.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </div>
+      </>
     );
   };
 

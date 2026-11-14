@@ -184,6 +184,9 @@ export interface Preferences {
   /** `EESCHEMA_SETTINGS::m_RescueNeverShow` ("Never show Rescue Symbols tool", `system.never_show_rescue_dialog`): a legacy schematic brought in without its cache
    *  library is not offered Rescue Symbols (`OpenProjectFiles`); Rescue's "Never Show Again" sets it. Default off (UI-LEFT-3 S3-26). */
   schRescueNeverShow: boolean;
+  /** `m_Appearance.default_font` (Preferences > Schematic Editor > Display Options > "Default font:", `appearance.default_font`): the face of every schematic text with none
+   *  of its own -- fields, labels, texts, pins' names and numbers (`PIN_LAYOUT_CACHE`) -- and of the plots (`SetDefaultFont`). Default "KiCad Font" (UI-LEFT-3 S3-29). */
+  schDefaultFont: string;
   /** `m_Drawing.field_names` (Preferences > Schematic Editor > Field Name Templates, `PANEL_TEMPLATE_FIELDNAMES` global): the person's own templates, offered with the
    *  project's (`TEMPLATES::resolveTemplates`: a project template of the same name wins) and alone in the Symbol Editor's Symbol Properties. Default none (UI-LEFT-3 C3-2). */
   schGlobalFieldNames: TemplateFieldName[];
@@ -291,6 +294,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   schSheetBorderColor: null,
   schSheetBackgroundColor: null,
   schRescueNeverShow: false,
+  schDefaultFont: "KiCad Font",
   schGlobalFieldNames: [],
   simWheel: DEFAULT_SIM_WHEEL_ACTIONS,
   symDefaultLineWidthMils: 0,
@@ -469,6 +473,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     schSheetBorderColor: schColor(o.schSheetBorderColor),
     schSheetBackgroundColor: schColor(o.schSheetBackgroundColor),
     schRescueNeverShow: bool(o.schRescueNeverShow, d.schRescueNeverShow),
+    schDefaultFont: typeof o.schDefaultFont === "string" && o.schDefaultFont.trim() ? o.schDefaultFont : d.schDefaultFont,
     schGlobalFieldNames: Array.isArray(o.schGlobalFieldNames)
       ? (o.schGlobalFieldNames as unknown[]).filter((t): t is TemplateFieldName => !!t && typeof (t as TemplateFieldName).name === "string").map((t) => ({ name: t.name, visible: !!t.visible, url: !!t.url }))
       : d.schGlobalFieldNames,

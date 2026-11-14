@@ -9,7 +9,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`); the text measure is the caller's.
 import type { Cmd, Schematic, SchField } from "../api/types";
 import { defaultPenNm, FIELD_SIZE_NM } from "./schText";
-import { resolveFont } from "./kicadText";
+import { resolveSchFont } from "./schDefaultFont";
 import { SCH_IU, schTextBoundsInFace } from "./schTextSpecs";
 
 export const FIELD_ID_PREFIX = "fld:";
@@ -99,7 +99,7 @@ export type Measure = (text: string, sizeNm: number) => number;
 export function fieldBox(f: SchField, measure: Measure): FieldBox {
   const size = f.size_nm && f.size_nm > 0 ? f.size_nm : FIELD_SIZE_NM;
   // a field in an outline face: `SCH_FIELD::GetBoundingBox` in that face (UI-LEFT-3 S3-29), as it is drawn
-  const font = resolveFont(f.font, !!f.bold, !!f.italic);
+  const font = resolveSchFont(f.font, !!f.bold, !!f.italic);
   if (font.kind === "outline") {
     const spec = { text: shownText(f), pos: f.at, size: [size, size] as const, pen: 0, halign: f.h, valign: f.v ?? "center", angleDeg: f.vertical ? 90 : 0, italic: !!f.italic, bold: !!f.bold, multiline: false, iu: SCH_IU };
     return schTextBoundsInFace(spec, font);
