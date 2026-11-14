@@ -1095,7 +1095,7 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         for (w, c) in sec.wires.iter().zip(copy.wires.iter()) {
             if (!c.net.is_empty() && c.net != w.net) || c.pins != w.pins {
                 let net = if c.net.is_empty() { w.net.clone() } else { c.net.clone() };
-                sec.extras.path_wire_nets.entry(w.id.clone()).or_default().insert(key.clone(), eda_model::sch_extras::PathWireNet { net, pins: c.pins.clone() });
+                sec.extras.path_wire_nets.entry(eda_model::sch_extras::wire_key(w)).or_default().insert(key.clone(), eda_model::sch_extras::PathWireNet { net, pins: c.pins.clone() });
             }
         }
     }

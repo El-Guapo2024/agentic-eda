@@ -194,6 +194,10 @@ pub(crate) struct TreeBatch {
     order: Vec<String>,
     /// Each new top placement: its new id (the sheet path from the screen pasted on is the destination's path and it).
     tops: Vec<String>,
+    /// A file read by Import Sheet rather than a clipboard: a path of its instance data matches only from the file's own sheets down (`GetInstance( .., Path(),
+    /// true )` with the loaded path, whose first sheet is the file's root: a file that is not the root of its project has no instance that ends in it, and
+    /// `AddNewSymbolInstances` falls back to the first one), where a paste matches from the copied sheet wherever it was (`updatePastedSymbol`'s clipboard path).
+    import: bool,
 }
 
 impl<'a> Board<'a> {
@@ -237,7 +241,8 @@ impl<'a> Board<'a> {
     /// Put a copy of the sheet `inc` on the screen the verbs act on: the sheet symbol (named `name`, moved by `shift`), a copy of each screen it shows under a
     /// file of its own, the library symbols its symbols need, its symbols numbered. Returns the files the copies got (the sheet's first).
     pub(crate) fn add_sheet_tree(&mut self, inc: Incoming<'_>, shift: (Nm, Nm), name: &str, file_hint: Option<&str>, numbering: &Numbering) -> Result<Vec<String>, Vec<CheckResult>> {
-        let mut batch = TreeBatch::default();
+        // (only Import Sheet's "Place as sheet" comes this way)
+        let mut batch = TreeBatch { import: true, ..Default::default() };
         let files = self.add_sheet_tree_in(inc, shift, name, file_hint, numbering, &mut batch)?;
         self.finish_tree_batch(batch, numbering);
         Ok(files)
@@ -413,6 +418,9 @@ impl<'a> Board<'a> {
         // the new path of a source path: from the first sheet the batch brought in, every sheet mapped, under the walk's path to that first one
         let map_path = |path: &[String]| -> Option<Vec<String>> {
             let k = path.iter().position(|id| batch.ids.contains_key(id))?;
+            if batch.import && k != 0 {
+                return None;
+            }
             let mapped: Vec<String> = path[k..].iter().map(|id| batch.ids.get(id).cloned()).collect::<Option<_>>()?;
             let first = &mapped[0];
             let mut at: Vec<&eda_model::sheet_list::SheetEntry> = walk.iter().filter(|e| e.path.last() == Some(first) && e.path.starts_with(&here)).collect();
@@ -429,14 +437,15 @@ impl<'a> Board<'a> {
             if carry_refs {
                 for (i, path, reference, unit) in &stash.overrides {
                     let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
-                    if s.unit == *unit && *reference != s.id {
+                    // (of two source paths that match one new path, the first read gives it)
+                    if s.unit == *unit && *reference != s.id && !sec.instance_overrides.iter().any(|o| o.sheet_path == new && o.at == s.at && o.unit == s.unit) {
                         sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: new, reference: reference.clone(), unit: s.unit });
                     }
                 }
                 for (i, path, reference) in &stash.power_refs {
                     let (Some(new), Some(p)) = (map_path(path), stash.power(sec, *i)) else { continue };
                     if *reference != p.id {
-                        sec.extras.power_path_refs.entry(p.id.clone()).or_default().insert(new.join("/"), reference.clone());
+                        sec.extras.power_path_refs.entry(p.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| reference.clone());
                     }
                 }
             }
@@ -444,17 +453,17 @@ impl<'a> Board<'a> {
             for (i, path, unit) in &stash.units {
                 let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
                 if *unit != s.unit {
-                    sec.extras.path_units.entry(eda_model::ir::field_key(&s.id, s.unit)).or_default().insert(new.join("/"), *unit);
+                    sec.extras.path_units.entry(eda_model::ir::field_key(&s.id, s.unit)).or_default().entry(new.join("/")).or_insert(*unit);
                 }
             }
             for (i, path, records) in &stash.variants {
                 let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
-                sec.extras.path_symbol_variants.entry(s.id.clone()).or_default().insert(new.join("/"), records.clone());
+                sec.extras.path_symbol_variants.entry(s.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| records.clone());
             }
             // and the records each path gives a sheet drawn on the screen (`SCH_SHEET_INSTANCE::m_Variants`, UI-LEFT-3 S3-33)
             for (i, path, records) in &stash.sheet_variants {
                 let (Some(new), Some(sh)) = (map_path(path), sec.sheets.get(*i)) else { continue };
-                sec.extras.path_sheet_variants.entry(sh.id.clone()).or_default().insert(new.join("/"), records.clone());
+                sec.extras.path_sheet_variants.entry(sh.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| records.clone());
             }
         }
         // an import's automatic annotation, now that the sheets are in
@@ -713,7 +722,7 @@ impl<'a> Board<'a> {
     /// (`SCH_DRAWING_TOOLS::ImportSheet` -> `LoadSheetFromFile`): the file is read into a sheet of its own (`SCH_IO_KICAD_SEXPR::LoadSchematicFile` with no
     /// sheet to append to: `loadHierarchy` looks for a screen to share in the file read only), so none of its sheets shares a screen the design shows.
     pub(crate) fn paste_sheets(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode, import: bool) -> Result<(), Vec<CheckResult>> {
-        let mut batch = TreeBatch::default();
+        let mut batch = TreeBatch { import, ..Default::default() };
         let mut sheets: Vec<&SheetInstance> = fragment.section.sheets.iter().collect();
         // `sortedLoadedItems`: by name, naturally
         sheets.sort_by(|a, b| str_num_cmp(&a.name, &b.name));

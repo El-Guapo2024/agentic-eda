@@ -2380,7 +2380,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         .collect();
     // a screen shown twice: a wire is on the net of the sheet path in view (`SCH_ITEM::Connection( &GetCurrentSheet() )`, `SchExtras::path_wire_nets`; UI-LEFT-3 S3-36)
     let path_key = sheet_ids.join("/");
-    let on_path = |w: &eda_model::ir::Wire| sch.extras.path_wire_nets.get(&w.id).and_then(|m| m.get(&path_key));
+    let on_path = |w: &eda_model::ir::Wire| sch.extras.path_wire_nets.get(&eda_model::sch_extras::wire_key(w)).and_then(|m| m.get(&path_key));
     let wire_net = |w: &eda_model::ir::Wire| -> String { on_path(w).map_or_else(|| w.net.clone(), |p| p.net.clone()) };
     let wires: Vec<Value> = sch
         .wires

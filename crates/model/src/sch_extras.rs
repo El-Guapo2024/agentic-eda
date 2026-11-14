@@ -225,7 +225,7 @@ pub struct SchExtras {
     pub path_symbol_variants: BTreeMap<String, BTreeMap<String, BTreeMap<String, crate::variants::SymbolVariant>>>,
     /// The net a wire of this screen is on for a sheet path other than the first, where the screen is shown on several paths and the net there has
     /// another name (KiCad's connectivity is per sheet path, `CONNECTION_GRAPH::Recalculate`: a subgraph per item per `SCH_SHEET_PATH`, and an item's
-    /// `SCH_ITEM::Connection( &aSheet )` is that path's): by the wire's id, then by the sheet path (the placement ids from the root down, joined with `/`)
+    /// `SCH_ITEM::Connection( &aSheet )` is that path's): by the wire's points ([`wire_key`]), then by the sheet path (the placement ids from the root down, joined with `/`)
     /// -> the net's name and the pins at the wire's points under that path's references. [`crate::ir::Wire::net`] and `pins` are the first path's.
     /// Written by the tracer each time it runs, read by the studio for the sheet path in view (UI-LEFT-3 S3-36). Additive.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -657,6 +657,11 @@ pub struct PowerLibName {
     /// The entry's name (`+5V_1`): the library symbol's name, `_`, the first number no entry of the screen has (`SCH_SCREEN::Append`).
     pub name: String,
     pub local: bool,
+}
+
+/// The key [`SchExtras::path_wire_nets`] files a wire under: its points (a wire traced may have no id yet; its points are what it is on the sheet).
+pub fn wire_key(w: &crate::ir::Wire) -> String {
+    w.pts.iter().map(|p| format!("{},{}", p.x.get(), p.y.get())).collect::<Vec<_>>().join(";")
 }
 
 /// See [`SchExtras::path_wire_nets`]: a wire's net on one sheet path, and the pins it touches there ("REF.PIN" under the path's references).
