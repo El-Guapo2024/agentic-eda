@@ -8,7 +8,7 @@
 //   - P3-26: Plot of no layer in Gerber writes the job file ("Created Gerber job file ...", "Done.");
 //   - P3-27: Placement Files' "Exclude all footprints with the Exclude from BOM flag set" is a box of its own, and Gerber X3 keeps the DNP and BOM filters;
 //   - Custom Properties (KiCad 25ec2335): the Properties panel's group, "+" adds `Property0` whose name is typed at once, its text edited, then removed from the
-//     row's context menu; each one undo step.
+//     row's context menu; each one undo step; the Fields group's "+" (Add Field), a field renamed and removed; a duplicate and a pasted copy keep the properties.
 // It answers through `window.__pcbmiscV18Check`: { results: [{ name, ok, notes }], done, ok, wait(ms) }.
 // run-all-checks: board=mcu30-placed minutes=8
 (async () => {
@@ -215,7 +215,7 @@
     const group = () => document.querySelector('[data-group="Custom Properties"]');
     t(!!group(), "the group is there with no row (its button)");
     tid("prop-add-custom")?.click();
-    const label = await until(() => tid("prop-custom-label"), 5000);
+    const label = await until(() => tid("prop-key-label"), 5000);
     t(!!label && label.value === "", "the new row's name is in edit, blank");
     const added = await until(async () => (await state()).custom_properties?.[r1.ref]?.Property0 === "");
     t(!!added, "Property0 with an empty text on the footprint");
@@ -244,6 +244,64 @@
     await undo();
     await undo();
     t(!(await state()).custom_properties?.[r1.ref], "three more: none");
+    await select([]);
+  });
+
+  await scenario("Fields: + adds Field0 (hidden, empty) and its name is typed; the row's context menu removes it; each one undo step", async (t) => {
+    await select([r1.ref]);
+    await sleep(500);
+    const fieldNames = async () => ((await state()).parts.find((p) => p.ref === r1.ref)?.fields ?? []).map((f) => f.name);
+    const before = await fieldNames();
+    const plus = tid("prop-add-fields");
+    t(!!plus, "the Fields group has its + button");
+    plus?.click();
+    const label = await until(() => tid("prop-key-label"), 5000);
+    t(!!label && label.value === "", "the new row's name is in edit, blank");
+    const added = await until(async () => { const f = (await state()).parts.find((p) => p.ref === r1.ref)?.fields?.find((x) => x.name === "Field0"); return f ?? null; });
+    t(!!added && added.text === "" && added.visible === false, `Field0, empty and hidden: ${JSON.stringify(added && { text: added.text, visible: added.visible })}`);
+    if (label) {
+      setValue(label, "MPN");
+      label.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
+    t(await until(async () => { const n = await fieldNames(); return n.includes("MPN") && !n.includes("Field0"); }), "renamed MPN");
+    const row = await until(() => document.querySelector('[data-keyed-prop="MPN"]'));
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    await sleep(300);
+    const remove = [...(tid("prop-custom-menu")?.querySelectorAll('[role="menuitem"]') ?? [])].find((m) => m.textContent.trim() === "Remove Field");
+    t(!!remove, "the row's menu has Remove Field");
+    remove?.click();
+    t(await until(async () => !(await fieldNames()).includes("MPN")), "removed");
+    await undo();
+    await undo();
+    await undo();
+    t(JSON.stringify(await fieldNames()) === JSON.stringify(before), "three undos: as it was");
+    await select([]);
+  });
+
+  await scenario("Custom properties go with a copy: Duplicate and Copy / Paste", async (t) => {
+    t((await cmd({ op: "set_custom_property", ids: [r1.ref], name: "Supplier", value: "ACME" })).ok, "R1 has Supplier = ACME");
+    await E.refresh?.();
+    await sleep(600);
+    const withSupplier = async () => Object.entries((await state()).custom_properties ?? {}).filter(([, p]) => p.Supplier === "ACME").map(([id]) => id).sort();
+    await select([r1.ref]);
+    await E.run("common.Interactive.duplicate");
+    await sleep(1200);
+    await click(r1.at[0] + 12_000_000, r1.at[1] + 12_000_000);
+    const dup = await until(async () => { const w = await withSupplier(); return w.length === 2 ? w : null; });
+    t(!!dup, `the duplicate has it: ${JSON.stringify(dup)}`);
+    await undo();
+    t((await withSupplier()).length === 1, "Undo: the copy and its property go");
+    await select([r1.ref]);
+    await E.run("common.Interactive.copy");
+    await sleep(800);
+    await E.run("common.Interactive.paste");
+    await sleep(1500);
+    await click(r1.at[0] + 14_000_000, r1.at[1] + 14_000_000);
+    const pasted = await until(async () => { const w = await withSupplier(); return w.length === 2 ? w : null; });
+    t(!!pasted, `the pasted footprint has it (the clipboard's text carries it): ${JSON.stringify(pasted)}`);
+    await undo();
+    await undo();
+    t(!(await state()).custom_properties?.[r1.ref], "two more undos: none");
     await select([]);
   });
 
