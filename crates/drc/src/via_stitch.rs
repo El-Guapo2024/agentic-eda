@@ -284,7 +284,14 @@ fn npth_without_copper(pad: &crate::board::DrcPad) -> bool {
 /// `PCB_TEXT::TransformShapeToPolygon` with a clearance: `buildBoundingHull` -- the glyph strokes (each `r` wide either side) turned back by the draw rotation `rot_deg`
 /// about `at`, their box grown by `margin` (nanometres; square corners), its corners turned forward again -- added to `out` when it is `near` the query.
 fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at: Point, rot_deg: f64, margin: Nm, near: &dyn Fn((i64, i64, i64, i64)) -> bool) {
-    if segs.is_empty() {
+    let pieces: Vec<(crate::kimath::Seg, Nm)> = segs.iter().map(|s| (*s, r)).collect();
+    add_hull_of(out, &pieces, at, rot_deg, margin, near);
+}
+
+/// [`add_text_hull`] of pieces each with its own half-width: an outline font's glyph sides (none) and its overbars (half the pen), [`crate::stroke_font::outline_segments`]
+/// (UI-LEFT-3 C3-3).
+fn add_hull_of(out: &mut ShapePolySet, pieces: &[(crate::kimath::Seg, Nm)], at: Point, rot_deg: f64, margin: Nm, near: &dyn Fn((i64, i64, i64, i64)) -> bool) {
+    if pieces.is_empty() {
         return;
     }
     let (sin, cos) = rot_deg.to_radians().sin_cos();
@@ -292,11 +299,14 @@ fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at:
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
     let (ax, ay) = (at.x.as_f64(), at.y.as_f64());
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn((p.x.as_f64() - ax, p.y.as_f64() - ay), -sin);
-        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    for (s, r) in pieces {
+        for p in [s.a, s.b] {
+            let q = turn((p.x.as_f64() - ax, p.y.as_f64() - ay), -sin);
+            let r = r.as_f64();
+            (x0, y0, x1, y1) = (x0.min(q.0 - r), y0.min(q.1 - r), x1.max(q.0 + r), y1.max(q.1 + r));
+        }
     }
-    let grow = (r + margin).as_f64();
+    let grow = margin.as_f64();
     let corners = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)];
     let pts: Vec<Point64> = corners.iter().map(|&c| turn(c, sin)).map(|(x, y)| Point64::new((x + ax).round() as i64, (y + ay).round() as i64)).collect();
     let (bx0, by0) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.y).min().unwrap_or(0));
@@ -308,7 +318,7 @@ fn add_text_hull(out: &mut ShapePolySet, segs: &[crate::kimath::Seg], r: Nm, at:
 
 /// The fields of the board's footprints that are on a copper layer (Reference, Value and the user fields, `FOOTPRINT::GetFields()`), as texts placed on the board with what
 /// each shows: what `forEachGeometryItem` puts in the copper R-tree for `PCB_FIELD_T`.
-fn fields_on_copper(design: &Design, model: &ConstraintModel) -> Vec<eda_model::ir::FootprintText> {
+fn fields_on_copper(design: &Design, model: &ConstraintModel) -> Vec<(eda_model::ir::FootprintText, Option<String>, bool)> {
     let mut out = Vec::new();
     for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -317,7 +327,7 @@ fn fields_on_copper(design: &Design, model: &ConstraintModel) -> Vec<eda_model::
             if shown.is_empty() || !l.layer.ends_with(".Cu") {
                 continue;
             }
-            out.push(eda_model::ir::FootprintText {
+            out.push((eda_model::ir::FootprintText {
                 text: shown,
                 layer: l.layer.clone(),
                 at: l.board_position(fp),
@@ -329,7 +339,7 @@ fn fields_on_copper(design: &Design, model: &ConstraintModel) -> Vec<eda_model::
                 mirror: l.mirror,
                 keep_upright: l.keep_upright,
                 bold: l.bold,
-            });
+            }, l.face.clone(), l.italic));
         }
     }
     out
@@ -750,10 +760,14 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         }
         // A footprint's fields on copper (`PCB_FIELD`): the copper R-tree holds every field whose layer is a copper layer (`forEachGeometryItem`'s `PCB_FIELD_T`, whatever its
         // visibility), and `TransformShapeToPolygon` is the text's bounding hull, as for any text.
-        for t in fields.iter().filter(|t| t.layer == *layer) {
+        for (t, face, italic) in fields.iter().filter(|t| t.0.layer == *layer) {
             let item = rb.text_item_of("fp_field", t);
             let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
-            if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
+            let rot = crate::board::footprint_text_draw_rotation(t);
+            let layout = crate::stroke_font::TextLayout { text: &t.text, pos: t.at, size: t.size, thickness: t.thickness, angle_deg: rot, mirror: t.mirror, halign: t.halign, valign: t.valign };
+            if let Some(pieces) = crate::stroke_font::outline_segments(&layout, &crate::stroke_font::TextFace { face: face.as_deref(), bold: t.bold, italic: *italic, line_spacing: 1.0 }) {
+                add_hull_of(&mut obstacles, &pieces, t.at, rot, margin, &near);
+            } else if let Some(Shape::Strokes { segs, r }) = crate::board::footprint_text_shape(t) {
                 add_text_hull(&mut obstacles, &segs, r, t.at, crate::board::footprint_text_draw_rotation(t), margin, &near);
             }
         }
@@ -767,6 +781,27 @@ pub fn placement_cells(inputs: &PlanInputs<'_>, v: &ViaStitch) -> BTreeSet<(i64,
         for t in design.drawings.iter().flat_map(|d| d.texts.iter()).filter(|t| t.layer == *layer) {
             let item = rb.board_text_item_of(t);
             let margin = (via_size / 2 + eval(CType::Clearance, &item, Some(layer))).max(via_drill / 2 + eval(CType::HoleClearance, &item, Some(layer)));
+            // a text in an outline font: its glyphs (UI-LEFT-3 C3-3), laid out with its own size, justification and face
+            if let Some(extra) = design.drawings.as_ref().and_then(|d| d.text_extra(&t.id)).filter(|e| !eda_model::outline_font::is_stroke_face(e.face.as_deref())) {
+                let size = (extra.width_nm.unwrap_or(t.size_nm), t.size_nm);
+                let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
+                let halign = match t.justify {
+                    eda_model::ir::TextJustify::Left => -1,
+                    eda_model::ir::TextJustify::Center => 0,
+                    eda_model::ir::TextJustify::Right => 1,
+                };
+                let valign = match extra.valign {
+                    eda_model::ir::TextVAlign::Top => -1,
+                    eda_model::ir::TextVAlign::Center => 0,
+                    eda_model::ir::TextVAlign::Bottom => 1,
+                };
+                let layout = crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: rot, mirror: t.mirror, halign, valign };
+                let spacing = if extra.line_spacing_permille > 0 { extra.line_spacing_permille as f64 / 1000.0 } else { 1.0 };
+                if let Some(pieces) = crate::stroke_font::outline_segments(&layout, &crate::stroke_font::TextFace { face: extra.face.as_deref(), bold: extra.bold, italic: extra.italic, line_spacing: spacing }) {
+                    add_hull_of(&mut obstacles, &pieces, t.at, rot, margin, &near);
+                    continue;
+                }
+            }
             // Laid out as the DRC lays out a plain text (`crate::board::build`): square glyphs, vertically centred.
             let size = (t.size_nm, t.size_nm);
             let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);

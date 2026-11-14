@@ -10,6 +10,8 @@
 //!   common/font/font.cpp           `FONT::LinebreakText`, `wordbreakMarkup`, `getLinePositions`, `Draw`
 //!   common/font/stroke_font.cpp    `STROKE_FONT::GetTextAsGlyphs` (the advance of a run), `GetInterline` (the legacy factor)
 //!   common/eda_text.cpp            `EDA_TEXT::GetLinePositions`, `GetEffectiveTextPenWidth`
+//!   common/font/outline_font.cpp   `OUTLINE_FONT::GetTextAsGlyphs`, `GetInterline`: a cell in an outline face is broken and placed with that font's advances
+//!                                  and interline, and without the stroke font's offsets (UI-LEFT-3 C3-3, [`crate::outline_font`])
 
 use crate::ir::{Point, TextJustify, TextVAlign, Nm};
 use crate::kicad_font::{advance, kiround};
@@ -73,9 +75,36 @@ fn run_width(text: &str, size: f64) -> Nm {
     text.chars().map(|c| Nm::new(kiround(advance(c) * size))).sum()
 }
 
+/// `FONT::GetTextAsGlyphs( .. ).x` of a run in a cell's font: the stroke font's rounded advances at the width (0.8 of it for a sub- or superscript), or an
+/// outline font's shaped run at the size (`subscriptSize()` for a sub- or superscript).
+struct RunMeasure {
+    size: (f64, f64),
+    font: Option<std::sync::Arc<crate::outline_font::OutlineFont>>,
+}
+
+impl RunMeasure {
+    fn of(style: &crate::table::TableText) -> RunMeasure {
+        RunMeasure { size: (style.width_nm.as_f64(), style.height_nm.as_f64()), font: crate::outline_font::OutlineFont::load(style.face.as_deref(), style.bold, style.italic) }
+    }
+
+    fn stroke(size_w: f64) -> RunMeasure {
+        RunMeasure { size: (size_w, size_w), font: None }
+    }
+
+    fn width(&self, text: &str, supersub: bool) -> Nm {
+        match &self.font {
+            None => run_width(text, if supersub { self.size.0 * 0.8 } else { self.size.0 }),
+            Some(f) => {
+                let style = crate::outline_font::RunStyle { sub: supersub, sup: false };
+                Nm::new(f.text_as_glyphs(None, None, text, [self.size.0 as i64, self.size.1 as i64], [0, 0], 0.0, false, [0, 0], style)[0])
+            }
+        }
+    }
+}
+
 /// One word of a line and its width: a run of plain text up to and including the space that ends it, or a markup node (`~{..}`, `_{..}`, `^{..}`) whole
 /// (`wordbreakMarkup`).
-fn words_of_line(line: &str, size: f64) -> Vec<(String, Nm)> {
+fn words_of_line(line: &str, m: &RunMeasure) -> Vec<(String, Nm)> {
     let chars: Vec<char> = line.chars().collect();
     let mut out: Vec<(String, Nm)> = Vec::new();
     let mut plain = String::new();
@@ -89,12 +118,12 @@ fn words_of_line(line: &str, size: f64) -> Vec<(String, Nm)> {
             token.push(c);
             if c == ' ' {
                 let trimmed = token.trim_end_matches(' ');
-                let w = run_width(if trimmed.is_empty() { &token } else { trimmed }, size);
+                let w = m.width(if trimmed.is_empty() { &token } else { trimmed }, false);
                 out.push((std::mem::take(&mut token), w));
             }
         }
         if !token.is_empty() {
-            let w = run_width(token.trim_end_matches(' '), size);
+            let w = m.width(token.trim_end_matches(' '), false);
             out.push((token, w));
         }
         plain.clear();
@@ -117,9 +146,8 @@ fn words_of_line(line: &str, size: f64) -> Vec<(String, Nm)> {
                 flush(&mut plain, &mut out);
                 let word: String = chars[i..j].iter().collect();
                 let inner: String = chars[i + 2..j - 1].iter().collect();
-                let scale = if c == '~' { 1.0 } else { 0.8 };
                 let (stripped, _) = crate::kicad_font::strip_markup(&inner);
-                out.push((word, run_width(&stripped, size * scale)));
+                out.push((word, m.width(&stripped, c != '~')));
                 i = j;
                 continue;
             }
@@ -134,13 +162,21 @@ fn words_of_line(line: &str, size: f64) -> Vec<(String, Nm)> {
 /// `FONT::LinebreakText( aText, aColumnWidth, aSize, aThickness, aBold, aItalic )` for the stroke font: the text with a line feed where a line has to end for
 /// its words to fit `column_width_nm` less the stroke. A word wider than the column stays whole on a line of its own.
 pub fn linebreak_text(text: &str, column_width_nm: Nm, size_w_nm: Nm, thickness_nm: Nm) -> String {
-    let size = size_w_nm.as_f64();
-    let space_width = Nm::kiround(advance(' ') * size);
+    linebreak_with(text, column_width_nm, thickness_nm, &RunMeasure::stroke(size_w_nm.as_f64()))
+}
+
+/// [`linebreak_text`] in a text's own font (`style`'s face, size, bold and italic): an outline face's words are its shaped runs.
+pub fn linebreak_text_styled(text: &str, column_width_nm: Nm, style: &crate::table::TableText, thickness_nm: Nm) -> String {
+    linebreak_with(text, column_width_nm, thickness_nm, &RunMeasure::of(style))
+}
+
+fn linebreak_with(text: &str, column_width_nm: Nm, thickness_nm: Nm, m: &RunMeasure) -> String {
+    let space_width = m.width(" ", false);
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out = String::new();
     for (ii, line) in lines.iter().enumerate() {
         let mut words: Vec<(String, Nm)> = Vec::new();
-        for (run, width) in words_of_line(line, size) {
+        for (run, width) in words_of_line(line, m) {
             match words.last_mut() {
                 Some(last) if !last.0.ends_with(' ') => {
                     last.0.push_str(&run);
@@ -244,7 +280,7 @@ pub fn wrap_to_cell(t: &Table, row: usize, col: usize, resolved: &str) -> String
     let mut width = Nm::kiround((dx * dx + dy * dy).sqrt());
     let horizontal = t.angle % 180_000 == 0;
     width -= if horizontal { cell.margins[0] + cell.margins[2] } else { cell.margins[1] + cell.margins[3] };
-    linebreak_text(resolved, width, cell.style.width_nm, cell.style.pen_nm())
+    linebreak_text_styled(resolved, width, &cell.style, cell.style.pen_nm())
 }
 
 /// The lines of `shown` (already broken) as `EDA_TEXT::GetLinePositions` places them for the plot and `FONT::Draw` for the canvas -- the two come to the same
@@ -262,16 +298,22 @@ pub fn place_lines_at(style: &crate::table::TableText, pen_nm: f64, origin: (Nm,
     let (size_w, size_h) = (style.width_nm.as_f64(), style.height_nm.as_f64());
     let pen = pen_nm;
     let lines: Vec<&str> = shown.split('\n').collect();
-    // `GetInterline( size.y ) * m_LineSpacing`, with the stroke font's legacy factor, as an int.
-    let interline = Nm::new((size_h * 1.68 * 0.9583 * style.line_spacing()) as i64);
+    let m = RunMeasure::of(style);
+    // `GetInterline( size.y ) * m_LineSpacing`, with the stroke font's legacy factor (an outline font's own), as an int.
+    let interline = match &m.font {
+        None => Nm::new((size_h * 1.68 * 0.9583 * style.line_spacing()) as i64),
+        Some(f) => Nm::new((f.interline(size_h) * style.line_spacing()) as i64),
+    };
     let mut height = Nm::ZERO;
     for i in 0..lines.len() {
         height += if i == 0 { Nm::new((size_h * 1.17) as i64) } else { interline };
     }
     // `offset.x += thickness / 1.52` and `offset.y -= thickness * 0.052` on ints: the double is cut to an int after the add.
     let mut off = (Nm::ZERO, Nm::new(size_h as i64));
-    off.0 = Nm::new((off.0.as_f64() + pen / 1.52) as i64);
-    off.1 = Nm::new((off.1.as_f64() - pen * 0.052) as i64);
+    if m.font.is_none() {
+        off.0 = Nm::new((off.0.as_f64() + pen / 1.52) as i64);
+        off.1 = Nm::new((off.1.as_f64() - pen * 0.052) as i64);
+    }
     match style.v_align {
         TextVAlign::Top => {}
         TextVAlign::Center => off.1 -= height / 2,
@@ -282,8 +324,13 @@ pub fn place_lines_at(style: &crate::table::TableText, pen_nm: f64, origin: (Nm,
         .enumerate()
         .map(|(i, line)| {
             // `boundingBoxSingleLine`: the advance of the whole line (markup drawn at its own size).
-            let (stripped, _) = crate::kicad_font::strip_markup(line);
-            let extent = run_width(&stripped, size_w);
+            let extent = match &m.font {
+                None => run_width(&crate::kicad_font::strip_markup(line).0, size_w),
+                Some(_) => {
+                    let t = crate::text_shape::TextShape { text: (*line).to_string(), size: [size_w as i64, size_h as i64], line_spacing: 1.0, face: style.face.clone(), bold: style.bold, italic: style.italic, ..Default::default() };
+                    Nm::new(crate::text_shape::line_advance(&t))
+                }
+            };
             let line_x = match style.h_align {
                 TextJustify::Left => off.0,
                 TextJustify::Center => -extent / 2,
@@ -405,7 +452,7 @@ pub fn sch_wrap_to_cell(t: &Table, row: usize, col: usize, resolved: &str) -> St
     let (sx, sy) = ((c[2].x - c[0].x).abs(), (c[2].y - c[0].y).abs());
     let vertical = t.angle % 180_000 == 90_000;
     let width = if vertical { sy - (cell.margins[1] + cell.margins[3]) } else { sx - (cell.margins[0] + cell.margins[2]) };
-    linebreak_text(resolved, width, cell.style.width_nm, cell.style.pen_nm())
+    linebreak_text_styled(resolved, width, &cell.style, cell.style.pen_nm())
 }
 
 /// `SCH_TEXTBOX::GetDrawPos()`, nanometres: the box of the cell (`start` and `end`, normalised), and the corner or middle of it its justification names, moved in by the

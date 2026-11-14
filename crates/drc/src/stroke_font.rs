@@ -519,3 +519,71 @@ mod tests {
         assert!(((x0 + x1) / 2 - mm(0.01)).abs() < Nm::new(400), "{x0} {x1}");
     }
 }
+
+/// A text's face as `EDA_TEXT::GetDrawFont` asks for it (`GetFontName`, `IsBold`, `IsItalic`) and its `m_LineSpacing`: what [`outline_shape`] needs past a
+/// [`TextLayout`] (UI-LEFT-3 C3-3).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextFace<'a> {
+    pub face: Option<&'a str>,
+    pub bold: bool,
+    pub italic: bool,
+    pub line_spacing: f64,
+}
+
+/// The shape of a text in an outline font (`eda_model::text_shape`: `OUTLINE_FONT`'s glyph polygons and the overbars' strokes); `None` when the text is in
+/// the stroke font -- no face, "KiCad Font", or one fontconfig finds no file for -- so the caller lays it out with [`kicad_text_segments`].
+pub fn outline_shape(t: &TextLayout, f: &TextFace) -> Option<eda_model::text_shape::Shape> {
+    let font = eda_model::outline_font::OutlineFont::load(f.face, f.bold, f.italic)?;
+    let shape = eda_model::text_shape::TextShape {
+        text: t.text.to_string(),
+        pos: [t.pos.x.get(), t.pos.y.get()],
+        size: [t.size.0.get(), t.size.1.get()],
+        thickness: t.thickness.get(),
+        angle: t.angle_deg,
+        mirror: t.mirror,
+        italic: f.italic,
+        bold: f.bold,
+        h_align: t.halign,
+        v_align: t.valign,
+        line_spacing: if f.line_spacing > 0.0 { f.line_spacing } else { 1.0 },
+        face: f.face.map(str::to_string),
+    };
+    eda_model::text_shape::shape_in(&shape, eda_model::text_shape::Font::Outline(font))
+}
+
+/// `PCB_TEXT::TransformTextToPolySet`'s `textShape` of a text in an outline font: each glyph's polygon with its holes (the triangulation callback's triangles,
+/// merged) and each overbar an oval of the pen's width (`TransformOvalToPolygon( .., penWidth, aMaxError, aErrorLoc )`), simplified; `None` for the stroke
+/// font ([`outline_shape`]).
+pub fn outline_ink(t: &TextLayout, f: &TextFace, max_error: i64, loc: eda_shape_poly_set::basic_shapes::ErrorLoc) -> Option<eda_shape_poly_set::ShapePolySet> {
+    use eda_clipper2::Point64;
+    let sh = outline_shape(t, f)?;
+    let mut ink = eda_shape_poly_set::ShapePolySet::new();
+    let p = |q: &[i64; 2]| Point64::new(q[0], q[1]);
+    for g in &sh.polys {
+        let mut poly = vec![g.outline.iter().map(p).collect::<Vec<_>>()];
+        poly.extend(g.holes.iter().map(|h| h.iter().map(p).collect::<Vec<_>>()));
+        ink.add_polygon(poly);
+    }
+    for [a, b] in &sh.segments {
+        ink.add_outline(eda_shape_poly_set::basic_shapes::oval_polygon(p(a), p(b), sh.pen, max_error, loc, 0));
+    }
+    ink.simplify();
+    Some(ink)
+}
+
+/// [`outline_shape`] as segments: a glyph polygon's sides as zero-wide segments and the overbars at their pen, for the callers that take a text as segments
+/// and a half-width (the box of the ink, a clearance to it): `(segments, half-width)` per piece.
+pub fn outline_segments(t: &TextLayout, f: &TextFace) -> Option<Vec<(Seg, Nm)>> {
+    let sh = outline_shape(t, f)?;
+    let pt = |q: [i64; 2]| Point { x: Nm::new(q[0]), y: Nm::new(q[1]) };
+    let mut out: Vec<(Seg, Nm)> = Vec::new();
+    for g in &sh.polys {
+        for ring in std::iter::once(&g.outline).chain(g.holes.iter()) {
+            for i in 0..ring.len() {
+                out.push((Seg { a: pt(ring[i]), b: pt(ring[(i + 1) % ring.len()]) }, Nm::ZERO));
+            }
+        }
+    }
+    out.extend(sh.segments.iter().map(|[a, b]| (Seg { a: pt(*a), b: pt(*b) }, Nm::new(sh.pen / 2))));
+    Some(out)
+}

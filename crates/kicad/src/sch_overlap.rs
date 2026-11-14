@@ -13,6 +13,8 @@
 //! * symbols: `LIB_SYMBOL::GetBodyBoundingBox` (body graphics, no fields, no pins);
 //! * sheets: `SCH_SHEET::GetBodyBoundingBox`, `SCH_SHEET_PIN::SetSide`.
 //!
+//! A free text's or a field's box in an outline face (`(font (face ..))`) is that font's (UI-LEFT-3 C3-3, [`eda_model::kicad_geom::TextStyle::text_box_in_face`]).
+//!
 //! Units: nanometres, y down, as `f64`.
 
 use std::collections::BTreeMap;
@@ -88,6 +90,17 @@ impl Item {
 struct Fx {
     st: TextStyle,
     hide: bool,
+    /// `(font (face ..) (bold ..) (italic ..))`: an outline face's box is that font's (UI-LEFT-3 C3-3).
+    face: Option<String>,
+    bold: bool,
+    italic: bool,
+}
+
+impl Fx {
+    /// `EDA_TEXT::GetTextBox` in the text's face, turned about its anchor.
+    fn text_box(&self, text: &str, anchor: Pt, turns: i32) -> Rect {
+        self.st.text_box_in_face(text, anchor, turns, self.face.as_deref(), self.bold, self.italic)
+    }
 }
 
 fn has_hide(list: &[Sexpr]) -> bool {
@@ -99,7 +112,7 @@ fn has_hide(list: &[Sexpr]) -> bool {
 
 /// Read an `(effects ...)` list (or the lack of one): the file format's default justification is centred both ways.
 fn effects_of(parent: &[Sexpr], default_h: HJustify, default_v: VJustify) -> Fx {
-    let mut e = Fx { st: TextStyle::new(default_h, default_v), hide: has_hide(parent) };
+    let mut e = Fx { st: TextStyle::new(default_h, default_v), hide: has_hide(parent), face: None, bold: false, italic: false };
     let Some(fx) = find(parent, "effects") else { return e };
     e.hide |= has_hide(fx);
     e.st.h = HJustify::Center;
@@ -111,6 +124,10 @@ fn effects_of(parent: &[Sexpr], default_h: HJustify, default_v: VJustify) -> Fx 
         if let Some(t) = find(font, "thickness").and_then(|s| num(s, 1)) {
             e.st.thickness_iu = mm_to_iu(t);
         }
+        let flag = |w: &str| find(font, w).is_some_and(|l| !matches!(txt(l, 1), Some("no") | Some("false"))) || font.iter().any(|a| a.text() == Some(w));
+        e.bold = flag("bold");
+        e.italic = flag("italic");
+        e.face = find(font, "face").and_then(|f| txt(f, 1)).map(str::to_string);
     }
     if let Some(j) = find(fx, "justify") {
         for a in j.iter().skip(1) {
@@ -456,7 +473,7 @@ impl Builder {
         // the file stores the page position; the box is built in the symbol's own, untransformed frame
         let local = xf.unapply((at_page.0 - pos.0, at_page.1 - pos.1));
         let anchor = (pos.0 + local.0, pos.1 + local.1);
-        let r = fx.st.text_box(value, anchor, upright_quarter_turns(angle));
+        let r = fx.text_box(value, anchor, upright_quarter_turns(angle));
         let a = xf.apply((r.x0 - pos.0, r.y0 - pos.1));
         let b = xf.apply((r.x1 - pos.0, r.y1 - pos.1));
         let rect = Rect::new((pos.0 + a.0, pos.1 + a.1), (pos.0 + b.0, pos.1 + b.1));
@@ -483,7 +500,7 @@ impl Builder {
         let Some(text) = txt(t, 1) else { return };
         let Some((at_mm, angle)) = at_of(t) else { return };
         let fx = effects_of(t, HJustify::Left, VJustify::Bottom);
-        let rect = fx.st.text_box(text, mm_pt(at_mm), upright_quarter_turns(angle));
+        let rect = fx.text_box(text, mm_pt(at_mm), upright_quarter_turns(angle));
         self.push(Item::boxed(Kind::Text, text, format!("text '{text}'"), rect));
     }
 

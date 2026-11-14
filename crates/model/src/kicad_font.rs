@@ -192,6 +192,37 @@ pub fn text_box_styled_iu(text: &str, thickness_iu: i64, s: TextBoxStyle) -> (i6
     (x0, y0, x0 + w, y0 + height)
 }
 
+/// [`text_box_styled_iu`] of a text in its face (UI-LEFT-3 C3-3): an outline face's box is `EDA_TEXT::GetTextBox` in that font
+/// ([`crate::text_shape::text_box`]: its runs' advances, its ascender and descender, no stroke-font fudge on the height); the stroke font's is
+/// [`text_box_styled_iu`]'s.
+pub fn text_box_face_iu(text: &str, thickness_iu: i64, s: TextBoxStyle, face: Option<&str>, bold: bool) -> (i64, i64, i64, i64) {
+    use crate::text_shape::{text_box, Font, TextShape};
+    let Some(font) = crate::outline_font::OutlineFont::load(face, bold, s.italic) else { return text_box_styled_iu(text, thickness_iu, s) };
+    let t = TextShape {
+        text: text.to_string(),
+        size: [s.width_iu, s.height_iu],
+        thickness: thickness_iu,
+        mirror: s.mirrored,
+        italic: s.italic,
+        bold,
+        h_align: match s.h {
+            HJustify::Left => -1,
+            HJustify::Center => 0,
+            HJustify::Right => 1,
+        },
+        v_align: match s.v {
+            VJustify::Top => -1,
+            VJustify::Center => 0,
+            VJustify::Bottom => 1,
+        },
+        line_spacing: 1.0,
+        face: face.map(str::to_string),
+        ..Default::default()
+    };
+    let [x0, y0, x1, y1] = text_box(&t, &Font::Outline(font), false);
+    (x0, y0, x1, y1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

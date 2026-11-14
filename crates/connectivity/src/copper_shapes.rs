@@ -128,24 +128,49 @@ pub fn board_text_effective_shape(t: &eda_model::ir::Text, extra: Option<&eda_mo
         eda_model::ir::TextVAlign::Bottom => 1,
     };
     let rot = (t.angle as f64 / 1000.0).rem_euclid(360.0);
-    let segs = eda_drc::stroke_font::kicad_text_segments(&eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: rot, mirror: t.mirror, halign, valign });
-    if segs.is_empty() {
-        return None;
-    }
-    if !x.knockout {
-        return Some(Shape::Strokes { segs, r: pen / 2 });
-    }
+    let layout = eda_drc::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness, angle_deg: rot, mirror: t.mirror, halign, valign };
+    // a text in an outline face (UI-LEFT-3 C3-3): `GetEffectiveTextShape`'s triangles (`SHAPE_SIMPLE`) and its overbars' segments; a knockout its box
+    let spacing = if x.line_spacing_permille > 0 { x.line_spacing_permille as f64 / 1000.0 } else { 1.0 };
+    let face = eda_drc::stroke_font::TextFace { face: x.face.as_deref(), bold: x.bold, italic: x.italic, line_spacing: spacing };
+    let (segs, pieces): (Vec<eda_drc::kimath::Seg>, Vec<(eda_drc::kimath::Seg, Nm)>) = match eda_drc::stroke_font::outline_shape(&layout, &face) {
+        Some(sh) => {
+            if sh.polys.is_empty() && sh.segments.is_empty() {
+                return None;
+            }
+            if !x.knockout {
+                let pt = |q: [i64; 2]| Point { x: Nm::new(q[0]), y: Nm::new(q[1]) };
+                let mut parts: Vec<Shape> = sh.polys.iter().flat_map(eda_model::outline_font::triangulate).map(|tri| Shape::Polygon { pts: tri.iter().map(|q| pt(*q)).collect() }).collect();
+                parts.extend(sh.segments.iter().map(|[a, b]| Shape::Stadium { a: pt(*a), b: pt(*b), r: Nm::new(sh.pen / 2) }));
+                return Some(Shape::Compound { parts });
+            }
+            (Vec::new(), eda_drc::stroke_font::outline_segments(&layout, &face).unwrap_or_default())
+        }
+        None => {
+            let segs = eda_drc::stroke_font::kicad_text_segments(&layout);
+            if segs.is_empty() {
+                return None;
+            }
+            if !x.knockout {
+                return Some(Shape::Strokes { segs, r: pen / 2 });
+            }
+            (segs, Vec::new())
+        }
+    };
+    let pieces: Vec<(eda_drc::kimath::Seg, Nm)> = if pieces.is_empty() { segs.iter().map(|s| (*s, pen / 2)).collect() } else { pieces };
     let margin = Nm::kiround(pen.as_f64() / 2.0).max(Nm::kiround(size.1.as_f64() / 9.0));
     // `RotatePoint( p, centre, angle )` with y down: x' = x cos + y sin, y' = -x sin + y cos (relative to the centre)
     let (sin, cos) = rot.to_radians().sin_cos();
     let turn = |p: (f64, f64), s: f64| (p.0 * cos + p.1 * s, -p.0 * s + p.1 * cos);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    for p in segs.iter().flat_map(|s| [s.a, s.b]) {
-        let q = turn(((p.x - t.at.x).as_f64(), (p.y - t.at.y).as_f64()), -sin);
-        (x0, y0, x1, y1) = (x0.min(q.0), y0.min(q.1), x1.max(q.0), y1.max(q.1));
+    for (sg, r) in &pieces {
+        for p in [sg.a, sg.b] {
+            let q = turn(((p.x - t.at.x).as_f64(), (p.y - t.at.y).as_f64()), -sin);
+            let r = r.as_f64();
+            (x0, y0, x1, y1) = (x0.min(q.0 - r), y0.min(q.1 - r), x1.max(q.0 + r), y1.max(q.1 + r));
+        }
     }
-    // the rendered text's own box is its strokes' with half the pen, then the margin
-    let grow = (pen.get() / 2 + margin.get()) as f64;
+    // the rendered text's own box is its strokes' with half the pen (an outline glyph's polygon as it is), then the margin
+    let grow = margin.get() as f64;
     let pts = [(x0 - grow, y0 - grow), (x1 + grow, y0 - grow), (x1 + grow, y1 + grow), (x0 - grow, y1 + grow)]
         .into_iter()
         .map(|c| {

@@ -1036,7 +1036,7 @@ fn chain_courtyard(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
 /// A silkscreen text's effective shape (`PCB_TEXT::GetEffectiveShape`): its glyph segments as wide as its pen (`EDA_TEXT::GetEffectiveTextShape`,
 /// [`crate::stroke_text`]), or for a knockout text its box ([`crate::stroke_text::knockout_box`], the shape being the box less the text). The shown text is
 /// `GetShownText`'s: `resolve` is the text's resolver (`PCB_TEXT::GetShownText`: `LAYER`, its footprint's, the board's). `None` for a text off the
-/// silkscreen, hidden, in an outline font, or one the port does not draw. `place` takes a footprint's text from its frame to the board's; `in_footprint`
+/// silkscreen, hidden, or one the port does not draw. An outline font's glyphs are its triangles ([`eda_model::outline_font::triangulate`]). `place` takes a footprint's text from its frame to the board's; `in_footprint`
 /// keeps it upright (`GetDrawRotation`).
 fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in_footprint: bool, resolve: &dyn Fn(&str, &str) -> Option<String>) -> Option<SilkText> {
     use crate::sexpr::{find, tag, txt};
@@ -1064,9 +1064,6 @@ fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in
     let angle = txt(at, 3).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
     let unlocked = bare(at, "unlocked") || yes(find(g, "unlocked"));
     let font = find(effects, "font")?;
-    if find(font, "face").is_some() {
-        return None;
-    }
     let size = find(font, "size")?;
     let (h, w) = (nm(txt(size, 1))?, nm(txt(size, 2))?);
     let thickness = find(font, "thickness").and_then(|t| nm(txt(t, 1))).unwrap_or(0);
@@ -1085,12 +1082,18 @@ fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in
         h_align: if has("left") { -1 } else if has("right") { 1 } else { 0 },
         v_align: if has("top") { -1 } else if has("bottom") { 1 } else { 0 },
         line_spacing,
+        face: find(font, "face").and_then(|f| txt(f, 1)).map(str::to_string),
     };
     if knockout {
         return crate::stroke_text::knockout_box(&shape, CHAMFER_MAX_ERROR).map(SilkText::Knockout);
     }
-    let pen = crate::stroke_text::pen_width(&shape);
-    Some(SilkText::Strokes(crate::stroke_text::segments(&shape)?.into_iter().map(|[a, b]| Copper::Segment { a, b, width: pen }).collect()))
+    let sh = crate::stroke_text::shape(&shape)?;
+    let mut parts: Vec<Copper> = sh.segments.into_iter().map(|[a, b]| Copper::Segment { a, b, width: sh.pen }).collect();
+    // an outline font's glyphs: the triangles `CALLBACK_GAL`'s triangulation callback makes `SHAPE_SIMPLE`s of (UI-LEFT-3 C3-3)
+    for g in &sh.polys {
+        parts.extend(eda_model::outline_font::triangulate(g).into_iter().map(|t| Copper::Simple { pts: t.to_vec() }));
+    }
+    Some(SilkText::Strokes(parts))
 }
 
 /// What [`silk_text`] gives: a text's glyph segments, or a knockout text's box.
