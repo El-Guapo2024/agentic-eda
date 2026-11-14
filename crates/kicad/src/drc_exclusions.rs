@@ -747,6 +747,11 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                     }
                 }
             }
+            Some("gr_text") => {
+                if let (Some(u), Some(parts)) = (uuid(l), silk_text(l, &|p| p, false)) {
+                    shapes.silk.insert(u, parts);
+                }
+            }
             Some("gr_line" | "gr_rect" | "gr_poly") if matches!(find(l, "layer").and_then(|y| txt(y, 1)), Some("F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen")) => {
                 if let (Some(u), Some(parts)) = (uuid(l), graphic_subshapes(l, &|p| p)) {
                     shapes.silk.insert(u, parts);
@@ -796,6 +801,14 @@ pub fn board_shapes(pcb_text: &str) -> BoardShapes {
                 };
                 let mut courtyard: [Vec<Vec<[i64; 2]>>; 2] = [Vec::new(), Vec::new()];
                 for g in l.iter().skip(1).filter_map(|g| g.as_list()) {
+                    // a field or a text on the silkscreen: its glyph segments (`crate::stroke_text`), at the place the legacy loader puts it (`parsePCB_TEXT_effects`:
+                    // the angle the file's, the position turned by the footprint and moved to it)
+                    if matches!(tag(g), Some("property" | "fp_text")) {
+                        if let (Some(u), Some(parts)) = (uuid(g), silk_text(g, &place, true)) {
+                            shapes.silk.insert(u, parts);
+                        }
+                        continue;
+                    }
                     if !matches!(tag(g), Some("fp_line" | "fp_rect" | "fp_poly")) {
                         continue;
                     }
@@ -938,6 +951,56 @@ fn chain_courtyard(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
         })
         .filter(|p| p.len() >= 3)
         .collect()
+}
+
+/// A silkscreen text's effective shape (`PCB_TEXT::GetEffectiveShape`, `EDA_TEXT::GetEffectiveTextShape`): its glyph segments as wide as its pen
+/// ([`crate::stroke_text`]). `None` for a text off the silkscreen, hidden, a knockout, in another font, or one the port does not draw. `place` takes a
+/// footprint's text from its frame to the board's; `in_footprint` keeps it upright (`GetDrawRotation`).
+fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in_footprint: bool) -> Option<Vec<Copper>> {
+    use crate::sexpr::{find, tag, txt};
+    let nm = |t: Option<&str>| -> Option<i64> { t.and_then(|v| v.parse::<f64>().ok()).map(|mm| (mm * 1_000_000.0).round() as i64) };
+    let layer = find(g, "layer")?;
+    if !matches!(txt(layer, 1), Some("F.SilkS" | "B.SilkS" | "F.Silkscreen" | "B.Silkscreen")) || layer.iter().skip(2).any(|t| t.text() == Some("knockout")) || find(layer, "knockout").is_some() {
+        return None;
+    }
+    let yes = |l: Option<&[crate::sexpr::Sexpr]>| l.is_some_and(|l| txt(l, 1).is_none_or(|v| v == "yes"));
+    let bare = |l: &[crate::sexpr::Sexpr], word: &str| l.iter().any(|t| t.text() == Some(word));
+    let effects = find(g, "effects")?;
+    if yes(find(g, "hide")) || yes(find(effects, "hide")) || bare(g, "hide") || bare(effects, "hide") {
+        return None;
+    }
+    let text = match tag(g) {
+        Some("property") => txt(g, 2)?,
+        Some("fp_text") => txt(g, 2)?,
+        _ => txt(g, 1)?,
+    };
+    let at = find(g, "at")?;
+    let local = [nm(txt(at, 1))?, nm(txt(at, 2))?];
+    let angle = txt(at, 3).and_then(|a| a.parse::<f64>().ok()).unwrap_or(0.0);
+    let unlocked = bare(at, "unlocked") || yes(find(g, "unlocked"));
+    let font = find(effects, "font")?;
+    if find(font, "face").is_some() {
+        return None;
+    }
+    let size = find(font, "size")?;
+    let (h, w) = (nm(txt(size, 1))?, nm(txt(size, 2))?);
+    let thickness = find(font, "thickness").and_then(|t| nm(txt(t, 1))).unwrap_or(0);
+    let justify = find(effects, "justify");
+    let has = |word: &str| justify.is_some_and(|j| bare(j, word));
+    let shape = crate::stroke_text::TextShape {
+        text: text.to_string(),
+        pos: place(local),
+        size: [w, h],
+        thickness,
+        angle: crate::stroke_text::draw_rotation(angle, in_footprint && !unlocked),
+        mirror: has("mirror"),
+        italic: yes(find(font, "italic")) || bare(font, "italic"),
+        bold: yes(find(font, "bold")) || bare(font, "bold"),
+        h_align: if has("left") { -1 } else if has("right") { 1 } else { 0 },
+        v_align: if has("top") { -1 } else if has("bottom") { 1 } else { 0 },
+    };
+    let pen = crate::stroke_text::pen_width(&shape);
+    Some(crate::stroke_text::segments(&shape)?.into_iter().map(|[a, b]| Copper::Segment { a, b, width: pen }).collect())
 }
 
 /// `ConvertOutlineToPolygon`'s chaining: closed rectangles and polygons as they are, lines end to end into the outlines they close.

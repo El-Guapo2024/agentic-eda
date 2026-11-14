@@ -102,7 +102,8 @@ fn the_markers_placed_by_their_candidates_reach_kicad_cli() {
     let ids = |v: &Value| v["items"].as_array().unwrap().iter().filter_map(|i| i["id"].as_str().map(String::from)).collect::<Vec<_>>();
     let wanted: Vec<(&str, Box<dyn Fn(&Value) -> bool>)> = vec![
         ("courtyards", Box::new(|v: &Value| v["type"] == "courtyards_overlap")),
-        ("silk", Box::new(move |v: &Value| v["type"] == "silk_overlap" && !names(v).contains("field"))),
+        ("silk", Box::new(|v: &Value| v["type"] == "silk_overlap")),
+        ("silk text", Box::new(move |v: &Value| v["type"] == "silk_overlap" && names(v).contains("field"))),
         ("arc", Box::new(move |v: &Value| v["type"] == "clearance" && ids(v).iter().any(|i| i.starts_with("trk_arc")))),
         ("zone", Box::new(move |v: &Value| v["type"] == "clearance" && names(v).contains("zone"))),
         ("keepout", Box::new(|v: &Value| v["type"] == "items_not_allowed")),
@@ -206,10 +207,10 @@ fn an_unflashed_pads_exclusion_reaches_kicad_cli() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// UI-LEFT-3 B3-1: `copper_sliver` -- a GND pour on B.Cu whose outline has a narrow spike, its minimum width small enough that the filler does not prune it
-/// (`postKnockoutMinWidthPrune` leaves a fill alone under 0.004 mm): the fill ends in the spike's point (`DRC_TEST_PROVIDER_SLIVER_CHECKER`). The finding names
-/// no item; its marker is that point, which the studio finds on the fill kicad-cli made ([`eda_kicad::drc_markers::sliver_points`]), and kicad-cli matches the
-/// exclusion after the refill.
+/// UI-LEFT-3 B3-1: `copper_sliver` -- a GND pour on B.Cu whose outline has two narrow spikes, its minimum width small enough that the filler does not prune
+/// them (`postKnockoutMinWidthPrune` leaves a fill alone under 0.004 mm): the fill ends in each spike's point (`DRC_TEST_PROVIDER_SLIVER_CHECKER`). A finding
+/// names no item; its marker is its point, which the studio finds on the fill kicad-cli made in the walk's order ([`eda_kicad::drc_markers::sliver_points`]),
+/// so each finding is its own exclusion (`DrcExclusionKey::positions_nm`): excluding one leaves the other, and kicad-cli matches the one excluded.
 #[test]
 fn a_copper_sliver_exclusion_reaches_kicad_cli() {
     if slow_tests_off() {
@@ -218,7 +219,8 @@ fn a_copper_sliver_exclusion_reaches_kicad_cli() {
     let dir = scratch("review_drc_sliver");
     setup(&dir);
     let p = |x: f64, y: f64| eda_model::ir::Point { x: mm(x), y: mm(y) };
-    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "B.Cu".into(), outline: vec![p(1.0, 9.0), p(10.0, 9.0), p(18.0, 9.6), p(10.0, 10.2), p(10.0, 19.0), p(1.0, 19.0)] }, false, "test").unwrap();
+    let outline = vec![p(1.0, 9.0), p(10.0, 9.0), p(18.0, 9.6), p(10.0, 10.2), p(10.0, 12.0), p(18.0, 12.6), p(10.0, 13.2), p(10.0, 19.0), p(1.0, 19.0)];
+    step(&dir, Cmd::AddZone { net: "GND".into(), layer: "B.Cu".into(), outline }, false, "test").unwrap();
     let (_, mut design, _) = load(&dir).unwrap();
     for z in &mut design.routing.as_mut().unwrap().zones {
         z.min_thickness = Nm::new(2_000);
@@ -228,14 +230,16 @@ fn a_copper_sliver_exclusion_reaches_kicad_cli() {
     let first = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
     let all = first["violations"].as_array().unwrap().clone();
     let rows: Vec<Value> = all.iter().filter(|v| v["type"] == "copper_sliver").cloned().collect();
-    assert!(!rows.is_empty(), "a sliver: {}", all.iter().map(describe).collect::<Vec<_>>().join("\n"));
-    assert!(rows.iter().all(|v| !v["marker_nm"].as_array().unwrap().is_empty()), "the spike's point is offered: {rows:#?}");
-    step(&dir, Cmd::AddDrcExclusions { exclusions: rows.iter().take(1).map(drc_exclusion_of).collect() }, false, "ui").unwrap();
+    assert_eq!(rows.len(), 2, "two slivers: {}", all.iter().map(describe).collect::<Vec<_>>().join("\n"));
+    assert!(rows.iter().all(|v| v["marker_nm"].as_array().unwrap().len() == 1) && rows[0]["marker_nm"] != rows[1]["marker_nm"], "each its own point: {rows:#?}");
+    step(&dir, Cmd::AddDrcExclusions { exclusions: vec![drc_exclusion_of(&rows[1])] }, false, "ui").unwrap();
     let after = crate::kicad_engine::drc_with_options(&dir, refill).expect("kicad-cli ran");
     let now: Vec<&Value> = after["violations"].as_array().unwrap().iter().filter(|v| v["type"] == "copper_sliver").collect();
-    assert_eq!(now.len(), rows.len());
-    for v in &now {
-        assert!(v["excluded"] == true && v["kicad_matched"] == true, "kicad-cli matched the exclusion: {} tried {}", describe(v), rows[0]["marker_nm"]);
-    }
+    assert_eq!(now.len(), 2);
+    let excluded: Vec<&&Value> = now.iter().filter(|v| v["excluded"] == true).collect();
+    assert_eq!(excluded.len(), 1, "one sliver excluded, the other not: {now:#?}");
+    assert_eq!(excluded[0]["kicad_matched"], true, "kicad-cli matched it");
+    assert_eq!(excluded[0]["marker_nm"], rows[1]["marker_nm"], "the one excluded");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
