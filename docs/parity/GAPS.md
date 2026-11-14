@@ -186,9 +186,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   - A7-L3: the Hierarchy Navigator has no project row above the root, and its rows do not read "name (page N)". **Left (low)**
   - A7-L4: the cache writes the library's user fields hidden at (0, 0), `Reference "U"`, and no Footprint or Datasheet. **Left (low)**
   - L1: the writer adds a junction at every T, which KiCad then keeps as an explicit junction. **Left (low)**
-  - L2: a schematic with only graphics (QA `groups_load_save`) is refused on import. **Left (low)**
+  - ~~L2: a schematic with only graphics (QA `groups_load_save`) is refused on import.~~ (taken since `fe65deac`; checked 2026-11-14, `task-v18-schmisc`, UI-LEFT-3 S3-23)
   - Also left: a label field's bold, thickness and `show_name` (M5's last part); ~~the colours and a free text's bold and italic are kept in the files but not
-    drawn~~ (drawn since 2026-11-06, section 60); a project's drawing sheet file and `.include` model files are not carried; `${U1A:FIELD}` cross-references by the letter form only.
+    drawn~~ (drawn since 2026-11-06, section 60); ~~a project's drawing sheet file and `.include` model files are not carried~~ (`eda import-kicad` keeps them: 2026-11-14, `task-v18-schmisc`, UI-LEFT-3 S3-23, PARITY-sch section 101); `${U1A:FIELD}` cross-references by the letter form only.
 - Placing in KiCad's order (2026-11-05, `task-u1-schplace`, `PARITY-sch.md` section 54; UI-LEFT S1): Place Label, Global Label, Hierarchical Label,
   Directive Label and Text open their dialog first (the hotkey where the cursor is, `PrimeTool`) and Place Power opens the Symbol Chooser filtered to power
   symbols (`FilterPowerSymbols( true )`); the item then rides the cursor, drawn from the server's preview of the very command the click sends (`POST
