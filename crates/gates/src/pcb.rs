@@ -666,9 +666,8 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     let mut pads: Vec<PadItem> = Vec::new();
     let mut fp_ok = true;
     let free_pads = eda_drc::board::free_pads(design, model);
-    // a pin on no net of the model: the `unconnected-(..)` net the derived board gives its pad (KiCad's netlist, Update PCB), which a route started
-    // on the pad takes (the router's `syncPad`); copper of that net touching the pad is its own
     let lone_nets = eda_engine::nets::unconnected_pad_nets(design, model);
+    let pin_net: std::collections::HashMap<String, String> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.clone(), n.name.clone()))).collect();
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(geoms) = placed_pads(model, part, fp) else {
@@ -677,14 +676,18 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
             continue;
         };
         let sources = pad_sources(model, part, fp, &geoms);
+        let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for (g, source) in geoms.into_iter().zip(sources) {
             let refpin = format!("{}.{}", fp.id, g.number);
-            let net = model
-                .nets
-                .iter()
-                .find(|n| n.pins.iter().any(|p| p == &refpin))
-                .map(|n| n.name.clone())
-                .or_else(|| lone_nets.get(&refpin).cloned())
+            let nth = {
+                let n = seen.entry(g.number.clone()).or_insert(0);
+                *n += 1;
+                *n
+            };
+            // the net the board file gives the pad (`eda_engine::nets::written_pad_net`): its pin's, else the `unconnected-(..)` net of a lone or
+            // no-connect pin (a later pad of a no-connect pin `<name>_1`), which a route started on the pad takes (the router's `syncPad`)
+            let net = eda_engine::nets::written_pad_net(|k| pin_net.get(k).map(String::as_str), &lone_nets, &fp.id, &g.number, nth)
+                .map(str::to_string)
                 .unwrap_or_else(|| format!("__unassigned__{refpin}"));
             let rect = Rect::centered(g.center, g.size);
             // The footprint's own pad, to take the exact outline and the copper side from. Without it

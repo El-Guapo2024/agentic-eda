@@ -1851,8 +1851,9 @@ transitions still run), `edit_tool.cpp::Remove`, `pns_tool_base.cpp::highlightNe
   `line_placer` `a_via_the_first_lead_cannot_free_is_pushed_along_the_lead_from_the_last_cursor`, `component_drag`
   `a_hole_that_pokes_out_of_its_pad_is_an_obstacle_of_its_own`.
 - **A lone pin's net (Stage 28's left).** `syncPad`'s `solid->SetNet( aPad->GetNet() )`: the pad of a pin the model has on no net carries the net the derived
-  board writes for it (`DrcPad::lone_net`: the file's own, else KiCad's `unconnected-(..)`), so a route started on it takes that net and copper of no net keeps
-  its clearance from it. `Board::known_net` takes those nets (`BOARD::FindNet`), and `Cmd::CommitRoute` commits a route of no net (net code 0). Tests:
+  board writes for it (`DrcPad::net`, which `task-v17-backannot` made the written net: `eda_engine::nets::written_pad_net`, KiCad's `unconnected-(..)` and a
+  no-connect pin's later pads' `<name>_1`; the router and the routing_clearance gate take that one name), so a route started on it takes that net and
+  copper of no net keeps its clearance from it. `Board::known_net` takes those nets (`BOARD::FindNet`), and `Cmd::CommitRoute` commits a route of no net (net code 0). Tests:
   `component_drag` `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router`, ops `commit_route_takes_a_lone_pins_net_and_no_net`, slow cli
   `a_lone_pins_pad_is_on_its_unconnected_net_for_the_router_and_for_kicad_cli` (kicad-cli: no clearance, short, crossing or edge violation for either route),
   browser `router-v17` lone-pad.
