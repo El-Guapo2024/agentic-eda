@@ -100,7 +100,15 @@ export function SymbolShapePropertiesDialog() {
                   onChange={(e) => {
                     setForm((x) => (x ? withFillChoice(x, f.value, layer()) : x));
                     // `m_customColorSwatch->GetNewSwatchColor()`: "Fill with:" asks for the colour at once
-                    if (f.value === "color") (e.currentTarget.closest("label")?.querySelector('input[type="color"]') as (HTMLInputElement & { showPicker?: () => void }) | null)?.showPicker?.();
+                    // (the browser refuses a chooser of a disabled swatch, or one without a user gesture: the swatch then stays as it is)
+                    if (f.value === "color") {
+                      const input = e.currentTarget.closest("label")?.querySelector('input[type="color"]') as (HTMLInputElement & { showPicker?: () => void }) | null;
+                      try {
+                        if (input && !input.disabled) input.showPicker?.();
+                      } catch {
+                        /* no chooser */
+                      }
+                    }
                   }}
                   data-testid={`shape-fill-${f.value}`}
                 />{" "}
