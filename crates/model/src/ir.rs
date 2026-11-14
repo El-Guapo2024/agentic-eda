@@ -812,14 +812,26 @@ pub struct DrcExclusion {
 }
 
 impl DrcExclusion {
-    /// What identifies the violation: the check and the items it names.
+    /// What identifies the violation: the check and the items it names, and for a marker that names no item (`copper_sliver`) where it may be.
     pub fn key(&self) -> DrcExclusionKey {
-        DrcExclusionKey { check: self.check.clone(), items: self.items.clone() }
+        DrcExclusionKey { check: self.check.clone(), items: self.items.clone(), positions_nm: if self.items.is_empty() { self.positions_nm.clone() } else { Vec::new() } }
     }
 
-    /// Whether this waives the violation `(check, items)`.
+    /// Whether this waives the violation `(check, items)`. A violation that names no item is told apart by where its marker may be: see
+    /// [`DrcExclusion::matches_at`].
     pub fn matches(&self, check: &str, items: &[String]) -> bool {
         self.check == check && self.items == items
+    }
+
+    /// [`DrcExclusion::matches`], and for a marker that names no item, one of the places it may be shared (KiCad's exclusion is the marker itself, position
+    /// included: two slivers are two exclusions). No places on either side: the item-less key alone decides.
+    pub fn matches_at(&self, check: &str, items: &[String], positions: &[[Nm; 2]]) -> bool {
+        self.matches(check, items) && (!items.is_empty() || self.positions_nm.is_empty() || positions.is_empty() || self.positions_nm.iter().any(|p| positions.contains(p)))
+    }
+
+    /// Whether this is the exclusion `key` names ([`DrcExclusion::matches_at`] with the key's places).
+    pub fn matches_key(&self, key: &DrcExclusionKey) -> bool {
+        self.matches_at(&key.check, &key.items, &key.positions_nm)
     }
 }
 
@@ -829,6 +841,10 @@ impl DrcExclusion {
 pub struct DrcExclusionKey {
     pub check: String,
     pub items: Vec<String>,
+    /// For a violation that names no item (`copper_sliver`): where its marker may be, which tells two of them apart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // nanometres since schema 1: a key is a command's, never an old document's
+    pub positions_nm: Vec<[Nm; 2]>,
 }
 
 /// Title block. Every field optional/empty by default; the exporter falls

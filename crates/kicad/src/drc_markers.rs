@@ -644,13 +644,13 @@ fn subshape_pairs(a: &[Copper], b: &[Copper], clearance: i64) -> Vec<[i64; 2]> {
             }
         }
     }
-    // under a wide clearance every pair is a candidate: the nearest ones first, at most `MAX_PAIRS` (a record each in the project)
+    // under a wide clearance every pair is a candidate: the nearest ones first, at most `MAX_PAIRS` (a record each in the project; a text has a pair per glyph stroke)
     hits.sort_by_key(|h| h.0);
     hits.into_iter().take(MAX_PAIRS).map(|h| h.1).collect()
 }
 
 /// The most subshape pairs offered for one silkscreen finding.
-const MAX_PAIRS: usize = 32;
+const MAX_PAIRS: usize = 128;
 
 /// `zoneOutline->Collide( shape, 0, &actual, &pos )` of a keepout rule area's outline against an item (`DRC_TEST_PROVIDER_DISALLOW`): a track's
 /// `SquaredDistanceToSeg` -- the middle of the segment when both ends are inside (`containsSingle`, accuracy 1), else the nearest point of the side

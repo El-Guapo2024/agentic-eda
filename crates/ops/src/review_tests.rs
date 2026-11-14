@@ -26,7 +26,7 @@ fn waived(b: &Board) -> Vec<DrcExclusion> {
 }
 
 fn key(check: &str, items: &[&str]) -> DrcExclusionKey {
-    DrcExclusionKey { check: check.into(), items: items.iter().map(|s| s.to_string()).collect() }
+    DrcExclusionKey { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), positions_nm: vec![] }
 }
 
 #[test]
@@ -88,18 +88,21 @@ fn delete_all_markers_with_the_exclusions_forgets_every_waived_violation_in_one_
     assert_eq!(Cmd::ClearDrcExclusions.domain(), Domain::Pcb);
 }
 
-/// UI-LEFT-3 B3-1: a finding that names no item (`copper_sliver`) is waived by where its marker may be; the item-less ones of one check share the key
-/// `(check, [])`, and a second one adds its places to the first.
+/// UI-LEFT-3 B3-1: a finding that names no item (`copper_sliver`) is waived by where its marker may be: two slivers at two places are two exclusions, the
+/// same place again replaces its own, and the key with the places deletes that one only.
 #[test]
 fn an_item_less_exclusion_is_kept_by_its_places() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
     let at = |x: i64| [Nm::new(x), Nm::new(x)];
-    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(2), at(1)], ..exclusion("copper_sliver", &[]) }] }).unwrap();
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(1)], ..exclusion("copper_sliver", &[]) }] }).unwrap();
     b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(3)], ..exclusion("copper_sliver", &[]) }] }).unwrap();
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![DrcExclusion { positions_nm: vec![at(1)], comment: "why".into(), ..exclusion("copper_sliver", &[]) }] }).unwrap();
     let w = waived(&b);
-    assert_eq!(w.len(), 1);
-    assert_eq!(w[0].positions_nm, vec![at(1), at(2), at(3)]);
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(w.iter().any(|e| e.positions_nm == vec![at(1)] && e.comment == "why"));
+    b.apply(&Cmd::DeleteDrcExclusions { exclusions: vec![DrcExclusionKey { positions_nm: vec![at(3)], ..key("copper_sliver", &[]) }] }).unwrap();
+    assert_eq!(waived(&b).iter().map(|e| e.positions_nm.clone()).collect::<Vec<_>>(), vec![vec![at(1)]]);
 }
 
 #[test]

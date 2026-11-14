@@ -44,16 +44,8 @@ pub(crate) fn add_drc_exclusions(design: &mut Design, exclusions: &[DrcExclusion
         let mut e = e.clone();
         e.positions_nm.sort_unstable();
         e.positions_nm.dedup();
-        match list.iter_mut().find(|x| x.matches(&e.check, &e.items)) {
-            // the item-less markers of one check share the studio's key `(check, [])`: one exclusion holds every place any of them may be, as the
-            // studio cannot tell two of them apart (kicad-cli's report gives neither an item nor a place)
-            Some(slot) if e.items.is_empty() => {
-                let mut at = std::mem::take(&mut slot.positions_nm);
-                at.extend(e.positions_nm);
-                at.sort_unstable();
-                at.dedup();
-                *slot = DrcExclusion { positions_nm: at, ..e };
-            }
+        // an item-less marker is the exclusion of its places (`DrcExclusion::matches_at`): two slivers are two exclusions
+        match list.iter_mut().find(|x| x.matches_at(&e.check, &e.items, &e.positions_nm)) {
             Some(slot) => *slot = e,
             None => list.push(e),
         }
@@ -67,7 +59,7 @@ pub(crate) fn add_drc_exclusions(design: &mut Design, exclusions: &[DrcExclusion
 pub(crate) fn delete_drc_exclusions(design: &mut Design, keys: &[DrcExclusionKey]) -> Done {
     let list = &mut drawings(design).drc_exclusions;
     let before = list.len();
-    list.retain(|e| !keys.iter().any(|k| e.matches(&k.check, &k.items)));
+    list.retain(|e| !keys.iter().any(|k| e.matches_key(k)));
     if list.len() == before {
         let what = keys.first().map_or("drc_exclusions", |k| k.check.as_str());
         return Err(vec![CheckResult::fail("ops_unknown_drc_exclusion", what, "no exclusion with this check and these items exists")]);

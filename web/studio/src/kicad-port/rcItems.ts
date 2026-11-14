@@ -478,8 +478,11 @@ export function severitiesAfter(items: readonly SeverityItem[], current: Readonl
 // ------------------------------------------------------------------------------------------------------------ DRC exclusions
 
 /** `DrcExclusion::key` of a violation: the check and the uuids of the items, main first -- what the server matches a waived violation by. */
-export function drcKey(v: Pick<DrcViolation, "type" | "items">): { check: string; items: string[] } {
-  return { check: v.type, items: v.items.map((i) => i.uuid ?? "") };
+export function drcKey(v: Pick<DrcViolation, "type" | "items"> & { marker_nm?: DrcViolation["marker_nm"] }): { check: string; items: string[]; positions_nm?: [number, number][] } {
+  const key: { check: string; items: string[]; positions_nm?: [number, number][] } = { check: v.type, items: v.items.map((i) => i.uuid ?? "") };
+  // a marker that names no item (`copper_sliver`) is known by where it may be: two slivers are two exclusions (`DrcExclusionKey::positions_nm`)
+  if (v.items.length === 0 && v.marker_nm && v.marker_nm.length > 0) key.positions_nm = v.marker_nm.map((p) => [p[0], p[1]] as [number, number]);
+  return key;
 }
 
 /** The `add_drc_exclusions` entry for a violation: what the report knows (the items' uuids and ids, the marker positions worth trying) and a comment. */
@@ -503,13 +506,19 @@ export function ofCheck(list: readonly DrcViolation[], check: string, excluded: 
   return list.filter((v) => v.type === check && canExclude(v) && (v.excluded ?? false) === excluded);
 }
 
-const sameKey = (a: { check: string; items: string[] }, b: { check: string; items: string[] }) => a.check === b.check && a.items.length === b.items.length && a.items.every((x, i) => x === b.items[i]);
+type DrcKeyOf = { check: string; items: string[]; positions_nm?: ReadonlyArray<readonly [number, number]> };
+const sameKey = (a: DrcKeyOf, b: DrcKeyOf) =>
+  a.check === b.check &&
+  a.items.length === b.items.length &&
+  a.items.every((x, i) => x === b.items[i]) &&
+  // item-less: one place in common (`DrcExclusion::matches_at`)
+  (a.items.length > 0 || !a.positions_nm?.length || !b.positions_nm?.length || a.positions_nm.some((p) => b.positions_nm!.some((q) => q[0] === p[0] && q[1] === p[1])));
 
 /**
  * The report after waiving (or restoring) violations, without running kicad-cli again: `ERC_MARK_EXCLUDED`'s DRC twin. `comment` is the
  * exclusion's. The counts leave the waived ones out. Whether kicad-cli matched the new exclusion is not known until the next run.
  */
-export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<{ check: string; items: string[] }>, excluded: boolean, comment = "", hold = false): DrcReport {
+export function patchDrcExcluded(report: DrcReport, keys: ReadonlyArray<DrcKeyOf>, excluded: boolean, comment = "", hold = false): DrcReport {
   // `hold`: one marker waived or restored from its row (`ValueChanged( node )`), which keeps its place in the list; otherwise the dialog's `Update`
   // refilters and every row is sorted afresh (r2 D-E3, [`listedIndexes`])
   const patch = (v: DrcViolation): DrcViolation => {

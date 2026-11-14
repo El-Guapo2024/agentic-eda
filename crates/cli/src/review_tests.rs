@@ -190,7 +190,7 @@ fn deleting_drc_markers_with_their_exclusions_is_undoable_and_the_project_follow
     let dir = scratch("review_drc_delete");
     setup(&dir);
     let spec = |check: &str, items: &[&str]| eda_model::ir::DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: vec![], comment: String::new() };
-    let key = |check: &str, items: &[&str]| eda_model::ir::DrcExclusionKey { check: check.into(), items: items.iter().map(|s| s.to_string()).collect() };
+    let key = |check: &str, items: &[&str]| eda_model::ir::DrcExclusionKey { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), positions_nm: vec![] };
     let waived = |dir: &Path| load(dir).unwrap().1.drawings.map_or(0, |d| d.drc_exclusions.len());
     step(&dir, Cmd::AddDrcExclusions { exclusions: vec![spec("track_width", &["t1"]), spec("track_width", &["t2"]), spec("annular_width", &["v1"])] }, false, "ui").unwrap();
     // Delete Marker on one excluded marker: its exclusion goes.
