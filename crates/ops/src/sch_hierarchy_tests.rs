@@ -832,3 +832,89 @@ fn import_sheet_contents_of_one_item_placed_as_a_group_are_a_group_of_one() {
     assert_eq!(groups.len(), 1, "{groups:?}");
     assert_eq!(groups[0].member_ids.len(), 1);
 }
+
+// ------------------------------------------------------------------- UI-LEFT-3 S3-7: a file that shows one screen twice, brought in by Import Sheet
+
+/// A file whose root places the screen `ch.kicad_sch` twice, `sa` and `sb` (KiCad's `complex_hierarchy`): the screen holds R1 (x = 10 mm) and R2, which the
+/// second placement names R3 and R4 (the file's `(instances (path "/root/sb" (reference "R3")))`), and the dual-unit U1 drawn as unit 1 on `sa` and unit 2 on
+/// `sb`. Inside the channel a sheet `inner` with a user field placed by hand, and its record of the variant `V1` on the path through `sb` only.
+fn shared_file() -> SheetFile {
+    let r = |id: &str, x: Nm| symbol(id, "Device:R", "10k", 1, pt(x, Nm::ZERO));
+    let mut inner = placement("inner", "Inner", "inner.kicad_sch", "");
+    inner.at = pt(mm(50.0), mm(50.0));
+    let mut ch = section(vec![r("R1", mm(10.0)), r("R2", mm(20.0)), symbol("U1", "Test:Dual", "LM358", 1, pt(mm(30.0), Nm::ZERO))], vec![inner]);
+    ch.imported_from_kicad = true;
+    ch.instance_overrides = vec![
+        eda_model::ir::SymbolPathOverride { at: pt(mm(10.0), Nm::ZERO), sheet_path: vec!["sb".into()], reference: "R3".into(), unit: 1 },
+        eda_model::ir::SymbolPathOverride { at: pt(mm(20.0), Nm::ZERO), sheet_path: vec!["sb".into()], reference: "R4".into(), unit: 1 },
+    ];
+    ch.extras.path_units.entry("U1".into()).or_default().insert("sb".into(), 2);
+    ch.extras.sheet_fields.insert("inner".into(), vec![eda_model::sch_extras::LabelField { name: "Rev".into(), text: "A".into(), ..Default::default() }]);
+    ch.extras.sheet_field_places.entry("inner".into()).or_default().insert("Rev".into(), eda_model::sch_extras::SheetFieldPlace { dx: mm(5.08), dy: mm(-2.54), ..Default::default() });
+    let dnp = eda_model::sch_extras::SheetVariant { dnp: true, ..Default::default() };
+    ch.extras.path_sheet_variants.entry("inner".into()).or_default().insert("sb".into(), [("V1".to_string(), dnp)].into_iter().collect());
+    let mut inside = section(vec![r("R9", mm(10.0))], vec![]);
+    inside.imported_from_kicad = true;
+    let mut sa = placement("sa", "A", "ch.kicad_sch", "");
+    sa.at = pt(mm(100.0), Nm::ZERO);
+    let mut sb = placement("sb", "B", "ch.kicad_sch", "");
+    sb.at = pt(mm(200.0), Nm::ZERO);
+    let mut root = section(vec![], vec![sa, sb]);
+    root.imported_from_kicad = true;
+    let mut libs = lib(&["Device:R"]);
+    libs.push(LibrarySymbol { lib_id: "Test:Dual".into(), ..super::sch_annotate_tests::dual() });
+    SheetFile { root, screens: [("ch.kicad_sch".to_string(), ch), ("inner.kicad_sch".to_string(), inside)].into_iter().collect(), lib_symbols: libs, notes: vec![], ..Default::default() }
+}
+
+/// `LoadSheetFromFile`: the file's screen shown twice is one screen in the design too (the loader shares it within the file read, `loadHierarchy`'s
+/// `SearchHierarchy`), and each sheet path keeps the file's instance data for it (`AddNewSymbolInstances`: "Use an existing symbol instance for this path if
+/// it exists"): the references R1/R2 and R3/R4, U1's unit per path, and an inner sheet's record of a variant on one path; the inner sheet keeps its user
+/// field's place (S3-6). Before, the second placement got references and units of its own from the first's.
+#[test]
+fn import_sheet_of_a_file_that_shows_a_screen_twice_keeps_each_paths_references_and_units() {
+    let m = ConstraintModel::default();
+    let mut d = design();
+    d.schematic = Some(section(vec![], vec![]));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    b.apply(&import(Some(shared_file()), false, true)).unwrap();
+    let d = b.design();
+    let sheets = d.schematic.as_ref().unwrap().sheets.clone();
+    assert_eq!(sheets.len(), 2);
+    assert_eq!(sheets[0].file, sheets[1].file, "one screen, shown twice");
+    let (a, bb) = (sheets.iter().find(|s| s.name == "A").unwrap(), sheets.iter().find(|s| s.name == "B").unwrap());
+    let mut on_a = refs_on(d, &[&a.id]);
+    let mut on_b = refs_on(d, &[&bb.id]);
+    on_a.sort();
+    on_b.sort();
+    assert_eq!(on_a, vec!["R1", "R2", "U1"]);
+    assert_eq!(on_b, vec!["R3", "R4", "U1"]);
+    let screen = eda_model::sheet_list::screen_of(d, &[a.id.clone()]).unwrap();
+    let u1 = screen.symbols.iter().find(|s| s.lib_id.ends_with("Dual")).unwrap();
+    assert_eq!((eda_model::sheet_list::unit_under(screen, u1, &[a.id.clone()]), eda_model::sheet_list::unit_under(screen, u1, &[bb.id.clone()])), (1, 2), "U1A on A, U1B on B");
+    // the inner sheet: its user field where the file put it, its record of V1 on the path through B only
+    let inner = &screen.sheets[0];
+    assert_eq!(screen.extras.sheet_field_places[&inner.id]["Rev"].dx, mm(5.08));
+    let flags = |path: &[String]| eda_model::variants::sheet_path_flags(d, path, "V1").dnp;
+    assert!(!flags(&[a.id.clone(), inner.id.clone()]) && flags(&[bb.id.clone(), inner.id.clone()]));
+    // two screens came in, each once: the channel and the one inside its inner sheet
+    assert_eq!(eda_model::sheet_list::reachable_files(d).len(), 2);
+}
+
+/// `SCH_EDITOR_CONTROL::Paste`'s `loadedScreens`: two pasted sheets of one screen the design does not show share one copy of it, and each takes the clipboard's
+/// references of its path (`updatePastedSymbol`); a reference the design holds is numbered anew (`ReannotateDuplicates`).
+#[test]
+fn two_pasted_sheets_of_one_new_screen_share_one_copy() {
+    let m = ConstraintModel::default();
+    let file = shared_file();
+    let mut d = design();
+    d.schematic = Some(section(vec![symbol("R3", "Device:R", "10k", 1, pt(mm(1.0), mm(1.0)))], vec![]));
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let fragment = SchFragment { section: file.root.clone(), lib_symbols: file.lib_symbols.clone(), notes: vec![], sheet_screens: file.screens.clone() };
+    b.apply(&Cmd::PasteSch { fragment, dx: Nm::ZERO, dy: mm(50.0), mode: PasteMode::Unique, numbering: Default::default() }).unwrap();
+    let d = b.design();
+    let sheets = d.schematic.as_ref().unwrap().sheets.clone();
+    assert_eq!(sheets[0].file, sheets[1].file, "one copy");
+    let bb = sheets.iter().find(|s| s.name == "B").unwrap();
+    let on_b = refs_on(d, &[&bb.id]);
+    assert!(on_b.contains(&"R4".to_string()) && !on_b.contains(&"R3".to_string()), "B keeps R4; R3 is the root's: {on_b:?}");
+}

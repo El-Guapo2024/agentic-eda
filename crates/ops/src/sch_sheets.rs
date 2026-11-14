@@ -104,6 +104,102 @@ fn tree_of(file: &str, screen_of: &dyn Fn(&str) -> Option<SchematicSection>, ord
 #[derive(Default)]
 pub(crate) struct SharedScreens(BTreeMap<String, Vec<((String, u32), Point)>>, BTreeMap<String, BTreeSet<String>>);
 
+/// What a sheet tree brought in keeps of the file's own instance data for its sheet paths (`SCH_SYMBOL::m_instances`, one `SCH_SYMBOL_INSTANCE` per path:
+/// its reference, its unit, its variant records): taken out of a screen's copy as it is made, its symbols named by their place in the screen (their order
+/// does not change while they come in, their reference and `at` may), and its paths as the file has them (the file's sheet ids from its root down).
+#[derive(Default)]
+struct PathStash {
+    /// (symbol index, path, reference, unit) of each `SymbolPathOverride`
+    overrides: Vec<(usize, Vec<String>, String, u32)>,
+    /// (symbol index, path, unit) of `SchExtras::path_units`
+    units: Vec<(usize, Vec<String>, u32)>,
+    /// (power symbol index, path, reference) of `SchExtras::power_path_refs`
+    power_refs: Vec<(usize, Vec<String>, String)>,
+    /// (symbol index, path, records) of `SchExtras::path_symbol_variants`
+    variants: Vec<(usize, Vec<String>, BTreeMap<String, eda_model::variants::SymbolVariant>)>,
+    /// (sheet index, path, records) of `SchExtras::path_sheet_variants` (a sheet's place on the screen does not change while it comes in)
+    sheet_variants: Vec<(usize, Vec<String>, BTreeMap<String, eda_model::sch_extras::SheetVariant>)>,
+    /// Where each symbol of the copy is (and its unit), and each power symbol, once the copy is in the design's frame: a rename re-sorts the symbols, a place
+    /// and a unit name one ([`PathStash::pin`]).
+    sym_at: Vec<(Point, u32)>,
+    power_at: Vec<Point>,
+}
+
+impl PathStash {
+    /// Take the per-path data out of `sec`, a screen's copy before any of its symbols moved or was renamed.
+    fn take(sec: &mut SchematicSection) -> PathStash {
+        let mut out = PathStash::default();
+        let split = |key: &str| -> Vec<String> { key.split('/').filter(|c| !c.is_empty()).map(String::from).collect() };
+        for o in std::mem::take(&mut sec.instance_overrides) {
+            if let Some(i) = sec.symbols.iter().position(|s| s.at == o.at && s.unit == o.unit) {
+                out.overrides.push((i, o.sheet_path, o.reference, o.unit));
+            }
+        }
+        for (key, paths) in std::mem::take(&mut sec.extras.path_units) {
+            if let Some(i) = sec.symbols.iter().position(|s| eda_model::ir::field_key(&s.id, s.unit) == key) {
+                out.units.extend(paths.into_iter().map(|(p, u)| (i, split(&p), u)));
+            }
+        }
+        for (id, paths) in std::mem::take(&mut sec.extras.power_path_refs) {
+            if let Some(i) = sec.power_symbols.iter().position(|p| p.id == id) {
+                out.power_refs.extend(paths.into_iter().map(|(p, r)| (i, split(&p), r)));
+            }
+        }
+        for (id, paths) in std::mem::take(&mut sec.extras.path_symbol_variants) {
+            if let Some(i) = sec.symbols.iter().position(|s| s.id == id) {
+                out.variants.extend(paths.into_iter().map(|(p, v)| (i, split(&p), v)));
+            }
+        }
+        for (id, paths) in std::mem::take(&mut sec.extras.path_sheet_variants) {
+            if let Some(i) = sec.sheets.iter().position(|s| s.id == id) {
+                out.sheet_variants.extend(paths.into_iter().map(|(p, v)| (i, split(&p), v)));
+            }
+        }
+        out
+    }
+
+    /// Note where the copy's symbols are now, before anything renames (and so re-sorts) them.
+    fn pin(&mut self, sec: &SchematicSection) {
+        self.sym_at = sec.symbols.iter().map(|s| (s.at, s.unit)).collect();
+        self.power_at = sec.power_symbols.iter().map(|p| p.at).collect();
+    }
+
+    /// The symbol that was the `i`-th of the copy.
+    fn symbol<'s>(&self, sec: &'s SchematicSection, i: usize) -> Option<&'s eda_model::ir::SymbolInstance> {
+        let (at, unit) = *self.sym_at.get(i)?;
+        sec.symbols.iter().find(|s| s.at == at && s.unit == unit)
+    }
+
+    /// The power symbol that was the `i`-th of the copy.
+    fn power<'s>(&self, sec: &'s SchematicSection, i: usize) -> Option<&'s eda_model::ir::PowerSymbol> {
+        let at = *self.power_at.get(i)?;
+        sec.power_symbols.iter().find(|p| p.at == at)
+    }
+}
+
+/// The sheets one Paste or Import Sheet brings in, which may show one screen several times (`SCH_EDITOR_CONTROL::Paste`'s `loadedScreens`; the loader's
+/// `SearchHierarchy` within the file read, `SCH_IO_KICAD_SEXPR::loadHierarchy`): each screen of the source is copied once, every placement of it shows the
+/// copy, and the source's instance data for each sheet path is given to the new path that matches it (`SCH_SHEET_LIST::AddNewSymbolInstances`: "Use an
+/// existing symbol instance for this path if it exists", `GetInstance( .., Path(), true )` matching the path's tail; `updatePastedSymbol`: the clipboard's
+/// instance whose path ends in the clipboard's path), once every placement is in.
+#[derive(Default)]
+pub(crate) struct TreeBatch {
+    /// The source's file of each screen copied -> the copy's file.
+    files: BTreeMap<String, String>,
+    /// The source's id of each sheet brought in -> its new id.
+    ids: BTreeMap<String, String>,
+    /// Each copy's per-path data, by the copy's file.
+    stash: BTreeMap<String, PathStash>,
+    /// The copies' files, in the order they were made.
+    order: Vec<String>,
+    /// Each new top placement: its new id (the sheet path from the screen pasted on is the destination's path and it).
+    tops: Vec<String>,
+    /// A file read by Import Sheet rather than a clipboard: a path of its instance data matches only from the file's own sheets down (`GetInstance( .., Path(),
+    /// true )` with the loaded path, whose first sheet is the file's root: a file that is not the root of its project has no instance that ends in it, and
+    /// `AddNewSymbolInstances` falls back to the first one), where a paste matches from the copied sheet wherever it was (`updatePastedSymbol`'s clipboard path).
+    import: bool,
+}
+
 impl<'a> Board<'a> {
     /// `LoadSheetFromFile`'s checks on a file that is to be a sheet: what stops it, what KiCad asks "Continue Load?" about, and what will happen to the
     /// references. (The libraries the project does not have installed are the server's to find: the verb reads no library.)
@@ -145,6 +241,16 @@ impl<'a> Board<'a> {
     /// Put a copy of the sheet `inc` on the screen the verbs act on: the sheet symbol (named `name`, moved by `shift`), a copy of each screen it shows under a
     /// file of its own, the library symbols its symbols need, its symbols numbered. Returns the files the copies got (the sheet's first).
     pub(crate) fn add_sheet_tree(&mut self, inc: Incoming<'_>, shift: (Nm, Nm), name: &str, file_hint: Option<&str>, numbering: &Numbering) -> Result<Vec<String>, Vec<CheckResult>> {
+        // (only Import Sheet's "Place as sheet" comes this way)
+        let mut batch = TreeBatch { import: true, ..Default::default() };
+        let files = self.add_sheet_tree_in(inc, shift, name, file_hint, numbering, &mut batch)?;
+        self.finish_tree_batch(batch, numbering);
+        Ok(files)
+    }
+
+    /// [`Board::add_sheet_tree`] as one sheet of a [`TreeBatch`]: a screen the batch copied already is shown again, not copied again; the per-path data
+    /// and the later placements' numbers wait for [`Board::finish_tree_batch`].
+    fn add_sheet_tree_in(&mut self, inc: Incoming<'_>, shift: (Nm, Nm), name: &str, file_hint: Option<&str>, numbering: &Numbering, batch: &mut TreeBatch) -> Result<Vec<String>, Vec<CheckResult>> {
         let pages_before = eda_model::sheet_list::walk(&self.design);
         let own = self.design.sheet_contents.clone().unwrap_or_default();
         let screen_of = |f: &str| -> Option<SchematicSection> { inc.screens.get(f).or_else(|| own.get(f)).cloned() };
@@ -157,8 +263,19 @@ impl<'a> Board<'a> {
         // (a screen no sheet shows any more is free to be written over: the sheet that came back from a Cut is the one it was)
         let reachable = eda_model::sheet_list::reachable_files(&self.design);
         let mut taken: BTreeSet<String> = own.keys().filter(|f| reachable.contains(*f)).cloned().collect();
+        taken.extend(batch.files.values().cloned());
         let mut new_of: BTreeMap<String, String> = BTreeMap::new();
+        // (a screen this batch copied already is that copy, shown once more)
+        for orig in &order {
+            if let Some(f) = batch.files.get(orig) {
+                new_of.insert(orig.clone(), f.clone());
+            }
+        }
+        let order: Vec<String> = order.into_iter().filter(|f| !batch.files.contains_key(f)).collect();
         for (i, orig) in order.iter().enumerate() {
+            if new_of.contains_key(orig) {
+                continue;
+            }
             let stem = if i == 0 { file_hint.map(|f| f.trim_end_matches(".kicad_sch").to_string()).unwrap_or_else(|| name.to_string()) } else { orig.trim_end_matches(".kicad_sch").rsplit('/').next().unwrap_or(orig).to_string() };
             let fresh = eda_engine::hier::sheet_file_name(&stem, &taken);
             taken.insert(fresh.clone());
@@ -168,10 +285,16 @@ impl<'a> Board<'a> {
         let mut copies: Vec<(String, SchematicSection)> = Vec::new();
         // each copy's sheets' user fields, by the sheet's place on its screen: the sheets get new ids, and their fields go with them (r3 B3-M2)
         let mut inner_fields: BTreeMap<String, Vec<Option<Vec<eda_model::sch_extras::LabelField>>>> = BTreeMap::new();
+        // each copy's sheets as the source has them (their ids, which the batch maps to the new ones) and what their ids key on the screen: the places of their
+        // fields and user fields, their fields' looks, their style and attributes, their variant records, and their pins' looks (UI-LEFT-3 S3-6)
+        let mut inner_sheets: BTreeMap<String, Vec<SheetInstance>> = BTreeMap::new();
         for orig in &order {
             let mut sec = screen_of(orig).unwrap_or_else(crate::empty_schematic_section);
             let fields = std::mem::take(&mut sec.extras.sheet_fields);
             inner_fields.insert(new_of[orig].clone(), sec.sheets.iter().map(|sh| fields.get(&sh.id).cloned()).collect());
+            inner_sheets.insert(new_of[orig].clone(), sec.sheets.clone());
+            // the file's instance data per sheet path, given to the new paths once every placement is in
+            batch.stash.insert(new_of[orig].clone(), PathStash::take(&mut sec));
             // (the pages kept per sheet path are of the original's paths)
             sec.extras.sheet_pages.clear();
             for sh in sec.sheets.iter_mut() {
@@ -188,8 +311,11 @@ impl<'a> Board<'a> {
         wanted.sort_unstable();
         wanted.dedup();
         let LibMerge { lib_name, engine_of, publish } = self.merge_lib_symbols(&wanted, inc.lib_symbols);
-        for (_, sec) in copies.iter_mut() {
+        for (file, sec) in copies.iter_mut() {
             place_by_box_corner(sec, &engine_of);
+            if let Some(stash) = batch.stash.get_mut(file) {
+                stash.pin(sec);
+            }
             sec.symbols.iter_mut().for_each(|s| {
                 if let Some(n) = lib_name.get(&s.lib_id) {
                     s.lib_id = n.clone();
@@ -242,6 +368,15 @@ impl<'a> Board<'a> {
                         sec.extras.sheet_fields.insert(sh.id.clone(), fields);
                     }
                 }
+                let olds = inner_sheets.remove(&file).unwrap_or_default();
+                rekey_sheets(&mut sec, &olds);
+                for (old, new) in olds.iter().zip(sec.sheets.iter()) {
+                    if !old.id.is_empty() {
+                        batch.ids.insert(old.id.clone(), new.id.clone());
+                    }
+                }
+                batch.files.insert(order.iter().find(|o| new_of[*o] == file).cloned().unwrap_or_default(), file.clone());
+                batch.order.push(file.clone());
                 contents.insert(file, sec);
             }
         }
@@ -249,6 +384,12 @@ impl<'a> Board<'a> {
             let sch = self.schematic_mut_or_create();
             sch.sheets.push(placement);
             sch.assign_missing_ids();
+            if let Some(id) = sch.sheets.last().map(|s| s.id.clone()) {
+                if !inc.placement.id.is_empty() {
+                    batch.ids.insert(inc.placement.id.clone(), id.clone());
+                }
+                batch.tops.push(id);
+            }
             if let (Some(fields), Some(id)) = (inc.fields.clone(), sch.sheets.last().map(|s| s.id.clone())) {
                 sch.extras.sheet_fields.insert(id, fields);
             }
@@ -261,9 +402,73 @@ impl<'a> Board<'a> {
         // the new sheet paths' page numbers before the annotation, which may number by page (`DrawSheet` gives the sheet `GetNextPageNumber`
         // and `LoadSheetFromFile` the sheets inside it theirs before `AnnotateSymbols` runs; `Board::apply` would number them after)
         eda_model::sheet_list::keep_pages(&mut self.design, &pages_before);
+        Ok(files)
+    }
+
+    /// The end of a [`TreeBatch`], once every placement is in: the source's instance data of each sheet path given to the new path that matches it (see
+    /// [`TreeBatch`]; a path matches when it runs through a sheet the batch brought in and every sheet after that one came in too: the new path is the new
+    /// sheets' path from the screen pasted on), an import's automatic annotation, and the references of each later placement of a screen shown more than
+    /// once, numbered against every reference of the design. References come from the source only when they are kept or numbered like a paste's
+    /// (`Numbering::Paste`); an annotation numbers every path anew (`AnnotateSymbols( .., aResetAnnotation = true )`), and only the units and variant records
+    /// are carried.
+    fn finish_tree_batch(&mut self, batch: TreeBatch, numbering: &Numbering) {
+        let carry_refs = matches!(numbering, Numbering::Paste(_));
+        let walk = eda_model::sheet_list::walk(&self.design);
+        let here = self.focus_sheet_path();
+        // the new path of a source path: from the first sheet the batch brought in, every sheet mapped, under the walk's path to that first one
+        let map_path = |path: &[String]| -> Option<Vec<String>> {
+            let k = path.iter().position(|id| batch.ids.contains_key(id))?;
+            if batch.import && k != 0 {
+                return None;
+            }
+            let mapped: Vec<String> = path[k..].iter().map(|id| batch.ids.get(id).cloned()).collect::<Option<_>>()?;
+            let first = &mapped[0];
+            let mut at: Vec<&eda_model::sheet_list::SheetEntry> = walk.iter().filter(|e| e.path.last() == Some(first) && e.path.starts_with(&here)).collect();
+            // (a top placement's own entry is the destination's path and it)
+            if at.len() > 1 {
+                at.retain(|e| e.path.len() == here.len() + 1);
+            }
+            let [entry] = at.as_slice() else { return None };
+            Some(entry.path.iter().chain(&mapped[1..]).cloned().collect())
+        };
+        for file in &batch.order {
+            let Some(stash) = batch.stash.get(file) else { continue };
+            let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(file)) else { continue };
+            if carry_refs {
+                for (i, path, reference, unit) in &stash.overrides {
+                    let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
+                    // (of two source paths that match one new path, the first read gives it)
+                    if s.unit == *unit && *reference != s.id && !sec.instance_overrides.iter().any(|o| o.sheet_path == new && o.at == s.at && o.unit == s.unit) {
+                        sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: new, reference: reference.clone(), unit: s.unit });
+                    }
+                }
+                for (i, path, reference) in &stash.power_refs {
+                    let (Some(new), Some(p)) = (map_path(path), stash.power(sec, *i)) else { continue };
+                    if *reference != p.id {
+                        sec.extras.power_path_refs.entry(p.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| reference.clone());
+                    }
+                }
+            }
+            // the unit each path draws a symbol as (`newSymbolInstance.m_Unit`, r5 B5-L2; UI-LEFT-3 S3-7) and its records of the variants
+            for (i, path, unit) in &stash.units {
+                let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
+                if *unit != s.unit {
+                    sec.extras.path_units.entry(eda_model::ir::field_key(&s.id, s.unit)).or_default().entry(new.join("/")).or_insert(*unit);
+                }
+            }
+            for (i, path, records) in &stash.variants {
+                let (Some(new), Some(s)) = (map_path(path), stash.symbol(sec, *i)) else { continue };
+                sec.extras.path_symbol_variants.entry(s.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| records.clone());
+            }
+            // and the records each path gives a sheet drawn on the screen (`SCH_SHEET_INSTANCE::m_Variants`, UI-LEFT-3 S3-33)
+            for (i, path, records) in &stash.sheet_variants {
+                let (Some(new), Some(sh)) = (map_path(path), sec.sheets.get(*i)) else { continue };
+                sec.extras.path_sheet_variants.entry(sh.id.clone()).or_default().entry(new.join("/")).or_insert_with(|| records.clone());
+            }
+        }
         // an import's automatic annotation, now that the sheets are in
         if let Numbering::Annotate { order, options } = numbering {
-            self.annotate_new_screens(&files, *order, options);
+            self.annotate_new_screens(&batch.order, *order, options);
         }
         // a screen the incoming tree shows more than once (KiCad's `complex_hierarchy` places `ampli_ht` twice) is one screen here too: each placement past
         // the first gets references of its own
@@ -271,34 +476,40 @@ impl<'a> Board<'a> {
             Numbering::Paste(mode) => *mode,
             Numbering::Annotate { .. } => PasteMode::Unique,
         };
-        self.number_later_placements(&files, mode, &units_of);
-        Ok(files)
+        let units_of = |board: &Self, lib_id: &str| -> u32 { board.design_symbol(lib_id).map_or(1, |l| l.unit_count.max(1)) };
+        self.number_later_placements(&batch.order, mode, &units_of);
     }
 
     /// The references a screen of `files` that is shown more than once has on its later placements (`SCH_SYMBOL_INSTANCE` per sheet path: `updatePastedSheet` ->
     /// `updatePastedSymbol` for each path, `ReannotateDuplicates`): its symbols numbered against every reference of the design, the placements before it
-    /// included, kept in `SchematicSection::instance_overrides` under the sheet path. The first sheet path keeps the screen's own. A path that already
-    /// has references of its own is left as it is; so are power symbols.
+    /// included, kept in `SchematicSection::instance_overrides` under the sheet path. The first sheet path keeps the screen's own (unless the source gave it
+    /// references of its own, which are checked like a later path's). A path starts from the
+    /// references the source gave it ([`Board::finish_tree_batch`]), else from the screen's own, and keeps them unless the mode renumbers them or another path or
+    /// symbol of the design holds one; power symbols keep theirs.
     fn number_later_placements(&mut self, files: &[String], mode: PasteMode, units_of: &dyn Fn(&Self, &str) -> u32) {
         // the copies' screens came with the overrides of the placements they were copied from, under ids no placement here has
         eda_model::sheet_list::prune_orphaned_overrides(&mut self.design);
         let entries = eda_model::sheet_list::walk(&self.design);
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for e in entries.iter().skip(1) {
-            if !files.contains(&e.file) || seen.insert(e.file.clone()) {
+            if !files.contains(&e.file) {
                 continue;
             }
             let Some(screen) = self.design.sheet_contents.as_ref().and_then(|c| c.get(&e.file)).cloned() else { continue };
-            if screen.instance_overrides.iter().any(|o| o.sheet_path == e.path) {
+            // the first placement has the screen's own references, numbered as the copy came in -- unless the source gave it references of its own
+            if seen.insert(e.file.clone()) && !screen.instance_overrides.iter().any(|o| o.sheet_path == e.path) {
                 continue;
             }
             let pasted: Vec<PastedRef> = screen
                 .symbols
                 .iter()
-                .map(|s| PastedRef { reference: s.id.clone(), unit: s.unit, unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
+                .map(|s| PastedRef { reference: eda_model::sheet_list::reference_under(&screen, s, &e.path), unit: eda_model::sheet_list::unit_under(&screen, s, &e.path), unit_count: units_of(self, &s.lib_id), lib_id: s.lib_id.clone(), value: s.value.clone(), at: (s.at.x, s.at.y), power: false })
                 .collect();
-            let numbered = annotate_paste(&self.used_references(), &pasted, mode, Default::default(), 1);
+            // the design's references but this path's own, which it is numbering (a symbol's id may be the reference of a later path than the first: the source's
+            // first path is not always the walk's first here)
+            let numbered = annotate_paste(&self.references_but(&e.path), &pasted, mode, Default::default(), 1);
             let Some(sec) = self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(&e.file)) else { continue };
+            sec.instance_overrides.retain(|o| o.sheet_path != e.path);
             for (s, reference) in screen.symbols.iter().zip(numbered) {
                 if reference != s.id {
                     sec.instance_overrides.push(eda_model::ir::SymbolPathOverride { at: s.at, sheet_path: e.path.clone(), reference, unit: s.unit });
@@ -510,7 +721,13 @@ impl<'a> Board<'a> {
 
     /// The sheet part of `Cmd::PasteSch`: each sheet symbol of the fragment, named and filed anew, with a copy of the screens it shows and its symbols
     /// numbered like any pasted symbols.
-    pub(crate) fn paste_sheets(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
+    ///
+    /// The sheets of one paste are one [`TreeBatch`]: two of them that show one screen the design does not show show one copy of it, and the source's
+    /// references, units and variant records of each sheet path are the new paths'. `import` is Import Sheet's placing of a file's contents
+    /// (`SCH_DRAWING_TOOLS::ImportSheet` -> `LoadSheetFromFile`): the file is read into a sheet of its own (`SCH_IO_KICAD_SEXPR::LoadSchematicFile` with no
+    /// sheet to append to: `loadHierarchy` looks for a screen to share in the file read only), so none of its sheets shares a screen the design shows.
+    pub(crate) fn paste_sheets(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode, import: bool) -> Result<(), Vec<CheckResult>> {
+        let mut batch = TreeBatch { import, ..Default::default() };
         let mut sheets: Vec<&SheetInstance> = fragment.section.sheets.iter().collect();
         // `sortedLoadedItems`: by name, naturally
         sheets.sort_by(|a, b| str_num_cmp(&a.name, &b.name));
@@ -537,9 +754,9 @@ impl<'a> Board<'a> {
             let name = unique_sheet_name(&names, &sh.name);
             names.insert(name.clone());
             let fields = fragment.section.extras.sheet_fields.get(&sh.id).cloned();
-            if !self.share_pasted_sheet(sh, (dx, dy), &name, mode, fields.clone())? {
+            if import || batch.files.contains_key(&sh.file) || !self.share_pasted_sheet(sh, (dx, dy), &name, mode, fields.clone())? {
                 let inc = Incoming { placement: sh.clone(), screens: &fragment.sheet_screens, lib_symbols: &fragment.lib_symbols, fields };
-                self.add_sheet_tree(inc, (dx, dy), &name, None, &Numbering::Paste(mode))?;
+                self.add_sheet_tree_in(inc, (dx, dy), &name, None, &Numbering::Paste(mode), &mut batch)?;
             }
             // the sheet's border, fill and attributes come with it (`SCH_SHEET`'s own, `SchExtras::sheet_props`)
             if let Some(props) = fragment.section.extras.sheet_props.get(&sh.id).cloned() {
@@ -586,6 +803,7 @@ impl<'a> Board<'a> {
                 }
             }
         }
+        self.finish_tree_batch(batch, &Numbering::Paste(mode));
         Ok(())
     }
 
@@ -734,7 +952,7 @@ impl<'a> Board<'a> {
         let (dx, dy) = (at.x - anchor.x, at.y - anchor.y);
         let units_here = |b: &Self| -> BTreeSet<(String, u32)> { b.schematic().map(|s| s.symbols.iter().map(|x| (x.id.clone(), x.unit)).collect()).unwrap_or_default() };
         let before = units_here(self);
-        let top = self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique }, Default::default())?;
+        let top = self.paste_sch_in(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique }, Default::default(), true)?;
         // `placeSheetContents`: `if( placeAsGroup )` a group of what came in (before the numbering, which renames the members it lists)
         let group = self.group_placed(&top, how)?;
         // the turns made while the contents rode (`SCH_ACTIONS::move` on the selection: the group, or what came in), about the point they were held at -- before the
@@ -822,6 +1040,28 @@ pub(crate) fn shift_field_places(places: &mut [eda_model::ir::FieldPlacement], s
         p.dx += dx;
         p.dy += dy;
     }
+}
+
+/// A screen's copy whose sheets got new ids (`olds`, the same sheets in the same order, with the source's ids): what the screen keeps under a sheet's id or its
+/// pins' ids follows it -- the places of its Sheetname and Sheetfile (`field_layout`) and whether they were autoplaced, its user fields' places and its fields'
+/// looks, its style and attributes, its variant records, its pins' looks and fonts. `SCH_SHEET` and its `SCH_FIELD`s and `SCH_SHEET_PIN`s are copied whole by
+/// a paste or a load (UI-LEFT-3 S3-6: the inner sheets of a pasted or imported tree kept their fields but not their places).
+fn rekey_sheets(sec: &mut SchematicSection, olds: &[SheetInstance]) {
+    fn mv<V>(map: &mut BTreeMap<String, V>, pairs: &[(String, String)]) {
+        let taken: Vec<(String, V)> = pairs.iter().filter_map(|(o, n)| map.remove(o).map(|v| (n.clone(), v))).collect();
+        map.extend(taken);
+    }
+    let sheets: Vec<(String, String)> = olds.iter().zip(sec.sheets.iter()).filter(|(o, n)| !o.id.is_empty() && o.id != n.id).map(|(o, n)| (o.id.clone(), n.id.clone())).collect();
+    let pins: Vec<(String, String)> = olds.iter().zip(sec.sheets.iter()).flat_map(|(o, n)| o.pins.iter().zip(n.pins.iter())).filter(|(o, n)| !o.id.is_empty() && o.id != n.id).map(|(o, n)| (o.id.clone(), n.id.clone())).collect();
+    mv(&mut sec.field_layout, &sheets);
+    let x = &mut sec.extras;
+    mv(&mut x.fields_autoplaced, &sheets);
+    mv(&mut x.sheet_field_places, &sheets);
+    mv(&mut x.field_looks, &sheets);
+    mv(&mut x.sheet_props, &sheets);
+    mv(&mut x.sheet_variants, &sheets);
+    mv(&mut x.sheet_pin_looks, &pins);
+    mv(&mut x.text_attrs, &pins);
 }
 
 pub(crate) fn place_by_box_corner(sec: &mut SchematicSection, engine_of: &BTreeMap<String, eda_model::LibSymbol>) {

@@ -920,12 +920,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         // The sheet is filed under each path of the screen it is drawn on (its parent: `SCH_SHEET::m_instances`, one `SCH_SHEET_INSTANCE` per
         // sheet path that shows it), each with its own page number: the one the user set (Edit Sheet Page Number), else the place the sheet
         // has in the hierarchy on that path.
-        let instances: Vec<(String, String)> = ctx
+        let instances: Vec<(String, String, Vec<String>)> = ctx
             .instance_paths
             .iter()
-            .map(|path| {
+            .enumerate()
+            .map(|(k, path)| {
                 let page = ctx.sheet_pages.get(&format!("{path}/{uuid}")).cloned().unwrap_or_else(|| if s.page.is_empty() { "1".to_string() } else { s.page.clone() });
-                (path.clone(), page)
+                (path.clone(), page, ctx.instance_sheet_paths.get(k).cloned().unwrap_or_default())
             })
             .collect();
         // the file as the placing file names it, relative to its own folder
@@ -974,7 +975,7 @@ fn write_sheet_groups(out: &mut String, sch: &eda_model::ir::SchematicSection) {
 /// One `(sheet ...)` item of a screen, as `SCH_IO_KICAD_SEXPR` writes it (`SCH_IO_KICAD_SEXPR::saveSheet`): its place and size, its fields
 /// (`Sheetname`, `Sheetfile`), its pins and, for each sheet path of the screen it is drawn on, that path and the page the sheet has there
 /// (`instances`: `(path, page)`; `saveSheet` writes one `(path "/<root>/.." (page ..))` per `SCH_SHEET_INSTANCE`, the root's own left out).
-pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, instances: &[(String, String)]) {
+pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, instances: &[(String, String, Vec<String>)]) {
     let x = sch_mm(s.at.x);
     let y = sch_mm(s.at.y);
     let w = sch_mm(s.size.0);
@@ -1040,9 +1041,21 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     writeln!(out, "\t\t(instances").unwrap();
     writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
     // each path's records of the design variants (`saveSheet`: `(variant (name ..) (dnp ..) (exclude_from_sim ..) (in_bom ..))`, a flag written only where it differs
-    // from the sheet's own, a record with no differential not at all: `HasDifferentials`). The studio's record is the sheet's on every path (UI-LEFT-2 SS15).
+    // from the sheet's own, a record with no differential not at all: `HasDifferentials`): the path's own set where it has one (`SchExtras::path_sheet_variants`,
+    // UI-LEFT-3 S3-33), else the sheet's (UI-LEFT-2 SS15)
+    for (instance_path, page, model_path) in instances {
+        let variants = sheet_variant_records(sch, s, &props, model_path);
+        writeln!(out, "\t\t\t\t(path \"{instance_path}\" (page {}){variants})", sexpr_str(page)).unwrap();
+    }
+    writeln!(out, "\t\t\t)").unwrap();
+    writeln!(out, "\t\t)").unwrap();
+    writeln!(out, "\t)").unwrap();
+}
+
+/// The `(variant ..)` records of the sheet `s` on the sheet path `model_path` of the screen it is drawn on, as `saveSheet` writes them inside that `(path ..)`.
+fn sheet_variant_records(sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, props: &eda_model::sch_extras::SheetProps, model_path: &[String]) -> String {
     let mut variants = String::new();
-    for (name, v) in sch.extras.sheet_variants.get(&s.id).into_iter().flatten().filter(|(_, v)| v.has_differentials(&props)) {
+    for (name, v) in eda_model::variants::sheet_records_on(sch, &s.id, model_path).into_iter().flatten().filter(|(_, v)| v.has_differentials(props)) {
         let yn = |b: bool| if b { "yes" } else { "no" };
         write!(variants, " (variant (name {})", sexpr_str(name)).unwrap();
         if v.dnp != props.dnp {
@@ -1060,12 +1073,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         }
         variants.push(')');
     }
-    for (instance_path, page) in instances {
-        writeln!(out, "\t\t\t\t(path \"{instance_path}\" (page {}){variants})", sexpr_str(page)).unwrap();
-    }
-    writeln!(out, "\t\t\t)").unwrap();
-    writeln!(out, "\t\t)").unwrap();
-    writeln!(out, "\t)").unwrap();
+    variants
 }
 
 /// `export_kicad_sch`'s multi-file counterpart (GAPS.md #6): the root

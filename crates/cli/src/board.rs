@@ -1051,6 +1051,8 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
             plan.push((e.path.clone(), e.file.clone(), pins, first));
         }
     }
+    // the later placements, in the order their copies are traced: their wires' nets are filed per path on the screen (S3-36)
+    let later_paths: Vec<(Vec<String>, String)> = plan.iter().filter(|(_, _, _, first)| !*first).map(|(path, file, _, _)| (path.clone(), file.clone())).collect();
     let traced = {
         let mut screens = vec![eda_engine::nets::ScreenIn { path: Vec::new(), sch: &mut root, file: String::new(), pins: root_pins }];
         let mut firsts: std::collections::BTreeMap<&String, &mut eda_model::ir::SchematicSection> = contents.iter_mut().flatten().collect();
@@ -1082,6 +1084,21 @@ pub(crate) fn trace_design(design: &mut eda_model::ir::Design, model: &Constrain
         };
         eda_engine::nets::trace_nets_with(&mut screens, &naming)
     };
+    // A screen shown twice: each later placement's wires are on that path's nets (`CONNECTION_GRAPH` per `SCH_SHEET_PATH`), filed on the screen where their
+    // name is not the first path's (`SchExtras::path_wire_nets`, UI-LEFT-3 S3-36); `Wire::net` stays the first path's.
+    for sec in contents.iter_mut().flat_map(|c| c.values_mut()) {
+        sec.extras.path_wire_nets.clear();
+    }
+    for ((path, file), copy) in later_paths.iter().zip(copies.iter()) {
+        let Some(sec) = contents.as_mut().and_then(|c| c.get_mut(file)) else { continue };
+        let key = path.join("/");
+        for (w, c) in sec.wires.iter().zip(copy.wires.iter()) {
+            if (!c.net.is_empty() && c.net != w.net) || c.pins != w.pins {
+                let net = if c.net.is_empty() { w.net.clone() } else { c.net.clone() };
+                sec.extras.path_wire_nets.entry(eda_model::sch_extras::wire_key(w)).or_default().insert(key.clone(), eda_model::sch_extras::PathWireNet { net, pins: c.pins.clone() });
+            }
+        }
+    }
     design.schematic = Some(root);
     design.sheet_contents = contents;
     traced
@@ -1257,6 +1274,12 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
         for w in sch.wires.iter_mut() {
             if let Some(name) = w.pins.iter().find_map(|p| net_of.get(p.as_str())) {
                 w.net = (*name).to_string();
+            }
+        }
+        // ... and the nets a later sheet path's wires are on (`SchExtras::path_wire_nets`, UI-LEFT-3 S3-36), by the pins they touch there
+        for p in sch.extras.path_wire_nets.values_mut().flat_map(|m| m.values_mut()) {
+            if let Some(name) = p.pins.iter().find_map(|pin| net_of.get(pin.as_str())) {
+                p.net = (*name).to_string();
             }
         }
     };

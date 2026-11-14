@@ -52,6 +52,26 @@ impl<'a> Board<'a> {
         out
     }
 
+    /// The reference every placed symbol (power symbols included) has on every sheet path of the hierarchy (`SCH_SHEET_LIST::GetSymbols`: an
+    /// `SCH_REFERENCE` per symbol per path), but those of the sheet path `skip`.
+    pub(crate) fn references_but(&self, skip: &[String]) -> Vec<UsedRef> {
+        let mut out: Vec<UsedRef> = Vec::new();
+        for e in eda_model::sheet_list::walk(&self.design) {
+            if e.path == skip {
+                continue;
+            }
+            let Some(sec) = eda_model::sheet_list::screen_of(&self.design, &e.path) else { continue };
+            for s in &sec.symbols {
+                let value = if s.value.is_empty() { self.model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };
+                out.push(UsedRef { reference: eda_model::sheet_list::reference_under(sec, s, &e.path), unit: eda_model::sheet_list::unit_under(sec, s, &e.path), lib_id: s.lib_id.clone(), value });
+            }
+            for p in &sec.power_symbols {
+                out.push(UsedRef { reference: eda_model::sheet_list::power_reference_under(sec, p, &e.path), unit: 1, lib_id: p.lib_id.clone(), value: p.net.clone() });
+            }
+        }
+        out
+    }
+
     /// Whether some sheet of the design places a symbol or a power symbol of `lib_id`.
     fn places_lib_id(&self, lib_id: &str) -> bool {
         self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).any(|s| s.symbols.iter().any(|x| x.lib_id == lib_id) || s.power_symbols.iter().any(|p| p.lib_id == lib_id))
@@ -153,6 +173,12 @@ impl<'a> Board<'a> {
     /// `Cmd::PasteSch` -- see the module doc. Returns what the paste put on the sheet at its top: the ids of the new items that are in no new group and of the new groups that
     /// are in no other (what `SCH_SELECTION` then holds, and what Place as group groups).
     pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode, numbering: eda_model::sch_clipboard::PasteNumbering) -> Result<Vec<String>, Vec<CheckResult>> {
+        self.paste_sch_in(fragment, dx, dy, mode, numbering, false)
+    }
+
+    /// [`Board::paste_sch`]; `import` is Import Sheet's placing of a file's contents, whose sheets share no screen the design shows
+    /// ([`Board::paste_sheets`]).
+    pub(crate) fn paste_sch_in(&mut self, fragment: &SchFragment, dx: Nm, dy: Nm, mode: PasteMode, numbering: eda_model::sch_clipboard::PasteNumbering, import: bool) -> Result<Vec<String>, Vec<CheckResult>> {
         if fragment.is_empty() {
             return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
         }
@@ -470,7 +496,7 @@ impl<'a> Board<'a> {
         // hierarchical sheets: each a new sheet, with copies of the screens it shows (the sheet part of `SCH_EDITOR_CONTROL::Paste`)
         if !src.sheets.is_empty() {
             let first_sheet = self.schematic()?.sheets.len();
-            self.paste_sheets(fragment, dx, dy, mode)?;
+            self.paste_sheets(fragment, dx, dy, mode, import)?;
             // they are added by name, naturally (`sortedLoadedItems`)
             let mut by_name: Vec<&eda_model::ir::SheetInstance> = src.sheets.iter().collect();
             by_name.sort_by(|a, b| eda_model::sheet_list::str_num_cmp(&a.name, &b.name));

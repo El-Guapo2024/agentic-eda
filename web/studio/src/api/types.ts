@@ -317,6 +317,9 @@ export interface Part {
   /** Floorplan block this part belongs to, if any. */
   block: string | null;
   placed: boolean;
+  /** Kept off the board: every placed symbol of the reference is excluded from the board, by its own attribute or by a sheet of its path (the board's netlist has
+   *  no component for it, `NETLIST_EXPORTER_XML::makeSymbols`' `forBoard`): Update PCB adds no footprint for it (UI-LEFT-3 S3-33). Absent from an older backend. */
+  excluded_from_board?: boolean;
   /** Courtyard full (width, height), nm — present even when unplaced. */
   size: [Nm, Nm] | null;
 

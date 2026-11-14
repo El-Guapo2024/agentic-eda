@@ -1,4 +1,4 @@
-// Fields as items of the schematic: the symbol's Reference, Value, Footprint and Datasheet, a power symbol's Value, a sheet's name and file. Each is selected, moved,
+// Fields as items of the schematic: the symbol's Reference, Value, Footprint and Datasheet, a power symbol's Value, a sheet's name, file and user fields. Each is selected, moved,
 // turned, mirrored and edited on its own (`SCH_FIELD`, eeschema/sch_field.cpp; `SCH_MOVE_TOOL::moveItem`, `SCH_EDIT_TOOL::Rotate` / `Mirror` /
 // `AutoplaceFields`, `DIALOG_FIELD_PROPERTIES`), through the same backend verbs as every other item (crates/ops/src/sch_fields.rs).
 //
@@ -59,7 +59,11 @@ export function fieldItems(sch: FieldSheet): FieldItem[] {
       out.push({ id, owner, ownerKind, field: { ...f, id } });
     }
   };
-  for (const s of sch.sheets) push(s.id, "sheet", s.fields);
+  // a sheet's Sheetname and Sheetfile, then its user fields (`SCH_SHEET::GetFields()`: every one an `SCH_FIELD` the selection tool picks, UI-LEFT-3 S3-6)
+  for (const s of sch.sheets) {
+    push(s.id, "sheet", s.fields);
+    push(s.id, "sheet", s.user_fields_drawn);
+  }
   for (const p of sch.power_symbols) push(p.id, "power", p.fields);
   for (const s of sch.symbols) push(ownerKey(s), "symbol", s.fields);
   for (const l of sch.labels ?? []) {
@@ -285,6 +289,11 @@ export const fieldTextCmd = (owner: string, name: string, text: string): Cmd => 
  * `SCH_EDIT_TOOL::editFieldText`'s caption for Field Properties: "Edit %s Field" with the title-capped default name of a mandatory field (`TitleCaps(
  * GetDefaultFieldName( id ) )`, so a sheet's "Sheet name" is "Edit Sheet Name Field"), "Edit '%s' Field" with the name of any other field.
  */
+/** `SCH_FIELD::IsMandatory` of a sheet's field: the Sheetname and the Sheetfile; a user field (`FIELD_T::SHEET_USER`) is not. */
+export function isSheetMandatoryField(name: string): boolean {
+  return name === "Sheetname" || name === "Sheetfile";
+}
+
 export function fieldDialogCaption(name: string, ofSheet: boolean): string {
   const sheetNames: Record<string, string> = { Sheetname: "Sheet Name", Sheetfile: "Sheet File" };
   if (ofSheet && sheetNames[name]) return `Edit ${sheetNames[name]} Field`;

@@ -15,11 +15,20 @@ import { REPLACE_OPTIONS, type ReportLine } from "./pcbExchange";
 export interface UpdatePart {
   ref: string;
   placed: boolean;
+  /** Excluded from the board by its symbol or a sheet of its path: `BOARD_NETLIST_UPDATER::UpdateNetlist` skips the component (`exclude_from_board`). */
+  excluded_from_board?: boolean;
+}
+
+/** A part the board still waits for: unplaced and not kept off the board (`UpdateNetlist` adds a footprint only for a component without `exclude_from_board`;
+ *  one already on the board stays, as Update PCB's "Delete footprints with no symbols" is off by default). */
+export function stillToPlace(p: UpdatePart): boolean {
+  return !p.placed && !p.excluded_from_board;
 }
 
 /** The report line for F8: how the board stands with the schematic once the footprint changes are told. */
 export function updatePcbMessage(parts: readonly UpdatePart[]): string {
-  const unplaced = parts.filter((p) => !p.placed).map((p) => p.ref);
+  parts = parts.filter((p) => p.placed || !p.excluded_from_board);
+  const unplaced = parts.filter(stillToPlace).map((p) => p.ref);
   const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   const head = "PCB is up to date with the schematic (schematic edits reach the board as you make them).";
   if (parts.length === 0) return `${head} It has no footprints yet.`;

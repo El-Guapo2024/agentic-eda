@@ -236,8 +236,8 @@ fn format_reference(prefix: &str, number: u32, power: bool) -> String {
 /// * [`PasteMode::Unique`]: all pasted symbols go through `ReannotateDuplicates` -- they are numbered by prefix and then left to right, and each
 ///   takes the first number from its own that nothing else holds (its own, when it is free). The units of a multi-unit symbol that were pasted
 ///   together share one number, and a unit may join a number already used by the same part when that unit is still free there.
-/// * [`PasteMode::Keep`]: a reference not yet in the design stays; one already taken is numbered as in `Unique`. A power symbol is always
-///   numbered afresh (`AlwaysAnnotate`), from 1.
+/// * [`PasteMode::Keep`]: a reference not yet in the design stays, and so does a placeholder (`R?1`: an unannotated symbol); one already taken is
+///   numbered as in `Unique`. A power symbol is always numbered afresh (`AlwaysAnnotate`), from 1.
 /// * [`PasteMode::Remove`]: every pasted symbol is numbered from 1.
 ///
 /// `numbering` and `sheet_number` (`GetPageNumberAsInt` of the sheet pasted on): the numbers counted from. `ReannotateDuplicates` (Unique, and a taken
@@ -266,6 +266,13 @@ pub fn annotate_paste_tracked(used: &[UsedRef], pasted: &[PastedRef], mode: Past
     // `Keep`: a pasted symbol keeps its reference when that is a real number nothing else in the design (or earlier in the paste) has.
     if mode == PasteMode::Keep {
         for (i, p) in pasted.iter().enumerate() {
+            // an unannotated symbol the design holds under a placeholder of its own (`R?1`, the sheet reader's) stays unannotated, as KiCad keeps its `R?`
+            // (`placeSheetContents` with "Keep annotations": no `AnnotateSymbols`; `Paste`'s `KEEP_ANNOTATIONS`: no `ReannotateDuplicates`; UI-LEFT-3 S3-7)
+            if crate::annotate::shown_reference(&p.reference) != p.reference && !p.power && !taken_exact.contains(&(p.reference.clone(), p.unit)) {
+                taken_exact.insert((p.reference.clone(), p.unit));
+                out[i] = Some(p.reference.clone());
+                continue;
+            }
             let (prefix, number) = split_reference(&p.reference);
             let Some(number) = number else { continue };
             if always_annotated(&p.reference, p.power) || taken_exact.contains(&(p.reference.clone(), p.unit)) {

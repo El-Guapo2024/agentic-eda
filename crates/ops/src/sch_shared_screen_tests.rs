@@ -262,3 +262,30 @@ fn a_reset_that_hands_a_reference_to_another_path_moves_the_footprints_with_thei
     assert_eq!(at(&b, "R3"), Some(mm(1.0)), "the first placement's R1 footprint is its R3 now");
     assert_eq!(at(&b, "R1"), Some(mm(3.0)), "the second placement's R3 footprint is its R1 now");
 }
+
+/// UI-LEFT-3 S3-33: a sheet drawn on a screen shown twice has its records of a variant per sheet path (`SCH_SHEET_INSTANCE::m_Variants`): Sheet Properties' Do
+/// not populate in a variant on the second placement (`SCH_SHEET::SetDNP( value, &instance, variant )` with the path in view) sets that path's record, which
+/// the symbols inside on that path take (`SCH_SHEET_PATH::GetDNP( variant )`), and leaves the first placement's; set back, nothing per path is left. Removing,
+/// renaming or copying the variant takes the path's records along.
+#[test]
+fn a_sheet_on_a_shared_screen_has_its_variant_records_per_path() {
+    let m = ConstraintModel::default();
+    let mut d = channels();
+    let inner = placement("inner", "Inner", "inner.kicad_sch", "");
+    d.sheet_contents.as_mut().unwrap().get_mut("ch.kicad_sch").unwrap().sheets.push(inner);
+    d.sheet_contents.as_mut().unwrap().insert("inner.kicad_sch".into(), section(vec![], vec![]));
+    d.schematic.as_mut().unwrap().extras.variants.insert("V1".into(), String::new());
+    let mut b = Board::new(d, &m, mm(0.1), mm(0.3));
+    let set = |dnp: bool| crate::sch_edit::SchCmd::SetSheetVariant { id: "inner".into(), variant: "V1".into(), dnp: Some(dnp), exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, fields: None };
+    b.apply(&on("sb", Cmd::SchEdit(set(true)))).unwrap();
+    let flags = |b: &Board, first: &str| eda_model::variants::sheet_path_flags(b.design(), &[first.to_string(), "inner".to_string()], "V1").dnp;
+    assert!(flags(&b, "sb") && !flags(&b, "sa"), "the second placement's inner sheet only");
+    let ch = &b.design().sheet_contents.as_ref().unwrap()["ch.kicad_sch"];
+    assert!(ch.extras.sheet_variants.is_empty() && ch.extras.path_sheet_variants["inner"].contains_key("sb"));
+    // renamed, the path's record follows
+    b.apply(&Cmd::RenameDesignVariant { name: "V1".into(), new_name: "V2".into() }).unwrap();
+    assert!(eda_model::variants::sheet_path_flags(b.design(), &["sb".to_string(), "inner".to_string()], "V2").dnp);
+    // set back on that path: nothing per path is left
+    b.apply(&on("sb", Cmd::SchEdit(crate::sch_edit::SchCmd::SetSheetVariant { id: "inner".into(), variant: "V2".into(), dnp: Some(false), exclude_from_sim: None, exclude_from_bom: None, exclude_from_board: None, fields: None }))).unwrap();
+    assert!(b.design().sheet_contents.as_ref().unwrap()["ch.kicad_sch"].extras.path_sheet_variants.is_empty());
+}

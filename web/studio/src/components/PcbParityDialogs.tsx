@@ -29,6 +29,7 @@ import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import { placeFootprintArmedDone, placeFootprintChooserCancelled, placeFootprintChosen } from "../actions/placeFootprintTool";
+import { stillToPlace } from "../kicad-port/updatePcb";
 
 export function PcbParityDialogs() {
   const which = useStudioState().pcbx.pcbDialog;
@@ -400,7 +401,7 @@ function PlaceFootprintDialog() {
   const unplaced = useMemo(
     () =>
       (parts ?? [])
-        .filter((p) => !p.placed)
+        .filter(stillToPlace)
         .sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0))
         .map((p) => ({ ref: p.ref, label: p.value ?? p.package ?? "" })),
     [parts]

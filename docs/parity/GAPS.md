@@ -249,7 +249,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Edit Text & Graphics as one verb over every sheet (`global_edit_text_graphics`: the reference, library id, type and net filters, font, text colour, a field's
   alignment, line and fill colours, sheet titles, sheet fields, borders, label fields); Change / Update Symbols' resets in the change's own step, a field reset
   to the library's place. **Left**: a range selection in the Fields Table's grid; a sheet pin's font and colour; a label's alignment (its spin) and a directive
-  label's size, bold and italic in Edit Text & Graphics; the net of a screen shown twice is one name for every path; a reset of a symbol whose library symbol the
+  label's size, bold and italic in Edit Text & Graphics; the net of a screen shown twice is one name for every path (done 2026-11-14, `task-v16-schsheets`, PARITY-sch §98: `SchExtras::path_wire_nets`); a reset of a symbol whose library symbol the
   project keeps no copy of is Autoplace's.
 - Done 2026-11-06 (`task-u4-schleft`, UI-LEFT S13, S16, S18, S19, S20, S22; `PARITY-sch.md` section 62): Draw Arc's three clicks (KiCad 25ec2335) and the arc
   point editor; Edit Text & Graphics over fields, labels, wires, buses, junctions and sheet pins; Change / Update Symbols' field resets; Break and Repeat without

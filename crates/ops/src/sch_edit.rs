@@ -1201,6 +1201,7 @@ fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckRes
     sch.extras.sheet_fields.remove(id);
     sch.extras.sheet_field_places.remove(id);
     sch.extras.sheet_variants.remove(id);
+    sch.extras.path_sheet_variants.remove(id);
     sch.extras.sheet_pages.remove(id);
     Ok(())
 }
