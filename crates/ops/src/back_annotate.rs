@@ -23,12 +23,17 @@
 //! its sheet), which the dialog sends with its footprint changes as one undo step of both editors; the net list then follows the drawing
 //! (`reconcile_schematic`), which now draws the board's nets.
 //!
-//! **Differs** (the studio's one design, or what it does not hold): units of one footprint placed on different sheets, or on a sheet shown by more than one
-//! placement, are not swapped (`SetSymbolUnit` acts on one sheet), so their pins go to the labels; the order of the report is the sheets' walk and the
-//! symbols' order on each, where KiCad sorts by the symbols' uuids; a hidden power input of an ordinary symbol does not count as a power pin (only power
-//! symbols do); the connection-graph fallback of `processNetNameChange` (a label in the middle of an unsplit wire) is not needed, as the walk here finds a
-//! label anywhere on a wire; the label a pin gets reads away from the pin as the symbol draws it (`orientLabel` reads the library pin, which a pin swap does
-//! not move).
+//! Units of one footprint placed on different sheets, or on a sheet shown by more than one placement, are swapped too (UI-LEFT-3 P3-34): KiCad sets each
+//! symbol's unit on its own sheet path (`SetUnit`, `SetUnitSelection( sheet, .. )`), the studio sends a `SetSymbolUnit` on each sheet (one with `swap` where
+//! the two are on one sheet path). The driver walk takes the symbols' pins as `GetDriverPriority` does: a hidden power input of an ordinary symbol is a
+//! global power pin (`SCH_PIN::IsGlobalPower`'s legacy rule), so a net it drives is not renamed. `processNetNameChange`'s fallback to the connection graph's
+//! resolved driver, for when "the physical connection walk could not find a label driver" (a label in the middle of an unsplit wire, which `ConnectedItems`
+//! does not reach), is the walk itself here: [`driver_at`] finds a label anywhere on a wire of the pin's connection, which is the subgraph the fallback reads,
+//! so what the fallback would rename (the label, a power symbol the subgraph has) the walk already found.
+//!
+//! **Differs** (the studio's one design, or what it does not hold): the order of the report is the sheets' walk and the symbols' order on each, where KiCad
+//! sorts by the symbols' uuids; the label a pin gets reads away from the pin as the symbol draws it (`orientLabel` reads the library pin, which a pin swap
+//! does not move).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -155,6 +160,26 @@ fn driver_at(scene: &Scene, model: &ConstraintModel, tip: Point) -> Driver {
         for (pi, pin) in sheet.pins.iter().enumerate() {
             if on(pin.at) {
                 consider(Driver::SheetPin(si, pi));
+            }
+        }
+    }
+    // `GetDriverPriority( SCH_PIN )` of the symbols' pins: a hidden power input of an ordinary symbol is a global power pin (`SCH_PIN::IsGlobalPower`: "Legacy
+    // support: invisible power-in pins on non-power symbols act as global power"), a local power symbol's power input a local one; the pin itself counts too
+    for (si, sym) in scene.sch.symbols.iter().enumerate() {
+        let pins: Vec<(String, Point)> = scene.pins_of(si).into_iter().filter(|(_, at)| on(*at)).collect();
+        if pins.is_empty() {
+            continue;
+        }
+        let Some(lib) = placed_lib_symbol(model, &scene.sch, sym) else { continue };
+        for (number, _) in pins {
+            let Some(pin) = lib.pins.iter().chain(lib.other_bodies().flat_map(|a| a.pins.iter())).find(|p| p.number == number) else { continue };
+            if pin.electrical_type != "power_in" {
+                continue;
+            }
+            if lib.power && lib.connectivity.power_local {
+                consider(Driver::LocalPower);
+            } else if lib.power || pin.hidden {
+                consider(Driver::GlobalPower);
             }
         }
     }
@@ -293,10 +318,6 @@ impl<'a> Planner<'a> {
             }
             sch_nets.push(sch);
         }
-        // The studio swaps units on one sheet that one placement shows (`SetSymbolUnit` with `swap`).
-        if items.iter().any(|i| i.path != items[0].path || !i.shared_sheets.is_empty()) {
-            return swapped;
-        }
         // `netsInUnitOrder`
         let in_order = |pins: &[String], nets: &BTreeMap<String, String>| -> Vec<String> {
             if pins.is_empty() {
@@ -342,8 +363,16 @@ impl<'a> Planner<'a> {
         }
         for (a, b) in steps {
             let (au, bu) = (items[a].unit, items[b].unit);
-            let id = self.screen(&items[a].path).symbols[items[a].sym].id.clone();
-            self.out.cmds.push(on_sheet(&items[a].path, SchCmd::SetSymbolUnit { id, unit: Some(au), new_unit: bu, swap: true }));
+            // `a.sym->SetUnit( bUnit ); b.sym->SetUnit( aUnit )` with `SetUnitSelection( sheet, .. )` on each one's own sheet path: one swap where the two are on one
+            // sheet path (`SetSymbolUnit` with `swap`), else each set on its own sheet (a screen shown twice: that placement's unit, `SchExtras::path_units`)
+            let (sym_a, sym_b) = (&self.screen(&items[a].path).symbols[items[a].sym], &self.screen(&items[b].path).symbols[items[b].sym]);
+            let (id_a, own_a, id_b, own_b) = (sym_a.id.clone(), sym_a.unit, sym_b.id.clone(), sym_b.unit);
+            if items[a].path == items[b].path {
+                self.out.cmds.push(on_sheet(&items[a].path, SchCmd::SetSymbolUnit { id: id_a, unit: Some(own_a), new_unit: bu, swap: true }));
+            } else {
+                self.out.cmds.push(on_sheet(&items[a].path, SchCmd::SetSymbolUnit { id: id_a, unit: Some(own_a), new_unit: bu, swap: false }));
+                self.out.cmds.push(on_sheet(&items[b].path, SchCmd::SetSymbolUnit { id: id_b, unit: Some(own_b), new_unit: au, swap: false }));
+            }
             items[a].unit = bu;
             items[b].unit = au;
             swapped.insert(a);
