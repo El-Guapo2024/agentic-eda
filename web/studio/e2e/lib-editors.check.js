@@ -426,7 +426,10 @@
     const none = await __eda.run("eeschema.SymbolLibraryControl.updateSymbolFields");
     await sleep(300);
     t(!tid("update-symbol-fields"), "no dialog for a symbol that is not derived");
-    t(/Symbol is not derived from another symbol\./.test(toastText() + (none.toast ?? "")), `KiCad's message: ${toastText() || none.toast}`);
+    // `m_frame->ShowInfoBarError( .. )`: the frame's info bar (UI-LEFT-3 Y3-7)
+    await until(() => tid("sym-infobar-text")?.textContent, 2000);
+    const bar = tid("sym-infobar-text")?.textContent;
+    t(/Symbol is not derived from another symbol\./.test((bar ?? "") + toastText() + (none.toast ?? "")), `KiCad's message in the info bar: ${bar}`);
   }, [/Symbol is not derived from another symbol\./]);
 
   await scenario("Bulk Edit Related Symbol Fields lists the root and what is derived from it; the Library scope lists them all; OK writes the cells", async (t) => {
@@ -1073,7 +1076,10 @@
     t(tid("alt-name-0")?.value === "" && tid("alt-type-0")?.value === "bidirectional" && tid("alt-shape-0")?.value === "line", `a new row has no name and the pin's type and style: ${JSON.stringify([tid("alt-name-0")?.value, tid("alt-type-0")?.value, tid("alt-shape-0")?.value])}`);
     // OK with a nameless row: refused in the dialog's words
     await click(tid("pin-props-ok"), 300);
-    t(/Alternate pin definitions must have a name\./.test(tid("pin-props-error")?.textContent ?? "") && !!tid("pin-alternates"), `refused: ${tid("pin-props-error")?.textContent}`);
+    // `DisplayErrorMessage`: KiCad's Error box, the dialog stays (UI-LEFT-3 Y3-7)
+    const refusedText = await until(() => tid("message-box-text")?.textContent, 3000);
+    t(/Alternate pin definitions must have a name\./.test(refusedText ?? "") && tid("message-box")?.getAttribute("aria-label") === "Error" && !!tid("pin-alternates"), `refused: ${refusedText}`);
+    tid("message-box-ok")?.click(); await sleep(150);
     await type(tid("alt-name-0"), "UART_TX");
     await choose(tid("alt-type-0"), "output");
     tid("pin-alternates-add").click(); await sleep(150);
