@@ -360,6 +360,8 @@ export function SymbolEditorCanvas() {
       selection: state.selection,
       // the Pin Table's cross-probed pin (`FocusOnItem`'s `SetBrightened`) and Find's matches (`UpdateFind`'s `BrightenItem`), in `LAYER_BRIGHTENED`
       brightened: new Set([...(state.brightened ? [state.brightened.id] : []), ...symFind.bright, ...menuHighlight]),
+      // their shadow's width: the schematic's Display Options' "Highlight thickness:" (`eeconfig()->m_Selection.highlight_thickness`)
+      highlightThicknessMils: studioPrefs.schHighlightThicknessMils,
       gridNm: state.gridNm,
       gridVisible: state.gridVisible,
       gridYNm,
@@ -392,7 +394,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, menuHighlight, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
+  }), [gridDisplay, gridYNm, sym, shownFields, state.view, state.selection, state.brightened, symFind.bright, menuHighlight, studioPrefs.schHighlightThicknessMils, state.gridNm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorNm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, carried, pointEditor, containerSize, snapTick, themeStamp]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

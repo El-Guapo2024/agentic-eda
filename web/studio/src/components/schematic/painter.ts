@@ -88,6 +88,8 @@ const CAP_HEIGHT = 0.95;
 const BOLD_THICKNESS_FACTOR = 1 / 5;
 
 export interface SchematicPaintOptions {
+  /** `m_Selection.highlight_thickness`, mils (Display Options' "Highlight thickness:"): the brightened items' shadow (`getShadowWidth( true )`). KiCad's 2 when absent. */
+  highlightThicknessMils?: number;
   selection: Set<string>;
   netHighlight: string | null;
   /** GET /api/erc's current report (kicad-cli's), or null when ERC has not run this session -- kept showing after the dialog closes, like KiCad's own markers until the next run. */
@@ -1460,16 +1462,16 @@ function paintBrightened(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
   // the shadow first (`drawingShadows`: `LAYER_BRIGHTENED` at 0.15 alpha, each line `getShadowWidth( true )` wider -- Display Options' highlight thickness in pixels and
   // in mils, `fabs( scale * milsWidth ) + MilsToIU( milsWidth )`), then the item itself
   const shade = cssOfAlpha(bright, 0.15);
-  withFinalColourScope(ctx, memoColours(`schshade|${shade}`, () => shade), () => withWiderLines(ctx, brightenedShadowWidth(view.scale), drawAll));
+  withFinalColourScope(ctx, memoColours(`schshade|${shade}`, () => shade), () => withWiderLines(ctx, brightenedShadowWidth(view.scale, opts.highlightThicknessMils), drawAll));
   withFinalColourScope(ctx, memoColours(`schbright|${bright}|${[...backgrounds].join("|")}`, (css) => (backgrounds.has(css) ? faint : bright)), drawAll);
   paintedSelection = kept;
 }
 
-/** `EESCHEMA_SETTINGS::m_Selection.highlight_thickness` (`selection.highlight_thickness`, mils): KiCad's default, 2. */
+/** `EESCHEMA_SETTINGS::m_Selection.highlight_thickness` (`selection.highlight_thickness`, mils): KiCad's default, 2 (the person's is `state.prefs.schHighlightThicknessMils`). */
 export const HIGHLIGHT_THICKNESS_MILS = 2;
 
 /** `SCH_PAINTER::getShadowWidth( true )`, nm: the highlight thickness in screen pixels (`GetScreenWorldMatrix().GetScale()`) plus as many mils. */
-export function brightenedShadowWidth(viewScale: number, mils = HIGHLIGHT_THICKNESS_MILS): number {
+export function brightenedShadowWidth(viewScale: number, mils: number = HIGHLIGHT_THICKNESS_MILS): number {
   return Math.abs(mils / (viewScale || 1)) + mils * 25_400;
 }
 

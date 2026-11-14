@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   assignScrollModifier,
+  sanitizeHighlightThickness,
   defaultZoomSpeed,
   DEFAULT_PREFERENCES,
   loadPreferences,
@@ -202,4 +203,14 @@ test("UI-LEFT-2 CC3: Left button drag starts as KiCad's DRAG_SELECTED in every e
   const v2: Record<string, string> = { [PREFERENCES_STORAGE_KEY]: JSON.stringify({ dragLeft: "drag_any", schemaVersion: PREFERENCES_SCHEMA_VERSION }) };
   assert.equal(loadPreferences({ getItem: (k) => v2[k] ?? null, setItem: () => {} }).dragLeft, "drag_any", "saved from version 2 on: a choice");
   assert.equal(sanitizePreferences({ dragLeft: "drag_any" }).dragLeft, "drag_any", "the Preferences dialog's own copy (no version) is taken as it is");
+});
+
+test("Display Options' Highlight thickness: KiCad's 2 mils by default; the 0 .. 50 spin box, KiROUND on OK; a stored value made valid", () => {
+  assert.equal(DEFAULT_PREFERENCES.schHighlightThicknessMils, 2);
+  assert.equal(sanitizeHighlightThickness(7.6, 2), 8);
+  assert.equal(sanitizeHighlightThickness(80, 2), 50);
+  assert.equal(sanitizeHighlightThickness(-3, 2), 0);
+  assert.equal(sanitizeHighlightThickness("x", 5), 5);
+  assert.equal(sanitizePreferences({ schHighlightThicknessMils: 12 }).schHighlightThicknessMils, 12);
+  assert.equal(sanitizePreferences({}).schHighlightThicknessMils, 2);
 });

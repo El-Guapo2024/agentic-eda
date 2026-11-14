@@ -32,7 +32,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { NET_NAMES_CHOICES, TRACK_CLEARANCE_CHOICES, sanitizeNetNamesMode, sanitizeTrackClearanceMode } from "../kicad-port/pcbDisplayOptions";
-import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
+import { assignScrollModifier, DEFAULT_PREFERENCES, MOUSE_SCROLL_DEFAULTS, sanitizeHighlightThickness, sanitizePreferences, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 import { usePcbColorsPage } from "./PcbColorsPage";
 import { PCB_AXES_FIELDS, PcbOriginsAxesPage } from "./PcbOriginsAxesPage";
@@ -377,8 +377,8 @@ export function PreferencesDialog() {
         };
         return { run, tooltip: RESET_TOOLTIP };
       }
-      // the schematic's `PANEL_EESCHEMA_DISPLAY_OPTIONS::ResetPanel` also its Appearance ("Default font:" of a fresh `EESCHEMA_SETTINGS`)
-      return { run: () => { if (e === "schematic") set({ schDefaultFont: DEFAULT_PREFERENCES.schDefaultFont }); setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })); }, tooltip: RESET_TOOLTIP };
+      // the schematic's `PANEL_EESCHEMA_DISPLAY_OPTIONS::ResetPanel` also its Appearance ("Default font:") and Selection ("Highlight thickness:") of a fresh `EESCHEMA_SETTINGS`
+      return { run: () => { if (e === "schematic") set({ schDefaultFont: DEFAULT_PREFERENCES.schDefaultFont, schHighlightThicknessMils: DEFAULT_PREFERENCES.schHighlightThicknessMils }); setWindows((all) => ({ ...all, [e]: { ...all[e], gridStyle: DEFAULT_WINDOW_OPTIONS.gridStyle, gridLineWidth: DEFAULT_WINDOW_OPTIONS.gridLineWidth, gridMinSpacing: DEFAULT_WINDOW_OPTIONS.gridMinSpacing, gridSnap: DEFAULT_WINDOW_OPTIONS.gridSnap, crossHairMode: DEFAULT_WINDOW_OPTIONS.crossHairMode, alwaysShowCursor: DEFAULT_WINDOW_OPTIONS.alwaysShowCursor } })); }, tooltip: RESET_TOOLTIP };
     }
     if (page === "fp_graphics") return { run: () => set({ fpTextGraphics: null }), tooltip: `Reset to ${FACTORY_TEXT_GRAPHICS.silk.line_width_nm / 1e6} mm silkscreen lines and KiCad's other factory values` };
     return null;
@@ -494,6 +494,23 @@ export function PreferencesDialog() {
               </option>
             ))}
           </select>
+        </div>
+        {/* Selection's "Highlight thickness:" (`m_highlightWidthCtrl`, a 0 .. 50 spin box, `selection.highlight_thickness`): the brightened items' shadow,
+            `SCH_PAINTER::getShadowWidth( true )`. KiCad's other Selection rows are not here (the studio has no such settings yet). */}
+        {heading("Selection")}
+        <div className="filter-row">
+          <span style={{ width: 170 }}>Highlight thickness:</span>
+          <input
+            type="number"
+            aria-label="Highlight thickness:"
+            data-testid="pref-sch-highlight-thickness"
+            style={{ width: 70 }}
+            min={0}
+            max={50}
+            step={1}
+            value={draft.schHighlightThicknessMils}
+            onChange={(e) => set({ schHighlightThicknessMils: sanitizeHighlightThickness(Number(e.target.value), draft.schHighlightThicknessMils) })}
+          />
         </div>
       </>
     );

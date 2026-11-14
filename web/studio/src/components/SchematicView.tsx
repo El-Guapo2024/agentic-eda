@@ -498,7 +498,7 @@ export function SchematicView() {
     // the current design variant's flags and field texts (KiCad 25ec2335 `SCH_EDIT_FRAME::SetCurrentVariant` -> `HardRedraw`: the painter reads every symbol through it)
     // the item being edited is drawn as its points have it so far, with what follows it (the point editor changes the items as it goes)
     const shownSch = shapeEditor && pointDrag ? shapeEditor.shown(displaySch) : displaySch;
-    paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId, brightened: [...menuHighlight, ...findHighlights], defaultFont: state.prefs.schDefaultFont });
+    paintSchematic(ctx, state.schematicView, withOpVars(withVariant(shownSch, state.schVariant), simUi.frame.circuit, simUi.opPoints), { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId, brightened: [...menuHighlight, ...findHighlights], defaultFont: state.prefs.schDefaultFont, highlightThicknessMils: state.prefs.schHighlightThicknessMils });
     // the carried item is on the canvas, in this state of it (the test hook's timing: no round trip before it shows)
     if (carryShown && carry) noteCarryPainted(carry.seq);
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
@@ -609,7 +609,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }), [menuHighlight, findHighlights, state.prefs.schDefaultFont, sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, gridIdx, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
+  }), [menuHighlight, findHighlights, state.prefs.schDefaultFont, state.prefs.schHighlightThicknessMils, sch, displaySch, shapeEditor, pointDrag, gridDisplay, gridNm, gridSettingsList, gridIdx, state.gridVisible, state.schVariant, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorNm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId, imageHand, imageVersion, simVersion, themeStamp]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
