@@ -44,9 +44,10 @@ export interface PinTextPlacements {
   number: PinTextPlacement | null;
 }
 
-/** `~` stands for no name. */
+/** `SCH_PIN::GetShownName`: the name as it is -- a KiCad 5 legacy pin's `~` is drawn as `~`, as KiCad 10 draws it (a file older than 20250318 had its empty `~`
+ *  made empty as it was read, `tilde_text`); none for no name. */
 export function shownPinName(name: string | null | undefined): string {
-  return !name || name === "~" ? "" : name;
+  return name ?? "";
 }
 
 /**

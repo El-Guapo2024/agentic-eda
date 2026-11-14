@@ -63,11 +63,14 @@ test("hidden names and hidden numbers are not placed; a name of ~ is no name", (
   const b = pinTextPlacements({ name: "A", number: "1" }, [0, 0], [2_540_000, 0], { ...DEFAULT_PIN_TEXTS, numbersHidden: true });
   assert.ok(b.name);
   assert.equal(b.number, null);
-  const c = pinTextPlacements({ name: "~", number: "1" }, [0, 0], [2_540_000, 0]);
+  const c = pinTextPlacements({ name: "", number: "1" }, [0, 0], [2_540_000, 0]);
   assert.equal(c.name, null);
-  assert.equal(shownPinName("~"), "");
+  // a KiCad 5 legacy pin's `~` is a name KiCad 10 draws (`GetShownName`); no name is none
+  assert.equal(shownPinName("~"), "~");
+  assert.equal(shownPinName(""), "");
+  assert.ok(pinTextPlacements({ name: "~", number: "1" }, [0, 0], [2_540_000, 0]).name, "the `~` is placed like any name");
   // with no name shown the number stays over the line even for a symbol whose names are over the pins
-  const d = pinTextPlacements({ name: "~", number: "1" }, [0, 0], [2_540_000, 0], { ...DEFAULT_PIN_TEXTS, nameOffsetNm: 0 });
+  const d = pinTextPlacements({ name: "", number: "1" }, [0, 0], [2_540_000, 0], { ...DEFAULT_PIN_TEXTS, nameOffsetNm: 0 });
   at(d.number, 1_270_000, -OFF);
 });
 

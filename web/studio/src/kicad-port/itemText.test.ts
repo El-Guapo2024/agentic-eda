@@ -60,11 +60,11 @@ test("Copy as Text on the schematic: a label, a text, a sheet pin, a shown field
   assert.deepEqual(schSelectionTexts(s, ["fld:R1:Value"]), ["Value: 10k"], "a field whose name is shown gives the name too");
   assert.deepEqual(schSelectionTexts(s, ["tb_a"]), [" boxed "]);
   assert.deepEqual(schSelectionTexts(s, ["pin:R1:1"]), ["A"]);
-  // a pin named "~" has no name to give, and what has no text gives nothing
-  assert.deepEqual(schSelectionTexts(s, ["pin:R1:2"]), [""]);
+  // a legacy pin's "~" is its name (`GetShownName`), and what has no text gives nothing
+  assert.deepEqual(schSelectionTexts(s, ["pin:R1:2"]), ["~"]);
   assert.deepEqual(schSelectionTexts(s, ["R1", "shp_a", "sheet_a", "gone"]), []);
   // what goes on the clipboard: each text trimmed, the empty ones dropped, one per line in the order selected
-  assert.equal(selectionAsText(schSelectionTexts(s, ["txt_a", "lbl_a", "pin:R1:2", "R1", "shpin_a"])), "note\nover two lines\nCLK\nIN");
+  assert.equal(selectionAsText(schSelectionTexts(s, ["txt_a", "lbl_a", "pin:R1:2", "R1", "shpin_a"])), "note\nover two lines\nCLK\n~\nIN");
 });
 
 test("Copy as Text gives what a text variable stands for, as GetShownText( true ) does, for a text and a field", () => {

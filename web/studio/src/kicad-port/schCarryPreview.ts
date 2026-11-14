@@ -97,7 +97,7 @@ export function libSymbolOfLibrary(sym: LibrarySymbol): LibSymbol {
   }
   const pins: LibPin[] = sym.pins.map((p) => ({
     number: p.number,
-    name: p.name === "~" ? "" : p.name,
+    name: p.name, // a legacy pin's `~` is its name
     electrical_type: p.electrical_type,
     shape: p.shape,
     at: pt(p.at),

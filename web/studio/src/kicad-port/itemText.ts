@@ -58,7 +58,7 @@ export function schSelectionTexts(sch: Schematic, ids: readonly string[]): strin
       continue;
     }
     const pin = pinById(sch, id);
-    if (pin) out.push(pin.name === "~" ? "" : (pin.name ?? ""));
+    if (pin) out.push(pin.name ?? ""); // a legacy pin's `~` is its name
   }
   return out;
 }
