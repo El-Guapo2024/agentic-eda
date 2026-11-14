@@ -1036,7 +1036,9 @@ fn chain_courtyard(parts: Vec<Vec<[i64; 2]>>) -> Vec<Vec<[i64; 2]>> {
 /// A silkscreen text's effective shape (`PCB_TEXT::GetEffectiveShape`): its glyph segments as wide as its pen (`EDA_TEXT::GetEffectiveTextShape`,
 /// [`crate::stroke_text`]), or for a knockout text its box ([`crate::stroke_text::knockout_box`], the shape being the box less the text). The shown text is
 /// `GetShownText`'s: `resolve` is the text's resolver (`PCB_TEXT::GetShownText`: `LAYER`, its footprint's, the board's). `None` for a text off the
-/// silkscreen, hidden, or one the port does not draw. An outline font's glyphs are its triangles ([`eda_model::outline_font::triangulate`]). `place` takes a footprint's text from its frame to the board's; `in_footprint`
+/// silkscreen, hidden, or one the port does not draw. An outline font's glyphs are its triangles ([`eda_model::outline_font::triangulate`], UI-LEFT-3 C3-3):
+/// a marker at another item's point inside a glyph is KiCad's; one on a side of a triangle is not offered as KiCad has it -- its corners are FreeType's hinted
+/// ones (a few micrometres off the unhinted outline read here) and its diagonals `POLYGON_TRIANGULATION`'s -- so such an exclusion holds in the studio only. `place` takes a footprint's text from its frame to the board's; `in_footprint`
 /// keeps it upright (`GetDrawRotation`).
 fn silk_text(g: &[crate::sexpr::Sexpr], place: &dyn Fn([i64; 2]) -> [i64; 2], in_footprint: bool, resolve: &dyn Fn(&str, &str) -> Option<String>) -> Option<SilkText> {
     use crate::sexpr::{find, tag, txt};
