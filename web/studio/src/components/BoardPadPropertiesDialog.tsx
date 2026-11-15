@@ -41,6 +41,8 @@ import { TeardropFields } from "./TeardropFields";
 import { NumberInput } from "./NumberInput";
 import { useOriginTransforms } from "../state/originTransforms";
 import { toDisplay } from "../kicad-port/originTransforms";
+import { openPcbCalculator } from "../state/pcbCalculator";
+import { calcPageIndex } from "./calculator/pages";
 
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
@@ -305,14 +307,16 @@ export function BoardPadPropertiesDialog() {
                   <>
                     <span>Hole diameter</span>
                     <span>
-                      {len(form.drill, (d) => set("drill", d), 74, "pad-drill")} {units}
+                      {len(form.drill, (d) => set("drill", d), 74, "pad-drill")} {units}{" "}
+                      <HoleSizeCalculatorButton />
                     </span>
                   </>
                 ) : (
                   <>
                     <span>Hole size</span>
                     <span>
-                      {len(form.slotW, (v) => set("slotW", v), 74, "pad-slot-w")} × {len(form.slotH, (v) => set("slotH", v), 74, "pad-slot-h")} {units}
+                      {len(form.slotW, (v) => set("slotW", v), 74, "pad-slot-w")} × {len(form.slotH, (v) => set("slotH", v), 74, "pad-slot-h")} {units}{" "}
+                      <HoleSizeCalculatorButton />
                     </span>
                   </>
                 )}
@@ -412,5 +416,17 @@ export function BoardPadPropertiesDialog() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * `m_launchCalculatorBtn` beside the hole size (`DIALOG_PAD_PROPERTIES::OnHoleSizeCalculator`): opens the Calculator Tools on the Through-hole Size page
+ * (KIWAY mail `MAIL_CALC_SHOW` with `{ "page": "pth_size" }`, then the frame shown and raised).
+ */
+function HoleSizeCalculatorButton() {
+  return (
+    <button type="button" data-testid="pad-hole-calculator" title="Open the through-hole size calculator" aria-label="Open the through-hole size calculator" onClick={() => openPcbCalculator(calcPageIndex("pth_size"))}>
+      🖩
+    </button>
   );
 }

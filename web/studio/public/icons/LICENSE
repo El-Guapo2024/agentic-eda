@@ -8,3 +8,6 @@ The DRC Rule Editor's constraint pictures (constraint_*.png) are KiCad's rendere
 
 The Draw Arc mode icons (add_arc_center, add_arc_start_end_mid, add_arc_start_end_center, add_arc_tangent, add_arc_start_dir_end) are KiCad 10's, newer than
 that commit: resources/bitmaps_png/sources/{light,dark} at 25ec2335f2, under the same license.
+
+The Calculator Tools' regulator pictures (regul, regul_3pins) are KiCad 10's: resources/bitmaps_png/sources/{light,dark} at 25ec2335f2, under the
+same license.

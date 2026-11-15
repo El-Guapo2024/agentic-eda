@@ -20,6 +20,9 @@
   font-size: 12px;
   outline: none;
 }
+.calc-window.raised {
+  z-index: 2100;
+}
 .calc-window:focus-within {
   border-color: var(--chrome-accent);
 }

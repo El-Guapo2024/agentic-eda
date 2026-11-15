@@ -93,6 +93,25 @@ export function CalculatorWindow() {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const move = useRef<{ dx: number; dy: number } | null>(null);
   const selected = shownPageIndex(ui.settings.last_page);
+  // The window's place among the studio's windows: raised (above the modal dialogs) when it is opened on a page from a dialog (the pad dialog's hole
+  // size button: `showCalculatorPage` raises KiCad's frame) or clicked, back under them once something outside it is clicked. Its own dialogs
+  // (z-index 2300) stay above it.
+  const [raised, setRaised] = useState(false);
+  useEffect(() => {
+    if (ui.showRequest > 0) setRaised(true);
+  }, [ui.showRequest]);
+  useEffect(() => {
+    if (!ui.open) return;
+    const onDoc = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (root.current?.contains(t)) return setRaised(true);
+      const backdrop = t?.closest?.(".dialog-backdrop") as HTMLElement | null;
+      if (backdrop && Number(backdrop.style.zIndex) >= 2300) return;
+      setRaised(false);
+    };
+    document.addEventListener("pointerdown", onDoc, true);
+    return () => document.removeEventListener("pointerdown", onDoc, true);
+  }, [ui.open]);
 
   // Ctrl+W / Ctrl+Q while the window has the keyboard (File > Close / Quit).
   useEffect(() => {
@@ -113,7 +132,7 @@ export function CalculatorWindow() {
   const select = (i: number) => updatePcbCalculatorSettings((s) => void (s.last_page = shownPageIndex(i)));
   const style: React.CSSProperties = pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : {};
   return (
-    <div ref={root} className="calc-window" role="dialog" aria-label="Calculator Tools" data-testid="calculator-window" style={style} tabIndex={-1}>
+    <div ref={root} className={`calc-window${raised ? " raised" : ""}`} role="dialog" aria-label="Calculator Tools" data-testid="calculator-window" style={style} tabIndex={-1}>
       <div
         className="calc-titlebar"
         onPointerDown={(e) => {
@@ -133,7 +152,7 @@ export function CalculatorWindow() {
           ×
         </button>
       </div>
-      <Menus onRun={(name) => run(name)} />
+      <Menus onRun={(name) => (setRaised(false), run(name))} />
       <div className="calc-body">
         <div className="calc-tree" role="tree" aria-label="Calculators" data-testid="calculator-tree">
           {CALC_PAGES.map((p, i) => (
