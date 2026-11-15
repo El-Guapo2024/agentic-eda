@@ -10,7 +10,9 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
   - Font hinting (skrifa) and shaping (rustybuzz) crates (UI-LEFT-3 C3-3 / C3-8 follow-up): not added.
   - Python scripting, action plugins and footprint wizards: skipped; the AI agent driving `eda` / the IR does what scripts would.
 - **Kept (the user, 2026-11-15):** one project folder per server (`eda board serve -C dir`); no New/Open Project or project manager.
-- **Next:** KiCad's calculators (pcb_calculator) in the studio, lane `task-v20-calc`.
+  - Footprint Viewer and Symbol Viewer windows (the editors' library trees browse parts).
+  - Hyperlynx and footprint-report (.rpt) exporters (kicad-cli has neither; ours would be a second exporter).
+- **Next (batch v20):** KiCad's calculators (pcb_calculator, `task-v20-calc`); Component Classes (`task-v20-compclass`); the small model gaps: a pin's alternate function, a footprint's user-layer drawings flipping, Explode / Recombine of a custom pad and the like (`task-v20-modelgaps`).
 - **Lessons:** the v19 X3-2 change (no stand-in box for a part without a model) broke 3D picking only on the merged tree; gate the merged tree before pushing.
 
 ## Earlier (2026-11-13): round 2 done; round 3 (leftovers) starting
