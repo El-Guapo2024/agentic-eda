@@ -417,6 +417,10 @@ pub enum Cmd {
         /// the CLI), as the studio has no zint (UI-LEFT-3 P3-32). A barcode not in it is judged by its box.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         barcode_shapes: BTreeMap<String, Vec<Vec<Point>>>,
+        /// `PlaceItem`'s `via->SetIsFree( via->GetNetCode() > 0 )` for a net taken from the zone fill under it (`findStitchedZoneNet`): the studio, which chose
+        /// the net, says so; the via is written `(free yes)` when it also has a net. Off for a track's, a pad's or a graphic's net (`SetIsFree( false )`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        free: bool,
     },
     /// Remove a via by id.
     DeleteVia { id: String },
@@ -1357,6 +1361,9 @@ pub enum Cmd {
     SetCornerRadius { ids: Vec<String>, radius: Nm },
     /// A via's tenting, covering, plugging, capping, filling, backdrill and post-machining (`TRACK_VIA_DESC`'s rows past "Via Type"), all at once.
     SetViaProps { id: String, props: eda_model::via_extra::ViaProps },
+    /// `PCB_VIA::SetIsFree` on the vias `ids` (Track & Via Properties' "Automatically update via nets", the Properties panel's "Automatically Update Net": both
+    /// are `!free`): the via's `(free yes)` token ([`eda_model::via_extra::ViaExtra::set_free`]). One undo step; refused when nothing changes.
+    SetViaFree { ids: Vec<String>, free: bool },
     /// Text Properties of a footprint's own text on the board (`REF~t<k>`, UI-LEFT P15; [`fp_texts`]): its text and layout (`layout` in the footprint's frame,
     /// its layer the board side's), or `delete` it; in the instance's own copy of its footprint.
     EditBoardFootprintText {
@@ -2924,7 +2931,7 @@ impl Cmd {
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::MirrorTracks { ids, .. } | Cmd::MirrorItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } | Cmd::EditTextStyle { id, .. } | Cmd::SetViaProps { id, .. } => vec![id.as_str()],
             Cmd::SetZoneDefaults { .. } => vec!["zone_defaults"],
-            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSolderMask { ids, .. } | Cmd::SetCornerRadius { ids, .. } | Cmd::SetTeardropParams { ids, .. } | Cmd::SetViaFree { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditBoardFootprintText { id, .. } => vec![id.as_str()],
             Cmd::SetFootprintPasteMargin { part, .. } => vec![part.as_str()],
             Cmd::SetFootprintSolderMask { part, .. } => vec![part.as_str()],
@@ -3515,8 +3522,8 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
 
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
-            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes } => {
-                self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations, hidden_layers, barcode_shapes)
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes, free } => {
+                self.place_via(net, *x, *y, *drill, *diameter, from_layer, to_layer, split_track.as_deref(), *allow_drc_violations, hidden_layers, barcode_shapes, *free)
             }
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
@@ -3768,6 +3775,7 @@ impl<'a> Board<'a> {
             Cmd::SetSolderMask { ids, solder_mask, margin } => self.set_solder_mask(ids, *solder_mask, *margin),
             Cmd::SetCornerRadius { ids, radius } => self.set_corner_radius(ids, *radius),
             Cmd::SetViaProps { id, props } => self.set_via_props(id, props),
+            Cmd::SetViaFree { ids, free } => self.set_via_free(ids, *free),
             Cmd::SetTeardropParams { ids, params } => self.set_teardrop_params(ids, params.as_ref()),
             Cmd::EditBoardFootprintText { id, text, layout, delete } => self.edit_board_footprint_text(id, text.as_deref(), layout.as_ref(), *delete),
             Cmd::SetFootprintPasteMargin { part, margin, ratio } => self.set_footprint_paste_margin(part, *margin, *ratio),

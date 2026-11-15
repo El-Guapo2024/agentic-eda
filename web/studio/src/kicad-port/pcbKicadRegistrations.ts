@@ -71,6 +71,8 @@ export const KICAD_PCB_REGISTRATIONS: Decl[] = [
   ...inherits("PCB_ARC", "PCB_TRACK"),
   ...inherits("PCB_VIA", "BOARD_CONNECTED_ITEM"),
   ...mask("PCB_VIA", "BOARD_CONNECTED_ITEM", "Layer"),
+  // KiCad 25ec2335 PCB_VIA_DESC: `PCB_VIA::SetIsNotFree` / `GetIsNotFree`, no group (task-v20-modelgaps)
+  ...add("PCB_VIA", "", "Automatically Update Net"),
   ...add("PCB_VIA", "Via Properties", "Diameter", "Hole", "Layer Top", "Layer Bottom", "Via Type", "Front tenting", "Back tenting", "Front covering", "Back covering", "Front plugging", "Back plugging", "Capping", "Filling"),
   ...add("PCB_VIA", "Backdrill", "Backdrill Mode", "Bottom Backdrill Size", "Bottom Backdrill Must-Cut", "Top Backdrill Size", "Top Backdrill Must-Cut"),
   ...add("PCB_VIA", "Post-machining", "Front Post-machining", "Front Post-machining Size", "Front Post-machining Depth", "Front Post-machining Angle", "Back Post-machining", "Back Post-machining Size", "Back Post-machining Depth", "Back Post-machining Angle"),

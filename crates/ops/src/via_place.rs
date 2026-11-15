@@ -462,7 +462,7 @@ fn split_at(track: &Track, at: Point) -> Option<Split> {
 impl Board<'_> {
     /// `Cmd::PlaceVia`: `VIA_PLACER::PlaceItem` with the net chosen ([`self`](crate::via_place) module doc).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool, hidden_layers: &[String], barcode_shapes: &BTreeMap<String, Vec<Vec<Point>>>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn place_via(&mut self, net: &str, x: Nm, y: Nm, drill: Nm, diameter: Nm, from_layer: &str, to_layer: &str, split_track: Option<&str>, allow_drc_violations: bool, hidden_layers: &[String], barcode_shapes: &BTreeMap<String, Vec<Vec<Point>>>, free: bool) -> Result<(), Vec<CheckResult>> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
@@ -496,6 +496,7 @@ impl Board<'_> {
         };
         let locked = split.as_ref().is_some_and(|(t, _)| self.design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| *l == t.id)));
         let rt = self.routing_mut();
+        let ids_before: BTreeSet<String> = rt.vias.iter().map(|v| v.id.clone()).collect();
         rt.vias.push(via);
         let mut new_track_seed = None;
         if let Some((t, k)) = split {
@@ -525,8 +526,17 @@ impl Board<'_> {
             rt.tracks.push(tail);
         }
         rt.assign_missing_ids();
+        let via_id = rt.vias.iter().find(|v| !ids_before.contains(&v.id)).map(|v| v.id.clone());
         let tail_id = new_track_seed.and_then(|pts| rt.tracks.iter().find(|x| x.pts == pts).map(|x| x.id.clone()));
         self.sort_routing();
+        // `via->SetIsFree( via->GetNetCode() > 0 )`: a stitching via that took a zone's net is free (its net is not changed by what it connects to)
+        if free && !net.is_empty() {
+            if let Some(id) = via_id {
+                let mut extra = eda_model::via_extra::ViaExtra { id: id.clone(), ..Default::default() };
+                extra.set_free(true);
+                self.drawings_mut().via_extras.push(extra);
+            }
+        }
         if locked {
             if let Some(id) = tail_id {
                 let dr = self.drawings_mut();
@@ -563,7 +573,7 @@ mod tests {
     }
 
     fn place(net: &str, x: f64, y: f64, split: Option<String>, allow: bool) -> Cmd {
-        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow, hidden_layers: Vec::new(), barcode_shapes: Default::default() }
+        Cmd::PlaceVia { net: net.into(), x: mm(x), y: mm(y), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: split, allow_drc_violations: allow, hidden_layers: Vec::new(), barcode_shapes: Default::default(), free: false }
     }
 
     fn track(net: &str, a: (f64, f64), b: (f64, f64)) -> Cmd {
@@ -578,6 +588,29 @@ mod tests {
         let v = &b.design().routing.as_ref().unwrap().vias[0];
         assert_eq!((v.net.as_str(), v.at), ("", Point { x: mm(10.0), y: mm(10.0) }));
         assert_eq!(b.apply(&place("NOPE", 20.0, 10.0, None, false)).unwrap_err()[0].check, "ops_unknown_net");
+    }
+
+    /// `PlaceItem`: a via that took the net of the zone fill under it is free (`via->SetIsFree( via->GetNetCode() > 0 )`); one of no net is not, nor one of a
+    /// track's net (`SetIsFree( false )`). The flag is the via's `(free yes)` token, which the board writer writes.
+    #[test]
+    fn a_stitching_via_of_a_zones_net_is_free() {
+        let m = model();
+        let mut b = Board::new(design(), &m, mm(0.1), mm(0.3));
+        let free = |c: Cmd| match c {
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes, .. } => {
+                Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes, free: true }
+            }
+            _ => unreachable!(),
+        };
+        b.apply(&free(place("GND", 10.0, 10.0, None, false))).unwrap();
+        b.apply(&free(place("", 20.0, 10.0, None, false))).unwrap();
+        b.apply(&place("GND", 30.0, 10.0, None, false)).unwrap();
+        let rt = b.design().routing.as_ref().unwrap();
+        let id_at = |x: f64| rt.vias.iter().find(|v| v.at.x == mm(x)).unwrap().id.clone();
+        let dr = b.design().drawings.as_ref().unwrap();
+        assert!(dr.via_extra(&id_at(10.0)).is_some_and(|e| e.is_free() && e.tokens == ["(free yes)"]));
+        assert!(dr.via_extra(&id_at(20.0)).is_none(), "no net: GetNetCode() > 0 is false");
+        assert!(dr.via_extra(&id_at(30.0)).is_none());
     }
 
     #[test]
@@ -623,7 +656,7 @@ mod tests {
         b.apply(&track("VCC", (0.0, 5.0), (10.0, 5.0))).unwrap();
         assert!(b.apply(&place("GND", 5.0, 5.45, None, false)).is_err());
         let Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, .. } = place("GND", 5.0, 5.45, None, false) else { unreachable!() };
-        b.apply(&Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers: vec!["F.Cu".into()], barcode_shapes: Default::default() }).unwrap();
+        b.apply(&Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers: vec!["F.Cu".into()], barcode_shapes: Default::default(), free: false }).unwrap();
     }
 
     /// Round 6 C6-3: a board text is judged by `GetEffectiveShape` with its own attributes: the Text tool's bottom-justified text sits above its anchor, and a
@@ -882,7 +915,7 @@ mod tests {
         let shapes: BTreeMap<String, Vec<Vec<Point>>> = [("bar_1".to_string(), vec![vec![pt(55.0, 55.0), pt(65.0, 55.0), pt(65.0, 65.0), pt(55.0, 65.0)], vec![pt(56.0, 56.0), pt(64.0, 56.0), pt(64.0, 64.0), pt(56.0, 64.0)]])].into();
         let with_shapes = |x: f64, y: f64, shapes: BTreeMap<String, Vec<Vec<Point>>>| {
             let Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } = place_vcc(x, y, false) else { unreachable!() };
-            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes: shapes }
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, barcode_shapes: shapes, free: false }
         };
         assert_eq!(Board::new(d.clone(), &m, mm(0.1), mm(0.3)).apply(&with_shapes(60.0, 60.0, BTreeMap::new())).unwrap_err()[0].hint.as_deref(), Some(VIA_VIOLATES_DRC), "its box");
         Board::new(d.clone(), &m, mm(0.1), mm(0.3)).apply(&with_shapes(60.0, 60.0, shapes.clone())).unwrap();

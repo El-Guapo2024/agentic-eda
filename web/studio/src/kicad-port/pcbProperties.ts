@@ -1425,6 +1425,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     if (diameter <= drill) return "Via hole size must be smaller than via diameter";
     return null;
   };
+  // KiCad 25ec2335's "Automatically Update Net" (`PCB_VIA::SetIsNotFree` / `GetIsNotFree`: `!m_isFree`, registered with no group before "Diameter"): `set_via_free`
+  // (task-v20-modelgaps).
+  add({
+    owner: "PCB_VIA",
+    name: "Automatically Update Net",
+    kind: "bool",
+    get: (i) => !i.via!.free,
+    set: (i, v) => (!i.via!.free === Boolean(v) ? [] : [{ op: "set_via_free", ids: [i.id], free: !v }]),
+  });
   add(
     {
       owner: "PCB_VIA",

@@ -992,7 +992,8 @@ export function Canvas() {
       if (state.activeTool === "via") {
         const { placer, viaPreset, copper } = viaPlacerFor(board, e);
         const at = snapViaPosition(placer, [wx, wy], [sx, sy]);
-        const place = (net: string, track: string | null) =>
+        // `free`: a stitching via of a zone's net (`via->SetIsFree( via->GetNetCode() > 0 )`, kicad-port/viaPlacer.ts `viaNet`)
+        const place = (net: string, track: string | null, free: boolean) =>
           void api.cmd({
             op: "place_via",
             net,
@@ -1006,16 +1007,17 @@ export function Canvas() {
             allow_drc_violations: state.routerSettings.mode === "mark_obstacles" && state.routerSettings.allowDrcViolations,
             // `checkDRCViolation`'s `view->Query` skips hidden layers (round 6 C6-1).
             hidden_layers: copper.filter((l) => !layerIsVisible(state.layerVisible, l)),
+            ...(free && net !== "" ? { free: true } : {}),
           });
         const choice = viaNet(placer, at);
-        if (choice.kind === "net") place(choice.net, choice.track);
+        if (choice.kind === "net") place(choice.net, choice.track, choice.free);
         else {
           // `selectPossibleNetsByPopupMenu`: "The net assignment is ambiguous. Let the user decide." -- a cancelled menu places nothing.
           const labels = selectNetLabels(choice.nets);
           setContextMenu({
             x: e.clientX,
             y: e.clientY,
-            entries: [{ label: SELECT_NET_TITLE, onSelect: () => {}, disabled: true }, { label: "", onSelect: () => {}, separator: true }, ...choice.nets.map((net, i) => ({ label: labels[i]!, onSelect: () => place(net, null) }))],
+            entries: [{ label: SELECT_NET_TITLE, onSelect: () => {}, disabled: true }, { label: "", onSelect: () => {}, separator: true }, ...choice.nets.map((net, i) => ({ label: labels[i]!, onSelect: () => place(net, null, true) }))],
           });
         }
         return;

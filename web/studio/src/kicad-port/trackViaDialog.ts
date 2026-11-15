@@ -15,7 +15,11 @@
 //
 // UI-LEFT P3 (task-u5-pcbfp): the via's padstack, protection, backdrill and post-machining go out as one `set_via_props` per via with its whole `ViaProps` (each
 // via's own values kept where a field is indeterminate, as `TransferDataFromWindow` keeps them), the teardrops as `set_teardrop_params`. Not here: the connected
-// tracks KiCad offers to resize with a via, the "Automatically update via nets" (free via) box.
+// tracks KiCad offers to resize with a via.
+//
+// "Automatically update via nets" (`m_viaNotFree`, 3-state: `!GetIsFree()` of the first via, indeterminate where the vias differ; task-v20-modelgaps): OK sends
+// `set_via_free` when it is determinate and changed (`if( m_viaNotFree->Get3StateValue() != wxCHK_UNDETERMINED ) via->SetIsFree( !m_viaNotFree->GetValue() )`);
+// ticked with no track selected it disables the Net box (`onViaNotFreeClicked`), and a net chosen unticks it (`onNetSelector`).
 import type { BoardState, Cmd, Ipc4761Preset, Nm, PostMachiningProps, TeardropParams, UnconnectedLayers, Via, ViaPadstack, ViaProps } from "../api/types";
 import { validateViaParameters } from "./routerVia";
 import { viaConfiguration, withPreset } from "./viaProtection";
@@ -40,6 +44,8 @@ export interface TrackViaForm {
   viaFrom: string | null;
   viaTo: string | null;
   rings: UnconnectedLayers | null;
+  /** "Automatically update via nets" (`m_viaNotFree`): `!GetIsFree()`, null where the vias differ (or there are none). */
+  notFree: boolean | null;
   /** "Padstack mode:" of the first via (`m_viaStack`, a copy of its padstack), and the diameter of each layer it names (`Inner` for front/inner/back). */
   padstackMode: PadstackMode;
   layerSizes: Record<string, Nm>;
@@ -168,6 +174,7 @@ export function trackViaForm(board: BoardState, ids: readonly string[]): TrackVi
     viaFrom: common(vias.map((v) => v.from)),
     viaTo: common(vias.map((v) => v.to)),
     rings: common(vias.map((v) => v.unconnected ?? "keep_all")),
+    notFree: common(vias.map((v) => !v.free)),
     padstackMode: stack?.mode ?? "normal",
     layerSizes: { ...(stack?.sizes ?? {}) },
     editLayer: "F.Cu",
@@ -287,6 +294,12 @@ export function trackViaCmds(board: BoardState, before: TrackViaForm, form: Trac
     if (changed("rings")) viaRow.unconnected = form.rings!;
     if (Object.keys(viaRow).length > 2) cmds.push(viaRow);
   }
+  // `via->SetIsFree( !m_viaNotFree->GetValue() )` when the box is not indeterminate (only the vias whose flag differs change)
+  if (form.vias.length > 0 && form.notFree != null) {
+    const free = !form.notFree;
+    const ids = form.vias.filter((id) => !!board.routing!.vias.find((q) => q.id === id)?.free !== free);
+    if (ids.length > 0) cmds.push({ op: "set_via_free", ids, free });
+  }
   for (const id of form.vias) {
     const v = board.routing!.vias.find((q) => q.id === id)!;
     if (changed("viaX") || changed("viaY")) cmds.push({ op: "move_via", id, x: form.viaX ?? v.x, y: form.viaY ?? v.y });
@@ -313,6 +326,16 @@ export function trackViaCmds(board: BoardState, before: TrackViaForm, form: Trac
   // only when the box is not indeterminate.
   if (cmds.length > 0 || changed("net")) cmds.push({ op: "track_via_nets", ids: all, net: form.net ?? null });
   return { cmds };
+}
+
+/** `onNetSelector`: a net chosen unticks "Automatically update via nets". */
+export function withNetChosen(form: TrackViaForm, net: string | null): TrackViaForm {
+  return { ...form, net, ...(form.vias.length > 0 ? { notFree: false } : {}) };
+}
+
+/** The Net box is disabled while "Automatically update via nets" is ticked and no track is selected (`TransferDataToWindow`, `onViaNotFreeClicked`). */
+export function netSelectorEnabled(form: TrackViaForm): boolean {
+  return !(form.vias.length > 0 && form.tracks.length === 0 && form.notFree === true);
 }
 
 /** An object with its keys in order, to compare two `ViaProps` whatever order their keys were set in. */

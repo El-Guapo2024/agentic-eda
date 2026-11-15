@@ -551,6 +551,8 @@ export interface Via {
   props?: ViaProps | null;
   /** Its own teardrop parameters (`PCB_VIA::GetTeardropParams`); absent when Board Setup's block serves it. */
   teardrops?: TeardropParams | null;
+  /** `PCB_VIA::GetIsFree` (`(free yes)`): its net is not changed by what it touches ("Automatically update via nets" off); absent when it is not free. */
+  free?: boolean | null;
 }
 
 /** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
@@ -2097,7 +2099,7 @@ export type Cmd =
   | { op: "set_track_width"; id: string; width: Nm }
   | { op: "add_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string }
   /** The Draw Via tool's via (crates/ops/src/via_place.rs, `VIA_PLACER::PlaceItem`): `net` "" is a free via of no net; refused with "Via location violates DRC." unless `allow_drc_violations`; `split_track` is cut at the via. */
-  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean; hidden_layers?: string[] }
+  | { op: "place_via"; net: string; x: Nm; y: Nm; drill: Nm; diameter: Nm; from_layer: string; to_layer: string; split_track?: string | null; allow_drc_violations?: boolean; hidden_layers?: string[]; free?: boolean }
   | { op: "delete_via"; id: string }
   | { op: "move_via"; id: string; x: Nm; y: Nm }
   /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
@@ -2363,6 +2365,8 @@ export type Cmd =
   | { op: "set_corner_radius"; ids: string[]; radius: Nm }
   /** A via's tenting, covering, plugging, capping, filling, backdrill and post-machining, whole (`set_via_props`). */
   | { op: "set_via_props"; id: string; props: ViaProps }
+  /** `PCB_VIA::SetIsFree` on vias (Track & Via Properties' "Automatically update via nets", the panel's "Automatically Update Net"; both are `!free`). */
+  | { op: "set_via_free"; ids: string[]; free: boolean }
   /** Vias' and pads' own teardrop parameters (`GetTeardropParams() = ..`); `null` gives them back to Board Setup's block. */
   | { op: "set_teardrop_params"; ids: string[]; params: TeardropParams | null }
   /** Text Properties of a footprint's own text on the board (`REF~t<k>`): its text and layout (the footprint's frame), or `delete` it. */

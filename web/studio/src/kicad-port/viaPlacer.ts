@@ -249,8 +249,12 @@ export function stitchedZoneNets(input: ViaPlacerInput, pos: Pt): string[] {
   return inNetCodeOrder(nets);
 }
 
-/** What `PlaceItem` gives the via at `pos`: a net (empty for none) and the track it splits, or the nets to choose from. */
-export type ViaNetChoice = { kind: "net"; net: string; track: string | null } | { kind: "choose"; nets: string[] };
+/**
+ * What `PlaceItem` gives the via at `pos`: a net (empty for none), the track it splits and whether the via is free, or the nets to choose from. `free` is
+ * `via->SetIsFree( via->GetNetCode() > 0 )` of a net taken from the zone fill under it (a net picked from the menu is free too, when it is one), and false for
+ * a track's, a pad's or a graphic's net (`SetIsFree( false )`).
+ */
+export type ViaNetChoice = { kind: "net"; net: string; track: string | null; free: boolean } | { kind: "choose"; nets: string[] };
 
 /** `PlaceItem`'s net: the track's (and that track is split), the pad's, a copper graphic's of a net, else `findStitchedZoneNet`. */
 export function viaNet(input: ViaPlacerInput, pos: Pt): ViaNetChoice {
@@ -261,19 +265,19 @@ export function viaNet(input: ViaPlacerInput, pos: Pt): ViaNetChoice {
   if (track) {
     const t = input.board.routing?.tracks.find((x) => x.id === track.owner);
     // `if( track && m_gridHelper.GetSnap() )`: the split; Shift (no snap) leaves the track whole.
-    return { kind: "net", net: t?.net ?? "", track: input.snap ? track.owner : null };
+    return { kind: "net", net: t?.net ?? "", track: input.snap ? track.owner : null, free: false };
   }
   const pad = findPad(scene, pos, diameter, layers, shown);
   if (pad) {
     const part = input.board.parts.find((p) => p.ref === pad.footprint);
     const num = pad.id.slice(pad.footprint.length + 1).split("#")[0];
-    return { kind: "net", net: part?.pads?.find((p) => p.num === num)?.net ?? "", track: null };
+    return { kind: "net", net: part?.pads?.find((p) => p.num === num)?.net ?? "", track: null, free: false };
   }
   const shape = findGraphic(scene, pos, diameter, layers, shown);
-  if (shape?.shape.net) return { kind: "net", net: shape.shape.net, track: null };
+  if (shape?.shape.net) return { kind: "net", net: shape.shape.net, track: null, free: false };
   const nets = stitchedZoneNets(input, pos);
   if (nets.length > 1) return { kind: "choose", nets };
-  return { kind: "net", net: nets[0] ?? "", track: null };
+  return { kind: "net", net: nets[0] ?? "", track: null, free: (nets[0] ?? "") !== "" };
 }
 
 /** `NO_NET` (`pcbnew/netinfo.h`, 25ec2335): the menu's name for net 0. */

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState } from "../api/types";
-import { trackViaCmds, trackViaForm, viaLayerDepth, withNetAnswers } from "./trackViaDialog";
+import { netSelectorEnabled, trackViaCmds, trackViaForm, viaLayerDepth, withNetAnswers, withNetChosen } from "./trackViaDialog";
 
 const board = {
   parts: [],
@@ -120,4 +120,35 @@ test("UI-LEFT P3: the via's protection, backdrill, post-machining and padstack a
   assert.ok("cmds" in fib);
   const sp = fib.cmds.find((c) => c.op === "set_via_props") as { props: { padstack?: unknown } };
   assert.deepEqual(sp.props.padstack, { mode: "front_inner_back", sizes: { Inner: 500_000 } });
+});
+
+test("Automatically update via nets (m_viaNotFree): !GetIsFree, indeterminate where the vias differ, set_via_free on OK; it greys the Net box and a net unticks it (task-v20-modelgaps)", () => {
+  const two = {
+    ...board,
+    routing: {
+      ...board.routing!,
+      vias: [
+        { id: "V1", net: "A", x: 5, y: 6, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu" },
+        { id: "V2", net: "A", x: 9, y: 6, d: 600_000, drill: 300_000, from: "F.Cu", to: "B.Cu", free: true },
+      ],
+    },
+  } as unknown as BoardState;
+  assert.equal(trackViaForm(two, ["V1"]).notFree, true);
+  assert.equal(trackViaForm(two, ["V2"]).notFree, false);
+  const before = trackViaForm(two, ["V1", "V2"]);
+  assert.equal(before.notFree, null, "the vias differ");
+  const none = trackViaCmds(two, before, before, String);
+  assert.ok("cmds" in none && none.cmds.length === 0, "indeterminate: left alone");
+  const out = trackViaCmds(two, before, { ...before, notFree: true }, String);
+  assert.ok("cmds" in out);
+  assert.deepEqual(out.cmds, [{ op: "set_via_free", ids: ["V2"], free: false }, { op: "track_via_nets", ids: ["V1", "V2"], net: "A" }], "only the via whose flag changes; the net last");
+  const freeOne = trackViaForm(two, ["V1"]);
+  const o2 = trackViaCmds(two, freeOne, { ...freeOne, notFree: false }, String);
+  assert.ok("cmds" in o2 && JSON.stringify(o2.cmds[0]) === JSON.stringify({ op: "set_via_free", ids: ["V1"], free: true }));
+  // `TransferDataToWindow` / `onViaNotFreeClicked`: ticked with vias alone greys the net; a track in the selection keeps it
+  assert.equal(netSelectorEnabled(freeOne), false);
+  assert.equal(netSelectorEnabled({ ...freeOne, notFree: false }), true);
+  assert.equal(netSelectorEnabled(trackViaForm(board, ["T1", "V1"])), true);
+  // `onNetSelector`: `m_viaNotFree->SetValue( false )`
+  assert.deepEqual([withNetChosen(freeOne, "B").net, withNetChosen(freeOne, "B").notFree], ["B", false]);
 });

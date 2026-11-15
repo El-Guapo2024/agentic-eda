@@ -4467,6 +4467,23 @@ mod tests {
         assert_eq!(strip(&design), strip(&back));
         // The tenting is still what the in-house checks read.
         assert!(design.drawings.as_ref().unwrap().via_tenting.iter().any(|t| (t.front, t.back) == (Some(false), Some(false))));
+        // `(free yes)` is `PCB_VIA::GetIsFree`; a via made free (`set_free`, task-v20-modelgaps) is written as `format( const PCB_TRACK* )` writes it, after the
+        // unconnected-layer settings and before the zone layer connections, and read back free; one made not free loses it.
+        assert!(extras[0].is_free() && !extras[1].is_free());
+        let mut freed = design.clone();
+        let dr = freed.drawings.as_mut().unwrap();
+        dr.via_extras[0].set_free(false);
+        let out = export_kicad_pcb(&freed, &model, &meta()).unwrap();
+        assert!(!out.contains("(free"), "{out}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert!(back.drawings.as_ref().unwrap().via_extras.iter().all(|e| !e.is_free()));
+        let mut freed = design.clone();
+        freed.drawings.as_mut().unwrap().via_extras[1].set_free(true);
+        let out = export_kicad_pcb(&freed, &model, &meta()).unwrap();
+        let line = |net: usize| out.lines().find(|l| l.contains("(via") && l.contains(&format!("(net {net}) "))).unwrap().trim().to_string();
+        assert!(line(2).starts_with("(via micro (at 20 10) (size 0.3) (drill 0.1) (layers \"F.Cu\" \"In1.Cu\") (free yes) (padstack "), "{}", line(2));
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.drawings.as_ref().unwrap().via_extras.iter().filter(|e| e.is_free()).count(), 2);
     }
 
     /// UI-LEFT P3: what Pad Properties and the Properties panel set on a pad goes in its place among the pad's tokens, as `format( const PAD* )` writes it: the
