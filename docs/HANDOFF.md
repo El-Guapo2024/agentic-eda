@@ -8,6 +8,9 @@ For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agen
 - **TODO (the user, 2026-11-15: skipped for now, leave it):**
   - Native ellipse shape (KiCad 25ec2335 `SHAPE_T::ELLIPSE` / `ELLIPSE_ARC`): model, file format, editors, painters, plot, 3D. It unlocks Draw Ellipse Arc (UI-LEFT-3 S3-28) and native ellipses for P3-28 / II5 imports. Unevenly scaled circles and arcs stay KiCad's polylines until then.
   - Font hinting (skrifa) and shaping (rustybuzz) crates (UI-LEFT-3 C3-3 / C3-8 follow-up): not added.
+  - Python scripting, action plugins and footprint wizards: skipped; the AI agent driving `eda` / the IR does what scripts would.
+- **Kept (the user, 2026-11-15):** one project folder per server (`eda board serve -C dir`); no New/Open Project or project manager.
+- **Next:** KiCad's calculators (pcb_calculator) in the studio, lane `task-v20-calc`.
 - **Lessons:** the v19 X3-2 change (no stand-in box for a part without a model) broke 3D picking only on the merged tree; gate the merged tree before pushing.
 
 ## Earlier (2026-11-13): round 2 done; round 3 (leftovers) starting
