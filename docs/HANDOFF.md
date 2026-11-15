@@ -2,7 +2,15 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
-## Start here (2026-11-13): round 2 done; round 3 (leftovers) starting
+## Start here (2026-11-15): round 3 done
+
+- **Main 57c49812** (+ UI-ACTIONS 3ab0c07b) holds all of round 3: batches v13-v19 and the gate fixes. Every `docs/parity/UI-LEFT-3.md` entry is done except Draw Ellipse Arc. Full suite on a6ad1dc0: web 4044/0 and node 3961/0; Rust 5338 passed, only the 2 known failures; browser 201 checks, all green after `task-v19-gatefix2` (a check reading the info bar; 3D click picks a footprint by its pads, `kicad-port/padPick3d.ts`).
+- **TODO (the user, 2026-11-15: skipped for now, leave it):**
+  - Native ellipse shape (KiCad 25ec2335 `SHAPE_T::ELLIPSE` / `ELLIPSE_ARC`): model, file format, editors, painters, plot, 3D. It unlocks Draw Ellipse Arc (UI-LEFT-3 S3-28) and native ellipses for P3-28 / II5 imports. Unevenly scaled circles and arcs stay KiCad's polylines until then.
+  - Font hinting (skrifa) and shaping (rustybuzz) crates (UI-LEFT-3 C3-3 / C3-8 follow-up): not added.
+- **Lessons:** the v19 X3-2 change (no stand-in box for a part without a model) broke 3D picking only on the merged tree; gate the merged tree before pushing.
+
+## Earlier (2026-11-13): round 2 done; round 3 (leftovers) starting
 
 - **Main 1fd92482** holds all of round 2: batches v5-v10 and `task-v11-cvpcb`. Every `docs/parity/UI-LEFT-2.md` entry is done or kept by design. Full suite on 1fd92482: web 3834/0; Rust 5118 passed, with only the 2 known failures `corpus_runs_every_seed` and `kicad_cli_plots_each_layer_of_the_qa_boards_padstacks_...`; parity reexport ok; browser 172/172, with rescue-symbols passing on retry.
 - **Round 3:** each branch's "What's left" column below, the PARITY files' leftovers and GAPS.md lows go into `docs/parity/UI-LEFT-3.md`, ranked by user impact. They are done in batches of 4 agents; each batch is gated in `~/work/agentic-eda-gate` and pushed.
