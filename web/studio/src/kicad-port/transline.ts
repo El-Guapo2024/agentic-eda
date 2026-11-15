@@ -1,7 +1,8 @@
 // The transmission-line calculators behind Board Setup > Design Rules > Tuning Profiles' track grid (KiCad 25ec2335 common/transline_calculations/): a single
 // microstrip, a single stripline, a coupled (differential) microstrip and a coupled stripline, each analysed (geometry -> impedance, effective permittivity,
 // unit propagation delay, losses) or synthesized (impedance -> width or gap), as `PANEL_SETUP_TUNING_PROFILE_INFO` drives them. The panel logic is
-// kicad-port/tuningCalculator.ts.
+// kicad-port/tuningCalculator.ts. The Calculator Tools' Transmission Lines panel (kicad-port/calc/translinePanel.ts) uses those four and the coaxial line,
+// the coplanar waveguide (with and without a ground plane), the rectangular waveguide and the twisted pair.
 //
 // Ported from (KiCad 25ec2335):
 //   transline_calculation_base.{h,cpp}     the parameter map, the result maps, MinimiseZ0Error1D, SkinDepth, UnitPropagationDelay, EllipticIntegral, coth / sech,
@@ -9,8 +10,10 @@
 //   dielectric_djordjevic_sarkar.{h,cpp}   Fit, ComplexEpsilonAt, EpsilonRealAt, TanDeltaAt
 //   microstrip.{h,cpp}                     all of MICROSTRIP
 //   stripline.{h,cpp}                      all of STRIPLINE
-//   coupled_microstrip.{h,cpp}             all but the DEFAULT synthesis (synth_width / syn_err_fun / syn_fun): the panel only fixes the width or the gap
-//   coupled_stripline.{h,cpp}              all but the DEFAULT / FROM_ZDIFF_ZCOMM synthesis (wcalc's 2-D Newton), for the same reason
+//   coupled_microstrip.{h,cpp}             all of COUPLED_MICROSTRIP (the DEFAULT synthesis is the Calculator Tools' Synthesize; synth_width stops after 10000 steps)
+//   coupled_stripline.{h,cpp}              all of COUPLED_STRIPLINE
+//   coax, coplanar, rectwaveguide,
+//   twistedpair.{h,cpp}                    all of them, for the Calculator Tools' Transmission Lines panel (kicad-port/calc/translinePanel.ts)
 //   units.h                                MU0, E0, C0, ZF0, LOG2DB
 //
 // The arithmetic is the C++'s, operation for operation and in its order (the same constants, iteration counts and tolerances), so a result agrees with
@@ -62,7 +65,14 @@ export type TCP =
   | "SOLDERMASK_PRESENT"
   | "SOLDERMASK_THICKNESS"
   | "SOLDERMASK_EPSILONR"
-  | "SOLDERMASK_TAND";
+  | "SOLDERMASK_TAND"
+  | "PHYS_DIAM_IN"
+  | "PHYS_DIAM_OUT"
+  | "CUTOFF_FREQUENCY"
+  | "TWISTEDPAIR_TWIST"
+  | "TWISTEDPAIR_EPSILONR_ENV"
+  | "CPW_BACKMETAL"
+  | "SOLDERMASK_FILLS_GAPS";
 
 /** `SYNTHESIZE_OPTS`. */
 export type SynthesizeOpts = "DEFAULT" | "FIX_WIDTH" | "FIX_SPACING" | "FROM_ZDIFF_ZCOMM";
@@ -88,7 +98,7 @@ export const DIELECTRIC_MODEL_DJORDJEVIC_SARKAR = 1;
 const M_PI = Math.PI;
 const M_PI_2 = Math.PI / 2;
 const M_E = Math.E;
-const { abs: fabs, sqrt, exp, log, log10, pow, tanh, cosh, atan, atanh, sin, cos, acos, atan2 } = Math;
+const { abs: fabs, sqrt, exp, log, log10, pow, tanh, cosh, sinh, acosh, atan, atanh, sin, cos, acos, atan2, floor } = Math;
 const isfinite = Number.isFinite;
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : hi < v ? hi : v);
 
@@ -174,6 +184,18 @@ export abstract class TranslineCalculationBase {
   /** `m_maxError`: the maximum error for Z0 optimisations. */
   protected static readonly m_maxError = 0.000001;
   protected m_dsModel: DielectricDjordjevicSarkar | null = null;
+  /** `m_synthesizeTarget`: which geometry parameter is the unknown during synthesis (set by the UI); `UNKNOWN_ID` is null. */
+  protected m_synthesizeTarget: TCP | null = null;
+
+  /** `SetSynthesizeTarget`: the base class takes any; a calculator that solves for given parameters only overrides it to ignore the others. */
+  SetSynthesizeTarget(aTarget: TCP): void {
+    this.m_synthesizeTarget = aTarget;
+  }
+
+  /** `GetSynthesizeTarget`. */
+  GetSynthesizeTarget(): TCP | null {
+    return this.m_synthesizeTarget;
+  }
 
   constructor(aParameters: readonly TCP[]) {
     for (const p of aParameters) this.m_parameters.set(p, 0.0);
@@ -895,11 +917,117 @@ export class CoupledMicrostrip extends TranslineCalculationBase {
     this.SetParameter("TAND", rawTanD);
   }
 
-  /** `COUPLED_MICROSTRIP::Synthesize`: FIX_WIDTH solves the gap, FIX_SPACING the width, each on the odd-mode impedance. The 2-D DEFAULT synthesis is not ported. */
+  /**
+   * `COUPLED_MICROSTRIP::Synthesize`: FIX_WIDTH solves the gap, FIX_SPACING the width, each on the odd-mode impedance; any other option (DEFAULT, and
+   * FROM_ZDIFF_ZCOMM, which this calculator does not read) solves width and gap together for Z0_E and Z0_O: `synth_width`'s closed-form first guess,
+   * then Newton-Raphson on `syn_fun` (at most 250 steps), the physical length from the angular length, and a last `Analyse`.
+   */
   Synthesize(aOpts: SynthesizeOpts): boolean {
     if (aOpts === "FIX_WIDTH") return this.MinimiseZ0Error1D("PHYS_S", "Z0_O", false);
     if (aOpts === "FIX_SPACING") return this.MinimiseZ0Error1D("PHYS_WIDTH", "Z0_O", false);
-    throw new Error("COUPLED_MICROSTRIP::Synthesize: only FIX_WIDTH and FIX_SPACING are ported");
+    const eps = 1e-4;
+    const Z0_e = this.GetParameter("Z0_E");
+    const Z0_o = this.GetParameter("Z0_O");
+    this.ang_l_e = this.GetParameter("ANG_L");
+    this.ang_l_o = this.GetParameter("ANG_L");
+    const ang_l_dest = this.GetParameter("ANG_L");
+    this.synth_width();
+    let w_h = this.GetParameter("PHYS_WIDTH") / this.GetParameter("H");
+    let s_h = this.GetParameter("PHYS_S") / this.GetParameter("H");
+    let f1 = 0;
+    let f2 = 0;
+    let err: number;
+    let iters = 0;
+    do {
+      ++iters;
+      let [ft1, ft2] = this.syn_fun(s_h + eps, w_h, Z0_e, Z0_o);
+      const j11 = (ft1 - f1) / eps;
+      const j21 = (ft2 - f2) / eps;
+      [ft1, ft2] = this.syn_fun(s_h, w_h + eps, Z0_e, Z0_o);
+      const j12 = (ft1 - f1) / eps;
+      const j22 = (ft2 - f2) / eps;
+      const d_s_h = (-f1 * j22 + f2 * j12) / (j11 * j22 - j21 * j12);
+      const d_w_h = (-f2 * j11 + f1 * j21) / (j11 * j22 - j21 * j12);
+      s_h += d_s_h;
+      w_h += d_w_h;
+      [f1, f2] = this.syn_fun(s_h, w_h, Z0_e, Z0_o);
+      err = sqrt(f1 * f1 + f2 * f2);
+    } while (err > 1e-4 && iters < 250);
+    if (err > 1e-4) return false;
+    this.SetParameter("PHYS_S", s_h * this.GetParameter("H"));
+    this.SetParameter("PHYS_WIDTH", w_h * this.GetParameter("H"));
+    const le = ((C0 / this.GetParameter("FREQUENCY") / sqrt(this.er_eff_e)) * ang_l_dest) / 2.0 / M_PI;
+    const lo = ((C0 / this.GetParameter("FREQUENCY") / sqrt(this.er_eff_o)) * ang_l_dest) / 2.0 / M_PI;
+    this.SetParameter("PHYS_LEN", sqrt(le * lo));
+    this.Analyse();
+    this.SetParameter("ANG_L", ang_l_dest);
+    this.SetParameter("Z0_E", Z0_e);
+    this.SetParameter("Z0_O", Z0_o);
+    return true;
+  }
+
+  /** `syn_err_fun`: the closed-form even / odd width errors of a (gap, width) guess against the single-line widths (the C++'s out-parameters are the pair). */
+  private syn_err_fun(s_h: number, w_h: number, e_r: number, w_h_se: number, w_h_so: number): [number, number] {
+    const g = cosh(0.5 * M_PI * s_h);
+    const he = cosh(M_PI * w_h + 0.5 * M_PI * s_h);
+    let f1 = (2.0 / M_PI) * acosh((2.0 * he - g + 1.0) / (g + 1.0));
+    let f2 = (2.0 / M_PI) * acosh((2.0 * he - g - 1.0) / (g - 1.0));
+    if (e_r <= 6.0) f2 += (4.0 / (M_PI * (1.0 + e_r / 2.0))) * acosh(1.0 + (2.0 * w_h) / s_h);
+    else f2 += (1.0 / M_PI) * acosh(1.0 + (2.0 * w_h) / s_h);
+    f1 -= w_h_se;
+    f2 -= w_h_so;
+    return [f1, f2];
+  }
+
+  /**
+   * `synth_width`: Wheeler's single-line widths for Z0_E / 2 and Z0_O / 2, Akhtarzad's guess of gap and width from them, refined by Newton-Raphson on
+   * `syn_err_fun`. KiCad loops until the error is below 1e-4 with no limit; this stops after 10000 steps so a guess that never converges cannot hang the
+   * page (the outer Newton-Raphson then starts from where it stopped, as KiCad's would if it ever returned).
+   */
+  private synth_width(): void {
+    const eps = 1e-4;
+    let f1 = 0;
+    let f2 = 0;
+    const e_r = this.GetParameter("EPSILONR");
+    let Z0 = this.GetParameter("Z0_E") / 2.0;
+    let a = exp((Z0 * sqrt(e_r + 1.0)) / 42.4) - 1.0;
+    const w_h_se = (8.0 * sqrt(a * ((7.0 + 4.0 / e_r) / 11.0) + (1.0 + 1.0 / e_r) / 0.81)) / a;
+    Z0 = this.GetParameter("Z0_O") / 2.0;
+    a = exp((Z0 * sqrt(e_r + 1.0)) / 42.4) - 1.0;
+    const w_h_so = (8.0 * sqrt(a * ((7.0 + 4.0 / e_r) / 11.0) + (1.0 + 1.0 / e_r) / 0.81)) / a;
+    const ce = cosh(0.5 * M_PI * w_h_se);
+    const co = cosh(0.5 * M_PI * w_h_so);
+    let s_h = (2.0 / M_PI) * acosh((ce + co - 2.0) / (co - ce));
+    let w_h = acosh((ce * co - 1.0) / (co - ce)) / M_PI - s_h / 2.0;
+    this.SetParameter("PHYS_S", s_h * this.GetParameter("H"));
+    this.SetParameter("PHYS_WIDTH", w_h * this.GetParameter("H"));
+    [f1, f2] = this.syn_err_fun(s_h, w_h, e_r, w_h_se, w_h_so);
+    let err: number;
+    let guard = 0;
+    do {
+      let [ft1, ft2] = this.syn_err_fun(s_h + eps, w_h, e_r, w_h_se, w_h_so);
+      const j11 = (ft1 - f1) / eps;
+      const j21 = (ft2 - f2) / eps;
+      [ft1, ft2] = this.syn_err_fun(s_h, w_h + eps, e_r, w_h_se, w_h_so);
+      const j12 = (ft1 - f1) / eps;
+      const j22 = (ft2 - f2) / eps;
+      const d_s_h = (-f1 * j22 + f2 * j12) / (j11 * j22 - j21 * j12);
+      const d_w_h = (-f2 * j11 + f1 * j21) / (j11 * j22 - j21 * j12);
+      s_h += d_s_h;
+      w_h += d_w_h;
+      [f1, f2] = this.syn_err_fun(s_h, w_h, e_r, w_h_se, w_h_so);
+      err = sqrt(f1 * f1 + f2 * f2);
+    } while (err > 1e-4 && ++guard < 10000);
+    this.SetParameter("PHYS_S", s_h * this.GetParameter("H"));
+    this.SetParameter("PHYS_WIDTH", w_h * this.GetParameter("H"));
+  }
+
+  /** `syn_fun`: analyse at a (gap, width) guess; the even / odd impedance errors. */
+  private syn_fun(s_h: number, w_h: number, Z0_e: number, Z0_o: number): [number, number] {
+    this.SetParameter("PHYS_S", s_h * this.GetParameter("H"));
+    this.SetParameter("PHYS_WIDTH", w_h * this.GetParameter("H"));
+    this.Analyse();
+    return [this.GetParameter("Z0_E") - Z0_e, this.GetParameter("Z0_O") - Z0_o];
   }
 
   private publish(set: (p: TCP, v: number, s?: TranslineStatus) => void, impedanceFailure: TranslineStatus, geometryFailure: TranslineStatus): void {
@@ -1290,11 +1418,86 @@ export class CoupledStripline extends TranslineCalculationBase {
     this.SetParameter("TAND", rawTanD);
   }
 
-  /** `COUPLED_STRIPLINE::Synthesize`: FIX_WIDTH solves the gap, FIX_SPACING the width, each on the odd-mode impedance. wcalc's 2-D synthesis is not ported. */
+  /**
+   * `COUPLED_STRIPLINE::Synthesize`: FROM_ZDIFF_ZCOMM first turns the Z_DIFF / Z_COMM target into Z0_O = Z_DIFF / 2 and Z0_E = 2 Z_COMM (false when
+   * either is not positive); FIX_WIDTH solves the gap, FIX_SPACING the width, each on the odd-mode impedance; DEFAULT (and FROM_ZDIFF_ZCOMM) solves
+   * width and gap together, wcalc's 2-D Newton with a finite-difference Jacobian and steps capped at 10 %, at most 50 iterations.
+   */
   Synthesize(aOpts: SynthesizeOpts): boolean {
+    if (aOpts === "FROM_ZDIFF_ZCOMM") {
+      const zDiffTarget = this.GetParameter("Z_DIFF");
+      const zCommTarget = this.GetParameter("Z_COMM");
+      if (!(zDiffTarget > 0.0) || !(zCommTarget > 0.0)) return false;
+      this.SetParameter("Z0_O", 0.5 * zDiffTarget);
+      this.SetParameter("Z0_E", 2.0 * zCommTarget);
+    }
     if (aOpts === "FIX_WIDTH") return this.MinimiseZ0Error1D("PHYS_S", "Z0_O", false);
     if (aOpts === "FIX_SPACING") return this.MinimiseZ0Error1D("PHYS_WIDTH", "Z0_O", false);
-    throw new Error("COUPLED_STRIPLINE::Synthesize: only FIX_WIDTH and FIX_SPACING are ported");
+    let ze0 = 0;
+    let zo0 = 0;
+    const h = this.GetParameter("H");
+    const er = this.GetParameter("EPSILONR");
+    const z0e_target = this.GetParameter("Z0_E");
+    const z0o_target = this.GetParameter("Z0_O");
+    const z0 = sqrt(z0e_target * z0o_target);
+    const k = (z0e_target - z0o_target) / (z0e_target + z0o_target);
+    const maxiters = 50;
+    const ai = [1, -0.301, 3.209, -27.282, 56.609, -37.746];
+    const bi = [0.02, -0.623, 17.192, -68.946, 104.74, -16.148];
+    const ci = [0.002, -0.347, 7.171, -36.91, 76.132, -51.616];
+    const AW = exp((z0 * sqrt(er + 1.0)) / 42.4) - 1.0;
+    const F1 = (8.0 * sqrt((AW * (7.0 + 4.0 / er)) / 11.0 + (1.0 + 1.0 / er) / 0.81)) / AW;
+    let F2 = 0.0;
+    let F3 = 0.0;
+    for (let i = 0; i <= 5; i++) F2 = F2 + ai[i]! * pow(k, i);
+    for (let i = 0; i <= 5; i++) F3 = F3 + (bi[i]! - ci[i]! * (9.6 - er)) * pow(0.6 - k, i);
+    let w = h * fabs(F1 * F2);
+    let s = h * fabs(F1 * F3);
+    let iters = 0;
+    let done = false;
+    const delta = UNIT_MIL * 1e-5;
+    const cval = 1e-12 * z0e_target * z0o_target;
+    while (!done && iters < maxiters) {
+      iters++;
+      this.SetParameter("PHYS_WIDTH", w);
+      this.SetParameter("PHYS_S", s);
+      this.Analyse();
+      ze0 = this.GetParameter("Z0_E");
+      zo0 = this.GetParameter("Z0_O");
+      const err = pow(ze0 - z0e_target, 2.0) + pow(zo0 - z0o_target, 2.0);
+      if (err < cval) {
+        done = true;
+      } else {
+        this.SetParameter("PHYS_WIDTH", w + delta);
+        this.SetParameter("PHYS_S", s);
+        this.Analyse();
+        const ze1 = this.GetParameter("Z0_E");
+        const zo1 = this.GetParameter("Z0_O");
+        this.SetParameter("PHYS_WIDTH", w);
+        this.SetParameter("PHYS_S", s + delta);
+        this.Analyse();
+        const ze2 = this.GetParameter("Z0_E");
+        const zo2 = this.GetParameter("Z0_O");
+        const dedw = (ze1 - ze0) / delta;
+        const dodw = (zo1 - zo0) / delta;
+        const deds = (ze2 - ze0) / delta;
+        const dods = (zo2 - zo0) / delta;
+        const d = dedw * dods - deds * dodw;
+        let dw = (-1.0 * ((ze0 - z0e_target) * dods - (zo0 - z0o_target) * deds)) / d;
+        if (fabs(dw) > 0.1 * w) dw = dw > 0.0 ? 0.1 * w : -0.1 * w;
+        w = fabs(w + dw);
+        let ds = ((ze0 - z0e_target) * dodw - (zo0 - z0o_target) * dedw) / d;
+        if (fabs(ds) > 0.1 * s) ds = ds > 0.0 ? 0.1 * s : -0.1 * s;
+        s = fabs(s + ds);
+      }
+    }
+    if (!done) return false;
+    this.SetParameter("PHYS_WIDTH", w);
+    this.SetParameter("PHYS_S", s);
+    this.Analyse();
+    this.SetParameter("Z0_E", z0e_target);
+    this.SetParameter("Z0_O", z0o_target);
+    return true;
   }
 
   /** `publishResults`. */
@@ -1478,5 +1681,609 @@ export class CoupledStripline extends TranslineCalculationBase {
   private calcZ0SymmetricStripline(): number {
     this.setInnerStripline(0.0, 0);
     return this.m_striplineCalc.GetParameter("Z0");
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------------ COAX
+
+/** The status helpers the four calculators below share (`x ? TRANSLINE_STATUS::TS_ERROR : TRANSLINE_STATUS::OK` and the like). */
+const st = (bad: boolean, s: TranslineStatus): TranslineStatus => (bad ? s : "OK");
+
+/**
+ * coax.{h,cpp} `COAX`: a coaxial line, Pozar section 2.2 (Z0) and 3.5 (higher-order modes). Synthesis solves the inner or the outer diameter in closed
+ * form (`SetSynthesizeTarget`, the inner one by default) and the length from the angular length. `GetTEModes` / `GetTMModes` are the propagating modes
+ * the panel shows ("H(1,1) ", "E(0,1) ", ...).
+ */
+export class Coax extends TranslineCalculationBase {
+  private m_teModes = "";
+  private m_tmModes = "";
+
+  constructor() {
+    super(["SKIN_DEPTH", "EPSILONR", "TAND", "PHYS_DIAM_IN", "PHYS_DIAM_OUT", "MUR", "MURC", "SIGMA", "FREQUENCY", "PHYS_LEN", "Z0", "ANG_L", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "CUTOFF_FREQUENCY", "DIELECTRIC_MODEL_SEL", "EPSILONR_SPEC_FREQ"]);
+    this.m_synthesizeTarget = "PHYS_DIAM_IN";
+  }
+
+  override SetSynthesizeTarget(aTarget: TCP): void {
+    if (aTarget === "PHYS_DIAM_IN" || aTarget === "PHYS_DIAM_OUT") this.m_synthesizeTarget = aTarget;
+  }
+
+  GetTEModes(): string {
+    return this.m_teModes;
+  }
+
+  GetTMModes(): string {
+    return this.m_tmModes;
+  }
+
+  /** `AlphaD`: homogeneous-TEM dielectric loss, dB/m. */
+  private AlphaD(): number {
+    const ad = (M_PI / C0) * this.GetParameter("FREQUENCY") * sqrt(this.GetParameter("EPSILONR")) * this.GetParameter("TAND");
+    return ad * LOG2DB;
+  }
+
+  /** `AlphaC`: conductor loss, dB/m. */
+  private AlphaC(): number {
+    const Rs = sqrt((M_PI * this.GetParameter("FREQUENCY") * this.GetParameter("MURC") * MU0) / this.GetParameter("SIGMA"));
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const ac = ((sqrt(this.GetParameter("EPSILONR")) * (1.0 / Din + 1.0 / Dout)) / log(Dout / Din)) * (Rs / ZF0);
+    return ac * LOG2DB;
+  }
+
+  /** `UpdateModeCutoffs`: TE11's cutoff (CUTOFF_FREQUENCY) and the TE_1m / TM_0m modes below the frequency. */
+  private UpdateModeCutoffs(): void {
+    const epsr = this.GetParameter("EPSILONR");
+    const mur = this.GetParameter("MUR");
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const freq = this.GetParameter("FREQUENCY");
+    const sqrtMuEr = sqrt(epsr * mur);
+    const fc_TE11 = (2.0 * C0) / (M_PI * sqrtMuEr * (Din + Dout));
+    const fc_step = C0 / (sqrtMuEr * (Dout - Din));
+    this.SetParameter("CUTOFF_FREQUENCY", fc_TE11);
+    this.m_teModes = "";
+    this.m_tmModes = "";
+    if (fc_TE11 <= freq) {
+      this.m_teModes = "H(1,1) ";
+      for (let m = 2; m < 10; ++m) {
+        const fc = fc_TE11 + (m - 1) * fc_step;
+        if (fc > freq) break;
+        this.m_teModes += `H(1,${m}) `;
+      }
+    }
+    for (let m = 1; m < 10; ++m) {
+      const fc = m * fc_step;
+      if (fc > freq) break;
+      this.m_tmModes += `E(0,${m}) `;
+    }
+  }
+
+  /** `COAX::Analyse`. */
+  Analyse(): void {
+    this.UpdateDielectricModel();
+    const freq = this.GetParameter("FREQUENCY");
+    const rawEpsR = this.GetParameter("EPSILONR");
+    const rawTanD = this.GetParameter("TAND");
+    this.SetParameter("EPSILONR", this.GetDispersedEpsilonR(freq));
+    this.SetParameter("TAND", this.GetDispersedTanDelta(freq));
+    this.SetParameter("SKIN_DEPTH", this.SkinDepth());
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const epsr = this.GetParameter("EPSILONR");
+    const mur = this.GetParameter("MUR");
+    const len = this.GetParameter("PHYS_LEN");
+    this.SetParameter("Z0", (ZF0 / (2.0 * M_PI * sqrt(epsr))) * log(Dout / Din));
+    const lambda_g = C0 / freq / sqrt(epsr * mur);
+    this.SetParameter("ANG_L", (2.0 * M_PI * len) / lambda_g);
+    this.SetParameter("LOSS_DIELECTRIC", this.AlphaD() * len);
+    this.SetParameter("LOSS_CONDUCTOR", this.AlphaC() * len);
+    this.UpdateModeCutoffs();
+    this.SetParameter("EPSILONR", rawEpsR);
+    this.SetParameter("TAND", rawTanD);
+  }
+
+  /** `COAX::Synthesize`: the target diameter from Z0, the length from ANG_L, then `Analyse` with Z0 and ANG_L put back. Always true. */
+  Synthesize(_aOpts: SynthesizeOpts): boolean {
+    this.UpdateDielectricModel();
+    const mur = this.GetParameter("MUR");
+    const freq = this.GetParameter("FREQUENCY");
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const epsr = this.GetDispersedEpsilonR(freq);
+    const k = ((Z0 * sqrt(epsr)) / ZF0) * 2.0 * M_PI;
+    if (this.m_synthesizeTarget === "PHYS_DIAM_IN") this.SetParameter("PHYS_DIAM_IN", this.GetParameter("PHYS_DIAM_OUT") / exp(k));
+    else if (this.m_synthesizeTarget === "PHYS_DIAM_OUT") this.SetParameter("PHYS_DIAM_OUT", this.GetParameter("PHYS_DIAM_IN") * exp(k));
+    const lambda_g = C0 / freq / sqrt(epsr * mur);
+    this.SetParameter("PHYS_LEN", (lambda_g * angL) / (2.0 * M_PI));
+    this.Analyse();
+    this.SetParameter("Z0", Z0);
+    this.SetParameter("ANG_L", angL);
+    return true;
+  }
+
+  protected SetAnalysisResults(): void {
+    for (const p of ["LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "EPSILONR", "SKIN_DEPTH", "CUTOFF_FREQUENCY"] as const) this.SetAnalysisResult(p, this.GetParameter(p));
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const len = this.GetParameter("PHYS_LEN");
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const geometry_invalid = Din >= Dout;
+    this.SetAnalysisResult("Z0", Z0, st(!isfinite(Z0) || Z0 < 0, "TS_ERROR"));
+    this.SetAnalysisResult("ANG_L", angL, st(!isfinite(angL) || angL < 0, "TS_ERROR"));
+    this.SetAnalysisResult("PHYS_LEN", len, st(!isfinite(len) || len < 0, "WARNING"));
+    this.SetAnalysisResult("PHYS_DIAM_IN", Din, st(!isfinite(Din) || Din <= 0.0 || geometry_invalid, "WARNING"));
+    this.SetAnalysisResult("PHYS_DIAM_OUT", Dout, st(!isfinite(Dout) || Dout <= 0.0 || geometry_invalid, "WARNING"));
+  }
+
+  protected SetSynthesisResults(): void {
+    for (const p of ["LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "EPSILONR", "SKIN_DEPTH", "CUTOFF_FREQUENCY"] as const) this.SetSynthesisResult(p, this.GetParameter(p));
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const len = this.GetParameter("PHYS_LEN");
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const Din_invalid = !isfinite(Din) || Din <= 0.0;
+    const Dout_invalid = !isfinite(Dout) || Dout <= 0.0;
+    const geometry_invalid = Din >= Dout;
+    const tIn = this.m_synthesizeTarget === "PHYS_DIAM_IN";
+    const tOut = this.m_synthesizeTarget === "PHYS_DIAM_OUT";
+    const Din_status = st(Din_invalid, tIn ? "TS_ERROR" : "WARNING");
+    const Dout_status = st(Dout_invalid, tOut ? "TS_ERROR" : "WARNING");
+    this.SetSynthesisResult("Z0", Z0, st(!isfinite(Z0) || Z0 < 0, "WARNING"));
+    this.SetSynthesisResult("ANG_L", angL, st(!isfinite(angL) || angL < 0, "WARNING"));
+    this.SetSynthesisResult("PHYS_LEN", len, st(!isfinite(len) || len < 0, "TS_ERROR"));
+    this.SetSynthesisResult("PHYS_DIAM_IN", Din, geometry_invalid ? (tIn ? "TS_ERROR" : "WARNING") : Din_status);
+    this.SetSynthesisResult("PHYS_DIAM_OUT", Dout, geometry_invalid ? (tOut ? "TS_ERROR" : "WARNING") : Dout_status);
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------------ COPLANAR
+
+/**
+ * coplanar.{h,cpp} `COPLANAR`: a coplanar waveguide, and with CPW_BACKMETAL >= 0.5 the conductor-backed one (Ghione-Naldi conformal mapping, Gupta's
+ * thickness correction, Gevorgian's dispersion, Owyang-Wu / Ghione conductor loss). Synthesis solves the width or the gap (`SetSynthesizeTarget`, the
+ * width by default) by `MinimiseZ0Error1D`, recomputing the length from the angular length.
+ */
+export class Coplanar extends TranslineCalculationBase {
+  constructor() {
+    super(["EPSILONR", "TAND", "SIGMA", "MURC", "PHYS_WIDTH", "PHYS_S", "H", "T", "PHYS_LEN", "FREQUENCY", "Z0", "ANG_L", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "SKIN_DEPTH", "EPSILON_EFF", "UNIT_PROP_DELAY", "CPW_BACKMETAL", "DIELECTRIC_MODEL_SEL", "EPSILONR_SPEC_FREQ", "SOLDERMASK_PRESENT", "SOLDERMASK_THICKNESS", "SOLDERMASK_EPSILONR", "SOLDERMASK_TAND", "SOLDERMASK_FILLS_GAPS"]);
+    this.m_synthesizeTarget = "PHYS_WIDTH";
+  }
+
+  override SetSynthesizeTarget(aTarget: TCP): void {
+    if (aTarget === "PHYS_WIDTH" || aTarget === "PHYS_S") this.m_synthesizeTarget = aTarget;
+  }
+
+  private hasBackMetal(): boolean {
+    return this.GetParameter("CPW_BACKMETAL") >= 0.5;
+  }
+
+  /** `COPLANAR::GetSoldermaskDeltaQ`: the microstrip increment, times the upper half-space share (0.5, 0.25 with back metal) and the slot coverage (1, 0.4 with air slots). */
+  override GetSoldermaskDeltaQ(aWOverH: number, aCOverH: number): number {
+    if (aWOverH <= 0.0 || aCOverH <= 0.0) return 0.0;
+    const q2Coated = WanHoorfarQ2(aWOverH, 1.0 + aCOverH);
+    const q2Base = WanHoorfarQ2(aWOverH, 1.0);
+    const microstripDelta = Math.max(0.0, q2Coated - q2Base);
+    const fillsGaps = this.GetParameter("SOLDERMASK_FILLS_GAPS") >= 0.5;
+    const halfSpace = this.hasBackMetal() ? 0.25 : 0.5;
+    const slotCoverage = fillsGaps ? 1.0 : 0.4;
+    return halfSpace * slotCoverage * microstripDelta;
+  }
+
+  /** `COPLANAR::Analyse`. */
+  Analyse(): void {
+    this.UpdateDielectricModel();
+    this.SetParameter("SKIN_DEPTH", this.SkinDepth());
+    const W = this.GetParameter("PHYS_WIDTH");
+    const S = this.GetParameter("PHYS_S");
+    const H = this.GetParameter("H");
+    const T = this.GetParameter("T");
+    const freq = this.GetParameter("FREQUENCY");
+    const epsr = this.GetDispersedEpsilonR(freq);
+    const len = this.GetParameter("PHYS_LEN");
+    const tand_substrate = this.GetDispersedTanDelta(freq);
+    const sigma = this.GetParameter("SIGMA");
+    const backMetal = this.hasBackMetal();
+    const K = (x: number) => TranslineCalculationBase.EllipticIntegral(x)[0];
+    const k1 = W / (W + S + S);
+    const kk1 = K(k1);
+    const kpk1 = K(sqrt(1.0 - k1 * k1));
+    const q1 = kk1 / kpk1;
+    let q3 = 0.0;
+    let qz = 0.0;
+    let er0 = 0.0;
+    let zl_factor = 0.0;
+    if (backMetal) {
+      const k3 = tanh((M_PI / 4.0) * (W / H)) / tanh(((M_PI / 4.0) * (W + S + S)) / H);
+      q3 = K(k3) / K(sqrt(1.0 - k3 * k3));
+      qz = 1.0 / (q1 + q3);
+      er0 = 1.0 + q3 * qz * (epsr - 1.0);
+      zl_factor = (ZF0 / 2.0) * qz;
+    } else {
+      const k2 = sinh((M_PI / 4.0) * (W / H)) / sinh(((M_PI / 4.0) * (W + S + S)) / H);
+      const q2 = K(k2) / K(sqrt(1.0 - k2 * k2));
+      er0 = 1.0 + (((epsr - 1.0) / 2.0) * q2) / q1;
+      zl_factor = ZF0 / 4.0 / q1;
+    }
+    if (T > 0.0) {
+      const d = ((T * 1.25) / M_PI) * (1.0 + log((4.0 * M_PI * W) / T));
+      const se = S - d;
+      const We = W + d;
+      const ke = We / (We + se + se);
+      const qe = K(ke) / K(sqrt(1.0 - ke * ke));
+      if (backMetal) {
+        qz = 1.0 / (qe + q3);
+        er0 = 1.0 + q3 * qz * (epsr - 1.0);
+        zl_factor = (ZF0 / 2.0) * qz;
+      } else {
+        zl_factor = ZF0 / 4.0 / qe;
+      }
+      er0 = er0 - (0.7 * (er0 - 1.0) * T) / S / (q1 + (0.7 * T) / S);
+    }
+    let tand_eff = tand_substrate;
+    const uOverH = H > 0.0 ? W / H : 0.0;
+    const [er0_coated, tand_coated] = this.ApplySoldermaskCorrection(er0, tand_substrate, epsr, uOverH, freq);
+    if (er0_coated !== er0) {
+      zl_factor *= sqrt(er0 / er0_coated);
+      er0 = er0_coated;
+      tand_eff = tand_coated;
+    }
+    const sr_er = sqrt(epsr);
+    const sr_er0 = sqrt(er0);
+    const fte = C0 / 4.0 / (H * sqrt(epsr - 1.0));
+    const p = log(W / H);
+    const u = 0.54 - (0.64 - 0.015 * p) * p;
+    const v = 0.43 - (0.86 - 0.54 * p) * p;
+    const G = exp(u * log(W / S) + v);
+    let ac = 0.0;
+    if (T > 0.0) {
+      const n = ((1.0 - k1) * 8.0 * M_PI) / (T * (1.0 + k1));
+      const a = W / 2.0;
+      const b = a + S;
+      ac = (M_PI + log(n * a)) / a + (M_PI + log(n * b)) / b;
+    }
+    const ac_factor = ac / (4.0 * ZF0 * kk1 * kpk1 * (1.0 - k1 * k1));
+    const ad_factor = ((epsr / (epsr - 1.0)) * tand_eff * M_PI) / C0;
+    let sr_er_f = sr_er0;
+    sr_er_f += (sr_er - sr_er0) / (1.0 + G * pow(freq / fte, -1.8));
+    this.SetParameter("LOSS_CONDUCTOR", LOG2DB * len * ac_factor * sr_er0 * sqrt((M_PI * MU0 * freq) / sigma));
+    this.SetParameter("LOSS_DIELECTRIC", (LOG2DB * len * ad_factor * freq * (sr_er_f * sr_er_f - 1.0)) / sr_er_f);
+    this.SetParameter("ANG_L", (2.0 * M_PI * len * sr_er_f * freq) / C0);
+    this.SetParameter("EPSILON_EFF", sr_er_f * sr_er_f);
+    this.SetParameter("Z0", zl_factor / sr_er_f);
+    this.SetParameter("UNIT_PROP_DELAY", UnitPropagationDelay(sr_er_f * sr_er_f));
+  }
+
+  /** `COPLANAR::Synthesize`. */
+  Synthesize(_aOpts: SynthesizeOpts): boolean {
+    const target: TCP = this.m_synthesizeTarget === "PHYS_S" ? "PHYS_S" : "PHYS_WIDTH";
+    return this.MinimiseZ0Error1D(target, "Z0", true);
+  }
+
+  private publish(set: (p: TCP, v: number, s?: TranslineStatus) => void, synthesis: boolean): void {
+    for (const p of ["EPSILON_EFF", "UNIT_PROP_DELAY", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "SKIN_DEPTH"] as const) set(p, this.GetParameter(p));
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const len = this.GetParameter("PHYS_LEN");
+    const W = this.GetParameter("PHYS_WIDTH");
+    const S = this.GetParameter("PHYS_S");
+    const W_invalid = !isfinite(W) || W <= 0.0;
+    const S_invalid = !isfinite(S) || S <= 0.0;
+    set("Z0", Z0, st(!isfinite(Z0) || Z0 < 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("ANG_L", angL, st(!isfinite(angL) || angL < 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("PHYS_LEN", len, st(!isfinite(len) || len < 0, synthesis ? "TS_ERROR" : "WARNING"));
+    set("PHYS_WIDTH", W, st(W_invalid, synthesis && this.m_synthesizeTarget === "PHYS_WIDTH" ? "TS_ERROR" : "WARNING"));
+    set("PHYS_S", S, st(S_invalid, synthesis && this.m_synthesizeTarget === "PHYS_S" ? "TS_ERROR" : "WARNING"));
+  }
+
+  protected SetAnalysisResults(): void {
+    this.publish((p, v, s) => this.SetAnalysisResult(p, v, s), false);
+  }
+
+  protected SetSynthesisResults(): void {
+    this.publish((p, v, s) => this.SetSynthesisResult(p, v, s), true);
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------------ RECTWAVEGUIDE
+
+/**
+ * rectwaveguide.{h,cpp} `RECTWAVEGUIDE`: a rectangular waveguide, width a (PHYS_WIDTH) by height b (PHYS_S), TE10 Z0 with the fictive voltage / current
+ * definition and every propagating mode's conductor loss (Pozar section 3.3). Synthesis solves the width in closed form.
+ */
+export class RectWaveguide extends TranslineCalculationBase {
+  private m_teModes = "";
+  private m_tmModes = "";
+
+  constructor() {
+    super(["EPSILONR", "TAND", "SIGMA", "MUR", "MURC", "PHYS_WIDTH", "PHYS_S", "PHYS_LEN", "FREQUENCY", "Z0", "ANG_L", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "CUTOFF_FREQUENCY", "SKIN_DEPTH", "EPSILON_EFF", "DIELECTRIC_MODEL_SEL", "EPSILONR_SPEC_FREQ"]);
+    this.m_synthesizeTarget = "PHYS_WIDTH";
+  }
+
+  override SetSynthesizeTarget(aTarget: TCP): void {
+    if (aTarget === "PHYS_WIDTH") this.m_synthesizeTarget = aTarget;
+  }
+
+  GetTEModes(): string {
+    return this.m_teModes;
+  }
+
+  GetTMModes(): string {
+    return this.m_tmModes;
+  }
+
+  private KvalSquare(): number {
+    const kval = (2.0 * M_PI * this.GetParameter("FREQUENCY") * sqrt(this.GetParameter("MUR") * this.GetParameter("EPSILONR"))) / C0;
+    return kval * kval;
+  }
+
+  private KcSquare(aM: number, aN: number): number {
+    const a = this.GetParameter("PHYS_WIDTH");
+    const b = this.GetParameter("PHYS_S");
+    return pow((aM * M_PI) / a, 2.0) + pow((aN * M_PI) / b, 2.0);
+  }
+
+  private Fc(aM: number, aN: number): number {
+    return (sqrt(this.KcSquare(aM, aN) / this.GetParameter("MUR") / this.GetParameter("EPSILONR")) * C0) / (2.0 * M_PI);
+  }
+
+  /** `AlphaC`: the conductor loss of every propagating TE_mn and TM_mn mode, dB/m. */
+  private AlphaC(): number {
+    const a = this.GetParameter("PHYS_WIDTH");
+    const b = this.GetParameter("PHYS_S");
+    const f = this.GetParameter("FREQUENCY");
+    const murc = this.GetParameter("MURC");
+    const sigma = this.GetParameter("SIGMA");
+    const Rs = sqrt((M_PI * f * murc * MU0) / sigma);
+    let ac = 0.0;
+    const mmax = Math.trunc(floor(f / this.Fc(1, 0)));
+    const nmax = mmax;
+    for (let n = 0; n <= nmax; ++n) {
+      for (let m = 1; m <= mmax; ++m) {
+        const f_c = this.Fc(m, n);
+        if (f <= f_c) continue;
+        if (n === 0) {
+          ac += (Rs / (b * ZF0 * sqrt(1.0 - pow(f_c / f, 2.0)))) * (1.0 + ((2.0 * b) / a) * pow(f_c / f, 2.0));
+        } else {
+          ac +=
+            ((2.0 * Rs) / (b * ZF0 * sqrt(1.0 - pow(f_c / f, 2.0)))) *
+            ((1.0 + b / a) * pow(f_c / f, 2.0) + (1.0 - pow(f_c / f, 2.0)) * (((b / a) * ((b / a) * pow(m, 2.0) + pow(n, 2.0))) / (pow((b * m) / a, 2.0) + pow(n, 2.0))));
+        }
+      }
+    }
+    for (let n = 1; n <= nmax; ++n) {
+      for (let m = 1; m <= mmax; ++m) {
+        const f_c = this.Fc(m, n);
+        if (f <= f_c) continue;
+        ac += ((2.0 * Rs) / (b * ZF0 * sqrt(1.0 - pow(f_c / f, 2.0)))) * ((pow(m, 2.0) * pow(b / a, 3.0) + pow(n, 2.0)) / (pow((m * b) / a, 2.0) + pow(n, 2.0)));
+      }
+    }
+    return ac * LOG2DB;
+  }
+
+  private AlphaCCutoff(): number {
+    let acc = sqrt(this.KcSquare(1, 0) - this.KvalSquare());
+    acc = LOG2DB * acc;
+    return acc;
+  }
+
+  private AlphaD(): number {
+    const k_square = this.KvalSquare();
+    const beta = sqrt(k_square - this.KcSquare(1, 0));
+    let ad = (k_square * this.GetParameter("TAND")) / (2.0 * beta);
+    ad = ad * LOG2DB;
+    return ad;
+  }
+
+  /** `UpdateModeStrings`: the propagating modes up to index 6, cut to KiCad's 128-character buffer with "...". */
+  private UpdateModeStrings(): void {
+    const MAX_INDEX = 6;
+    const MAX_STR = 128;
+    const freq = this.GetParameter("FREQUENCY");
+    this.m_teModes = "";
+    this.m_tmModes = "";
+    const walk = (first: number, letter: string): string => {
+      let buf = "";
+      let truncated = false;
+      for (let m = first; m <= MAX_INDEX && !truncated; ++m) {
+        for (let n = first; n <= MAX_INDEX && !truncated; ++n) {
+          if (m === 0 && n === 0) continue;
+          if (freq >= this.Fc(m, n)) {
+            const token = `${letter}(${m},${n}) `;
+            if (buf.length + token.length + 5 < MAX_STR) buf += token;
+            else {
+              buf += "...";
+              truncated = true;
+            }
+          }
+        }
+      }
+      return buf;
+    };
+    if (freq >= this.Fc(1, 0)) this.m_teModes = walk(0, "H");
+    if (freq >= this.Fc(1, 1)) this.m_tmModes = walk(1, "E");
+  }
+
+  /** `RECTWAVEGUIDE::Analyse`. */
+  Analyse(): void {
+    this.UpdateDielectricModel();
+    const freq = this.GetParameter("FREQUENCY");
+    const rawEpsR = this.GetParameter("EPSILONR");
+    const rawTanD = this.GetParameter("TAND");
+    this.SetParameter("EPSILONR", this.GetDispersedEpsilonR(freq));
+    this.SetParameter("TAND", this.GetDispersedTanDelta(freq));
+    this.SetParameter("SKIN_DEPTH", this.SkinDepth());
+    this.SetParameter("CUTOFF_FREQUENCY", this.Fc(1, 0));
+    const len = this.GetParameter("PHYS_LEN");
+    const k_square = this.KvalSquare();
+    const kc10_square = this.KcSquare(1, 0);
+    if (kc10_square <= k_square) {
+      const fc10 = this.Fc(1, 0);
+      this.SetParameter("Z0", (ZF0 * sqrt(this.GetParameter("MUR") / this.GetParameter("EPSILONR"))) / sqrt(1.0 - pow(fc10 / freq, 2.0)));
+      const lambda_g = (2.0 * M_PI) / sqrt(k_square - kc10_square);
+      this.SetParameter("ANG_L", (2.0 * M_PI * len) / lambda_g);
+      this.SetParameter("LOSS_CONDUCTOR", this.AlphaC() * len);
+      this.SetParameter("LOSS_DIELECTRIC", this.AlphaD() * len);
+      this.SetParameter("EPSILON_EFF", 1.0 - pow(fc10 / freq, 2.0));
+    } else {
+      this.SetParameter("Z0", 0.0);
+      this.SetParameter("ANG_L", 0.0);
+      this.SetParameter("EPSILON_EFF", 0.0);
+      this.SetParameter("LOSS_DIELECTRIC", 0.0);
+      this.SetParameter("LOSS_CONDUCTOR", this.AlphaCCutoff() * len);
+    }
+    this.UpdateModeStrings();
+    this.SetParameter("EPSILONR", rawEpsR);
+    this.SetParameter("TAND", rawTanD);
+  }
+
+  /** `RECTWAVEGUIDE::Synthesize`: the closed-form inverse of TE10's Z0 for the width; true when the width is finite and positive. */
+  Synthesize(_aOpts: SynthesizeOpts): boolean {
+    this.UpdateDielectricModel();
+    const mur = this.GetParameter("MUR");
+    const freq = this.GetParameter("FREQUENCY");
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const rawEpsR = this.GetParameter("EPSILONR");
+    const rawTanD = this.GetParameter("TAND");
+    const epsr = this.GetDispersedEpsilonR(freq);
+    this.SetParameter("EPSILONR", epsr);
+    this.SetParameter("TAND", this.GetDispersedTanDelta(freq));
+    const eta = ZF0 * sqrt(mur / epsr);
+    this.SetParameter("PHYS_WIDTH", C0 / (sqrt(mur * epsr) * 2.0 * freq * sqrt(1.0 - pow(eta / Z0, 2.0))));
+    const k_square = this.KvalSquare();
+    const kc10_square = this.KcSquare(1, 0);
+    const beta = sqrt(k_square - kc10_square);
+    const lambda_g = (2.0 * M_PI) / beta;
+    this.SetParameter("PHYS_LEN", (angL * lambda_g) / (2.0 * M_PI));
+    if (kc10_square <= k_square) {
+      const len = this.GetParameter("PHYS_LEN");
+      this.SetParameter("LOSS_CONDUCTOR", this.AlphaC() * len);
+      this.SetParameter("LOSS_DIELECTRIC", this.AlphaD() * len);
+      this.SetParameter("EPSILON_EFF", 1.0 - pow(this.Fc(1, 0) / freq, 2.0));
+    } else {
+      this.SetParameter("EPSILON_EFF", 0.0);
+      this.SetParameter("LOSS_DIELECTRIC", 0.0);
+      this.SetParameter("LOSS_CONDUCTOR", this.AlphaCCutoff() * this.GetParameter("PHYS_LEN"));
+    }
+    this.SetParameter("SKIN_DEPTH", this.SkinDepth());
+    this.SetParameter("CUTOFF_FREQUENCY", this.Fc(1, 0));
+    this.UpdateModeStrings();
+    this.SetParameter("Z0", Z0);
+    this.SetParameter("ANG_L", angL);
+    this.SetParameter("EPSILONR", rawEpsR);
+    this.SetParameter("TAND", rawTanD);
+    return isfinite(this.GetParameter("PHYS_WIDTH")) && this.GetParameter("PHYS_WIDTH") > 0.0;
+  }
+
+  private publish(set: (p: TCP, v: number, s?: TranslineStatus) => void, synthesis: boolean): void {
+    for (const p of ["EPSILON_EFF", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "CUTOFF_FREQUENCY", "SKIN_DEPTH"] as const) set(p, this.GetParameter(p));
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const len = this.GetParameter("PHYS_LEN");
+    const a = this.GetParameter("PHYS_WIDTH");
+    const b = this.GetParameter("PHYS_S");
+    set("Z0", Z0, st(!isfinite(Z0) || Z0 < 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("ANG_L", angL, st(!isfinite(angL) || angL < 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("PHYS_LEN", len, st(!isfinite(len) || len < 0, synthesis ? "TS_ERROR" : "WARNING"));
+    set("PHYS_WIDTH", a, st(!isfinite(a) || a <= 0.0, synthesis && this.m_synthesizeTarget === "PHYS_WIDTH" ? "TS_ERROR" : "WARNING"));
+    set("PHYS_S", b, st(!isfinite(b) || b <= 0.0, "WARNING"));
+  }
+
+  protected SetAnalysisResults(): void {
+    this.publish((p, v, s) => this.SetAnalysisResult(p, v, s), false);
+  }
+
+  protected SetSynthesisResults(): void {
+    this.publish((p, v, s) => this.SetSynthesisResult(p, v, s), true);
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------------ TWISTEDPAIR
+
+/**
+ * twistedpair.{h,cpp} `TWISTEDPAIR`: a twisted pair of insulated wires (Lefferson 1971; the twist angle in degrees), with Wadell's proximity factor in
+ * the conductor loss and the insulation's filling factor in the dielectric loss. Synthesis solves the inner or the outer diameter (`SetSynthesizeTarget`,
+ * the outer one by default) by `MinimiseZ0Error1D`, recomputing the length from the angular length.
+ */
+export class TwistedPair extends TranslineCalculationBase {
+  constructor() {
+    super(["EPSILONR", "TAND", "SIGMA", "MURC", "PHYS_DIAM_IN", "PHYS_DIAM_OUT", "PHYS_LEN", "FREQUENCY", "Z0", "ANG_L", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "SKIN_DEPTH", "EPSILON_EFF", "UNIT_PROP_DELAY", "TWISTEDPAIR_TWIST", "TWISTEDPAIR_EPSILONR_ENV", "DIELECTRIC_MODEL_SEL", "EPSILONR_SPEC_FREQ"]);
+    this.m_synthesizeTarget = "PHYS_DIAM_OUT";
+  }
+
+  override SetSynthesizeTarget(aTarget: TCP): void {
+    if (aTarget === "PHYS_DIAM_IN" || aTarget === "PHYS_DIAM_OUT") this.m_synthesizeTarget = aTarget;
+  }
+
+  /** `TWISTEDPAIR::Analyse`. */
+  Analyse(): void {
+    this.UpdateDielectricModel();
+    const twist = this.GetParameter("TWISTEDPAIR_TWIST");
+    const epsrEnv = this.GetParameter("TWISTEDPAIR_EPSILONR_ENV");
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const freq = this.GetParameter("FREQUENCY");
+    const len = this.GetParameter("PHYS_LEN");
+    const epsr = this.GetDispersedEpsilonR(freq);
+    const tand = this.GetDispersedTanDelta(freq);
+    this.SetParameter("SKIN_DEPTH", this.SkinDepth());
+    const theta_rad = atan(twist * M_PI * Dout);
+    const theta_deg = theta_rad * (180.0 / M_PI);
+    const beta = 0.25 + 0.0007 * theta_deg * theta_deg;
+    const epsEff = epsrEnv + beta * (epsr - epsrEnv);
+    this.SetParameter("EPSILON_EFF", epsEff);
+    const z0 = (ZF0 / M_PI / sqrt(epsEff)) * acosh(Dout / Din);
+    this.SetParameter("Z0", z0);
+    const skinDepth = this.GetParameter("SKIN_DEPTH");
+    const sigma = this.GetParameter("SIGMA");
+    const currentDepth = Math.min(skinDepth, Din / 2.0);
+    const spacing = Dout / Din;
+    const proximity = spacing / sqrt(spacing * spacing - 1.0);
+    const crowding = 1.0 + (proximity - 1.0) * (1.0 - (2.0 * currentDepth) / Din);
+    this.SetParameter("LOSS_CONDUCTOR", (LOG2DB * len * crowding) / currentDepth / sigma / M_PI / z0 / (Din - currentDepth));
+    const lossFraction = Math.min(1.0, (beta * epsr) / epsEff);
+    this.SetParameter("LOSS_DIELECTRIC", ((LOG2DB * len * M_PI) / C0) * freq * sqrt(epsEff) * tand * lossFraction);
+    this.SetParameter("ANG_L", (2.0 * M_PI * len * sqrt(epsEff) * freq) / C0);
+    this.SetParameter("UNIT_PROP_DELAY", UnitPropagationDelay(epsEff));
+  }
+
+  /** `TWISTEDPAIR::Synthesize`. */
+  Synthesize(_aOpts: SynthesizeOpts): boolean {
+    const target: TCP = this.m_synthesizeTarget === "PHYS_DIAM_IN" ? "PHYS_DIAM_IN" : "PHYS_DIAM_OUT";
+    return this.MinimiseZ0Error1D(target, "Z0", true);
+  }
+
+  private publish(set: (p: TCP, v: number, s?: TranslineStatus) => void, synthesis: boolean): void {
+    for (const p of ["EPSILON_EFF", "LOSS_CONDUCTOR", "LOSS_DIELECTRIC", "SKIN_DEPTH"] as const) set(p, this.GetParameter(p));
+    const Z0 = this.GetParameter("Z0");
+    const angL = this.GetParameter("ANG_L");
+    const len = this.GetParameter("PHYS_LEN");
+    const Din = this.GetParameter("PHYS_DIAM_IN");
+    const Dout = this.GetParameter("PHYS_DIAM_OUT");
+    const Din_invalid = !isfinite(Din) || Din <= 0.0;
+    const Dout_invalid = !isfinite(Dout) || Dout <= 0.0;
+    const geometry_invalid = Din >= Dout;
+    set("Z0", Z0, st(!isfinite(Z0) || Z0 <= 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("ANG_L", angL, st(!isfinite(angL) || angL < 0, synthesis ? "WARNING" : "TS_ERROR"));
+    set("PHYS_LEN", len, st(!isfinite(len) || len < 0, synthesis ? "TS_ERROR" : "WARNING"));
+    if (!synthesis) {
+      set("PHYS_DIAM_IN", Din, st(Din_invalid || geometry_invalid, "WARNING"));
+      set("PHYS_DIAM_OUT", Dout, st(Dout_invalid || geometry_invalid, "WARNING"));
+      return;
+    }
+    const tIn = this.m_synthesizeTarget === "PHYS_DIAM_IN";
+    const tOut = this.m_synthesizeTarget === "PHYS_DIAM_OUT";
+    set("PHYS_DIAM_IN", Din, geometry_invalid ? (tIn ? "TS_ERROR" : "WARNING") : st(Din_invalid, tIn ? "TS_ERROR" : "WARNING"));
+    set("PHYS_DIAM_OUT", Dout, geometry_invalid ? (tOut ? "TS_ERROR" : "WARNING") : st(Dout_invalid, tOut ? "TS_ERROR" : "WARNING"));
+  }
+
+  protected SetAnalysisResults(): void {
+    this.publish((p, v, s) => this.SetAnalysisResult(p, v, s), false);
+  }
+
+  protected SetSynthesisResults(): void {
+    this.publish((p, v, s) => this.SetSynthesisResult(p, v, s), true);
   }
 }

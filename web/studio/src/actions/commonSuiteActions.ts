@@ -4,6 +4,7 @@
 // (commonActions.ts) calls `registerSuiteActions` once while the registry is built.
 import { downloadKicadPcb } from "../api/client";
 import { setAboutOpen, setPageSettingsOpen, setSaveFootprintAs } from "../state/commonDialogs";
+import { openPcbCalculator } from "../state/pcbCalculator";
 import { getLibraryTree } from "../state/libraryTree";
 import { saveAsTarget } from "../kicad-port/saveFootprintAs";
 import { openSaveLibraryAs } from "../state/librarySaveDialogs";
@@ -56,6 +57,10 @@ export function registerSuiteActions(m: Map<string, ActionHandler>, ctx: CommonA
   // tab is the window.
   m.set("common.Control.showFootprintEditor", () => dispatch({ type: "SET_TAB", tab: "footprint" }));
   m.set("common.Control.showSymbolEditor", () => dispatch({ type: "SET_TAB", tab: "symbol" }));
+
+  // ACTIONS::showCalculatorTools -- COMMON_CONTROL::Execute: `ExecuteFile( PCB_CALCULATOR_EXE )` starts pcb_calculator, the Calculator Tools
+  // (PCB Editor and Schematic Editor, Tools menu). Here it is a window over the editors (components/calculator/CalculatorWindow.tsx).
+  m.set("common.Control.showCalculatorTools", () => openPcbCalculator());
 
   // ACTIONS::pageSettings -- BOARD_EDITOR_CONTROL::PageSettings / SCH_EDITOR_CONTROL::PageSetup: the Page Settings dialog (paper and title
   // block) of the board or of the schematic on screen (components/PageSettingsDialog.tsx); one undo step when it is accepted.

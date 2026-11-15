@@ -3,6 +3,8 @@
 //
 //   "transline": each calculator analysed or synthesized from a full parameter set, with the result map KiCad's UI reads
 //                (GetAnalysisResults / GetSynthesisResults) and Synthesize's return;
+//   "calculator": the Calculator Tools' Transmission Lines panel (pcb_calculator, the nine line types), from the values typed to the calculator's
+//                result maps; see the "calculator" section below.
 //   "panel":     PANEL_SETUP_TUNING_PROFILE_INFO::calculateTrackParametersForCell over a small stackup, a grid row and a column. The panel itself
 //                (pcbnew/dialogs/panel_setup_tuning_profile_info.cpp) needs wx and a BOARD, so its functions are transcribed below, statement for statement,
 //                with the grid cells and the stackup items as plain values; each is named after the function it copies.
@@ -12,7 +14,7 @@
 //   KICAD=/path/to/kicad-src-25ec2335; OUT=$(mktemp -d)
 //   g++ -std=c++20 -O2 -DHAVE_CMATH_ASINH -DHAVE_CMATH_ACOSH -DHAVE_CMATH_ATANH -I"$KICAD/common" \
 //       web/studio/tools/transline-golden/transline_golden.cpp \
-//       "$KICAD"/common/transline_calculations/{transline_calculation_base,microstrip,stripline,coupled_microstrip,coupled_stripline,dielectric_djordjevic_sarkar}.cpp \
+//       "$KICAD"/common/transline_calculations/{transline_calculation_base,microstrip,stripline,coupled_microstrip,coupled_stripline,dielectric_djordjevic_sarkar,coax,coplanar,rectwaveguide,twistedpair}.cpp \
 //       -o "$OUT/transline_golden"
 //   "$OUT/transline_golden" > web/studio/src/kicad-port/transline.golden.json
 //
@@ -26,10 +28,14 @@
 #include <utility>
 #include <vector>
 
+#include <transline_calculations/coax.h>
+#include <transline_calculations/coplanar.h>
 #include <transline_calculations/coupled_microstrip.h>
 #include <transline_calculations/coupled_stripline.h>
 #include <transline_calculations/microstrip.h>
+#include <transline_calculations/rectwaveguide.h>
 #include <transline_calculations/stripline.h>
+#include <transline_calculations/twistedpair.h>
 #include <transline_calculations/units.h>
 
 using TCP = TRANSLINE_PARAMETERS;
@@ -107,6 +113,13 @@ static const std::vector<std::pair<TCP, const char*>> PARAM_NAMES = {
     { TCP::SOLDERMASK_THICKNESS, "SOLDERMASK_THICKNESS" },
     { TCP::SOLDERMASK_EPSILONR, "SOLDERMASK_EPSILONR" },
     { TCP::SOLDERMASK_TAND, "SOLDERMASK_TAND" },
+    { TCP::PHYS_DIAM_IN, "PHYS_DIAM_IN" },
+    { TCP::PHYS_DIAM_OUT, "PHYS_DIAM_OUT" },
+    { TCP::CUTOFF_FREQUENCY, "CUTOFF_FREQUENCY" },
+    { TCP::TWISTEDPAIR_TWIST, "TWISTEDPAIR_TWIST" },
+    { TCP::TWISTEDPAIR_EPSILONR_ENV, "TWISTEDPAIR_EPSILONR_ENV" },
+    { TCP::CPW_BACKMETAL, "CPW_BACKMETAL" },
+    { TCP::SOLDERMASK_FILLS_GAPS, "SOLDERMASK_FILLS_GAPS" },
 };
 
 static const char* paramName( TCP p )
@@ -1215,6 +1228,252 @@ static const char* columnName( CalculationType c )
     return c == CalculationType::WIDTH ? "width" : c == CalculationType::GAP ? "gap" : "delay";
 }
 
+// ---------------------------------------------------------------------------------------------------- "calculator" cases
+//
+// The Calculator Tools' Transmission Lines panel (pcb_calculator/calculator_panels/panel_transline.cpp, transline_dlg_funct.cpp, transline_ident.cpp and
+// the TRANSLINE wrappers in pcb_calculator/transline/*.cpp). Those need wx, so what they do between the text boxes and the calculator is transcribed:
+// the parameters of each line type as transline_ident.cpp lists them (keyword, default in the user unit, scale of the default unit), read as
+// TransfDlgDataToTranslineParams does (text * GetUnitScale()), TRANSLINE::getProperties (a parameter the type does not list reads 1.0, SIGMA = 1 / Rho,
+// EPSILON_EFF = 1, the skin depth), the wrapper's getProperties (which parameters reach the calculator, the synthesis target from the radio buttons), and
+// Analyse or Synthesize( DEFAULT ). The mask thickness is typed in micrometres, as on the panel. Each case gives the values typed (user units), the calculator's analysis and synthesis maps after the operation
+// (the wrappers read either), the coax / waveguide mode strings and Synthesize's return.
+
+namespace CALC
+{
+constexpr double MM = 1e-3, GHZ = 1e9;
+
+struct PRM
+{
+    const char* Id;      // PRMS_ID without _PRM
+    const char* Key;     // m_KeyWord
+    double      Default; // m_DefaultValue, in the default unit
+    double      Scale;   // GetUnitScale() of the default unit; 1 without a unit selector
+};
+
+// transline_ident.cpp, in its order (the four common parameters first)
+static std::vector<PRM> prmsOf( int aType )
+{
+    std::vector<PRM> v = { { "EPSILONR", "Er", 4.5, 1 }, { "TAND", "TanD", 2e-2, 1 }, { "RHO", "Rho", 1.72e-8, 1 }, { "FREQUENCY", "Frequency", 1.0, GHZ } };
+    auto add = [&]( std::initializer_list<PRM> l ) { v.insert( v.end(), l ); };
+
+    switch( aType )
+    {
+    case 0: add( { { "H", "H", 0.2, MM }, { "H_T", "H_t", 1e20, MM }, { "T", "T", 0.035, MM }, { "ROUGH", "Rough", 0.0, MM }, { "MUR", "mu Rel S", 1, 1 },
+                   { "MURC", "mu Rel C", 1, 1 }, { "PHYS_WIDTH", "W", 0.2, MM }, { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50.0, 1 }, { "DUMMY", "", 0, 1 },
+                   { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    case 1: add( { { "H", "H", 0.2, MM }, { "H_T", "H_t", 1e20, MM }, { "T", "T", 0.035, MM }, { "ROUGH", "Rough", 0.0, MM }, { "MURC", "mu rel C", 1, 1 },
+                   { "PHYS_WIDTH", "W", 0.2, MM }, { "PHYS_S", "S", 0.2, MM }, { "PHYS_LEN", "L", 50.0, MM }, { "Z0_E", "Zeven", 50.0, 1 },
+                   { "Z0_O", "Zodd", 50.0, 1 }, { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    case 2: add( { { "H", "H", 0.2, MM }, { "STRIPLINE_A", "a", 0.2, MM }, { "T", "T", 0.035, MM }, { "MURC", "mu Rel C", 1, 1 }, { "PHYS_WIDTH", "W", 0.2, MM },
+                   { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50, 1 }, { "DUMMY", "", 0, 1 }, { "ANG_L", "Ang_l", 0, 1 } } ); break;
+    case 3: add( { { "H", "H", 0.2, MM }, { "STRIPLINE_A", "a", 0.0, MM }, { "T", "T", 0.035, MM }, { "MURC", "mu rel C", 1, 1 }, { "PHYS_WIDTH", "W", 0.2, MM },
+                   { "PHYS_S", "S", 0.2, MM }, { "PHYS_LEN", "L", 50.0, MM }, { "Z0_E", "Zeven", 50.0, 1 }, { "Z0_O", "Zodd", 50.0, 1 },
+                   { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    case 4:
+    case 5: add( { { "H", "H", 0.2, MM }, { "T", "T", 0.035, MM }, { "MURC", "mu Rel C", 1, 1 }, { "PHYS_WIDTH", "W", 0.2, MM }, { "PHYS_S", "S", 0.2, MM },
+                   { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50.0, 1 }, { "DUMMY", "", 0, 1 }, { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    case 6: add( { { "MUR", "mu Rel I", 1, 1 }, { "MURC", "mu Rel C", 1, 1 }, { "PHYS_WIDTH", "a", 10.0, MM }, { "PHYS_S", "b", 5.0, MM },
+                   { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50.0, 1 }, { "DUMMY", "", 0, 1 }, { "ANG_L", "Ang_l", 0, 1 } } ); break;
+    case 7: add( { { "MUR", "mu Rel I", 1, 1 }, { "MURC", "mu Rel C", 1, 1 }, { "PHYS_DIAM_IN", "Din", 1.0, MM }, { "PHYS_DIAM_OUT", "Dout", 8.0, MM },
+                   { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50.0, 1 }, { "DUMMY", "", 0, 1 }, { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    case 8: add( { { "TWISTEDPAIR_TWIST", "Twists", 0.0, 1 }, { "MURC", "mu Rel C", 1, 1 }, { "TWISTEDPAIR_EPSILONR_ENV", "ErEnv", 1, 1 },
+                   { "PHYS_DIAM_IN", "Din", 1.0, MM }, { "PHYS_DIAM_OUT", "Dout", 8.0, MM }, { "PHYS_LEN", "L", 50.0, MM }, { "Z0", "Z0", 50.0, 1 },
+                   { "DUMMY", "", 0, 1 }, { "ANG_L", "Ang_l", 0.0, 1 } } ); break;
+    }
+
+    return v;
+}
+
+static const char* const TYPE_NAMES[] = { "MicroStrip", "Coupled_MicroStrip", "StripLine", "Coupled_Stripline", "CoPlanar", "GrCoPlanar", "RectWaveGuide", "Coax", "TwistedPair" };
+
+struct CASE
+{
+    std::string                   Name;
+    int                           Type;
+    bool                          Synthesize;
+    int                           Radio = 1; // m_radioBtnPrm1 (default) or 2
+    std::map<std::string, double> Typed;     // keyword -> value typed (user unit); the default otherwise
+    double                        Model = 0, SpecFreq = 1e9, MaskPresent = 0, MaskTUm = 20, MaskEr = 3.5, MaskTand = 0.025, Fills = 1;
+};
+
+static std::string run( const CASE& c )
+{
+    std::map<std::string, double> P; // TRANSLINE::m_parameters by PRMS_ID name
+    const char* const ids[] = { "EPSILONR", "TAND", "RHO", "H", "TWISTEDPAIR_TWIST", "H_T", "STRIPLINE_A", "T", "ROUGH", "MUR", "TWISTEDPAIR_EPSILONR_ENV",
+                                "MURC", "FREQUENCY", "Z0", "Z0_E", "Z0_O", "ANG_L", "PHYS_WIDTH", "PHYS_DIAM_IN", "PHYS_S", "PHYS_DIAM_OUT", "PHYS_LEN" };
+
+    std::map<std::string, double> normalized;
+
+    for( const PRM& p : prmsOf( c.Type ) )
+    {
+        const auto   it = c.Typed.find( p.Key );
+        const double typed = it != c.Typed.end() ? it->second : p.Default;
+        normalized[p.Id] = typed * p.Scale;
+    }
+
+    for( const char* id : ids )
+        P[id] = normalized.count( id ) ? normalized[id] : 1.0; // PANEL_TRANSLINE::GetPrmValue
+
+    const double SIGMA = 1.0 / P["RHO"];
+    const double SKIN = 1.0 / sqrt( M_PI * P["FREQUENCY"] * P["MURC"] * TRANSLINE_CALCULATIONS::MU0 * SIGMA );
+
+    MICROSTRIP ms; COUPLED_MICROSTRIP cms; STRIPLINE sl; COUPLED_STRIPLINE csl; COPLANAR cpw; RECTWAVEGUIDE rw; COAX cx; TWISTEDPAIR tp;
+    TRANSLINE_CALCULATION_BASE* calcs[] = { &ms, &cms, &sl, &csl, &cpw, &cpw, &rw, &cx, &tp };
+    TRANSLINE_CALCULATION_BASE& k = *calcs[c.Type];
+    auto set = [&]( TCP t, double v ) { k.SetParameter( t, v ); };
+    auto mask = [&]( bool fills ) {
+        set( TCP::SOLDERMASK_PRESENT, c.MaskPresent ); set( TCP::SOLDERMASK_THICKNESS, c.MaskTUm * 1.0e-6 ); set( TCP::SOLDERMASK_EPSILONR, c.MaskEr );
+        set( TCP::SOLDERMASK_TAND, c.MaskTand );
+        if( fills ) set( TCP::SOLDERMASK_FILLS_GAPS, c.Fills );
+    };
+
+    switch( c.Type )
+    {
+    case 0: // MICROSTRIP_UI::getProperties
+        set( TCP::SIGMA, SIGMA ); set( TCP::EPSILON_EFF, 1.0 ); set( TCP::SKIN_DEPTH, SKIN ); set( TCP::EPSILONR, P["EPSILONR"] );
+        set( TCP::DIELECTRIC_MODEL_SEL, c.Model ); set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); mask( false );
+        set( TCP::H_T, P["H_T"] ); set( TCP::H, P["H"] ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::T, P["T"] ); set( TCP::Z0, P["Z0"] );
+        set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::ROUGH, P["ROUGH"] ); set( TCP::TAND, P["TAND"] ); set( TCP::PHYS_LEN, P["PHYS_LEN"] );
+        set( TCP::MUR, P["MUR"] ); set( TCP::MURC, P["MURC"] ); set( TCP::ANG_L, P["ANG_L"] );
+        break;
+    case 1: // C_MICROSTRIP::getProperties
+        set( TCP::Z0_E, P["Z0_E"] ); set( TCP::Z0_O, P["Z0_O"] ); set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model );
+        set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); mask( false ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::PHYS_LEN, P["PHYS_LEN"] );
+        set( TCP::PHYS_S, P["PHYS_S"] ); set( TCP::H, P["H"] ); set( TCP::T, P["T"] ); set( TCP::H_T, P["H_T"] ); set( TCP::FREQUENCY, P["FREQUENCY"] );
+        set( TCP::MURC, P["MURC"] ); set( TCP::SKIN_DEPTH, SKIN ); set( TCP::SIGMA, SIGMA ); set( TCP::ROUGH, P["ROUGH"] ); set( TCP::TAND, P["TAND"] );
+        set( TCP::ANG_L, P["ANG_L"] );
+        break;
+    case 2: // STRIPLINE_UI::getProperties
+        set( TCP::SKIN_DEPTH, SKIN ); set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model ); set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq );
+        set( TCP::T, P["T"] ); set( TCP::STRIPLINE_A, P["STRIPLINE_A"] ); set( TCP::H, P["H"] ); set( TCP::Z0, P["Z0"] ); set( TCP::PHYS_LEN, P["PHYS_LEN"] );
+        set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::TAND, P["TAND"] ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::ANG_L, P["ANG_L"] );
+        set( TCP::SIGMA, SIGMA ); set( TCP::MURC, P["MURC"] );
+        break;
+    case 3: // C_STRIPLINE::getProperties
+        set( TCP::Z0_E, P["Z0_E"] ); set( TCP::Z0_O, P["Z0_O"] ); set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model );
+        set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::PHYS_LEN, P["PHYS_LEN"] ); set( TCP::PHYS_S, P["PHYS_S"] );
+        set( TCP::H, P["H"] ); set( TCP::STRIPLINE_A, P["STRIPLINE_A"] ); set( TCP::T, P["T"] ); set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::MUR, P["MUR"] );
+        set( TCP::MURC, P["MURC"] ); set( TCP::SKIN_DEPTH, SKIN ); set( TCP::SIGMA, SIGMA ); set( TCP::TAND, P["TAND"] ); set( TCP::ROUGH, P["ROUGH"] );
+        set( TCP::ANG_L, P["ANG_L"] );
+        break;
+    case 4:
+    case 5: // COPLANAR_UI / GROUNDEDCOPLANAR_UI::getProperties
+        set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model ); set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); mask( true );
+        set( TCP::TAND, P["TAND"] ); set( TCP::SIGMA, SIGMA ); set( TCP::MURC, P["MURC"] ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::PHYS_S, P["PHYS_S"] );
+        set( TCP::H, P["H"] ); set( TCP::T, P["T"] ); set( TCP::PHYS_LEN, P["PHYS_LEN"] ); set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::Z0, P["Z0"] );
+        set( TCP::ANG_L, P["ANG_L"] ); set( TCP::SKIN_DEPTH, SKIN ); set( TCP::CPW_BACKMETAL, c.Type == 5 ? 1.0 : 0.0 );
+        k.SetSynthesizeTarget( c.Radio == 1 ? TCP::PHYS_WIDTH : TCP::PHYS_S );
+        break;
+    case 6: // RECTWAVEGUIDE_UI::getProperties
+        set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model ); set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); set( TCP::TAND, P["TAND"] );
+        set( TCP::SIGMA, SIGMA ); set( TCP::MUR, P["MUR"] ); set( TCP::MURC, P["MURC"] ); set( TCP::PHYS_WIDTH, P["PHYS_WIDTH"] ); set( TCP::PHYS_S, P["PHYS_S"] );
+        set( TCP::PHYS_LEN, P["PHYS_LEN"] ); set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::Z0, P["Z0"] ); set( TCP::ANG_L, P["ANG_L"] );
+        if( c.Radio == 1 ) k.SetSynthesizeTarget( TCP::PHYS_WIDTH );
+        break;
+    case 7: // COAX_UI::getProperties
+        set( TCP::SIGMA, SIGMA ); set( TCP::SKIN_DEPTH, SKIN ); set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model );
+        set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); set( TCP::TAND, P["TAND"] ); set( TCP::PHYS_DIAM_IN, P["PHYS_DIAM_IN"] ); set( TCP::PHYS_DIAM_OUT, P["PHYS_DIAM_OUT"] );
+        set( TCP::PHYS_LEN, P["PHYS_LEN"] ); set( TCP::MUR, P["MUR"] ); set( TCP::MURC, P["MURC"] ); set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::Z0, P["Z0"] );
+        set( TCP::ANG_L, P["ANG_L"] );
+        k.SetSynthesizeTarget( c.Radio == 1 ? TCP::PHYS_DIAM_IN : TCP::PHYS_DIAM_OUT );
+        break;
+    case 8: // TWISTEDPAIR_UI::getProperties
+        set( TCP::EPSILONR, P["EPSILONR"] ); set( TCP::DIELECTRIC_MODEL_SEL, c.Model ); set( TCP::EPSILONR_SPEC_FREQ, c.SpecFreq ); set( TCP::TAND, P["TAND"] );
+        set( TCP::SIGMA, SIGMA ); set( TCP::MURC, P["MURC"] ); set( TCP::PHYS_DIAM_IN, P["PHYS_DIAM_IN"] ); set( TCP::PHYS_DIAM_OUT, P["PHYS_DIAM_OUT"] );
+        set( TCP::PHYS_LEN, P["PHYS_LEN"] ); set( TCP::FREQUENCY, P["FREQUENCY"] ); set( TCP::Z0, P["Z0"] ); set( TCP::ANG_L, P["ANG_L"] );
+        set( TCP::TWISTEDPAIR_TWIST, P["TWISTEDPAIR_TWIST"] ); set( TCP::TWISTEDPAIR_EPSILONR_ENV, P["TWISTEDPAIR_EPSILONR_ENV"] );
+        k.SetSynthesizeTarget( c.Radio == 1 ? TCP::PHYS_DIAM_IN : TCP::PHYS_DIAM_OUT );
+        break;
+    }
+
+    bool converged = false;
+
+    if( c.Synthesize )
+        converged = k.Synthesize( SYNTHESIZE_OPTS::DEFAULT );
+    else
+        k.Analyse();
+
+    const std::string synthesis = resultsJson( k.GetSynthesisResults() );
+    const std::string analysis = resultsJson( k.GetAnalysisResults() );
+    std::string te, tm;
+
+    if( c.Type == 6 ) { te = rw.GetTEModes(); tm = rw.GetTMModes(); }
+    if( c.Type == 7 ) { te = cx.GetTEModes(); tm = cx.GetTMModes(); }
+
+    std::string typed;
+
+    for( const auto& [key, v] : c.Typed )
+        typed += ( typed.empty() ? "" : ", " ) + str( key ) + ": " + num( v );
+
+    return "    {\"name\": " + str( c.Name ) + ", \"type\": " + std::to_string( c.Type ) + ", \"tline\": " + str( TYPE_NAMES[c.Type] ) + ", \"op\": "
+           + str( c.Synthesize ? "synthesize" : "analyse" ) + ", \"radio\": " + std::to_string( c.Radio ) + ", \"typed\": {" + typed + "}"
+           + ",\n     \"model\": " + num( c.Model ) + ", \"spec_freq\": " + num( c.SpecFreq ) + ", \"mask\": [" + num( c.MaskPresent ) + ", " + num( c.MaskTUm ) + ", "
+           + num( c.MaskEr ) + ", " + num( c.MaskTand ) + ", " + num( c.Fills ) + "], \"converged\": " + ( converged ? "true" : "false" )
+           + ", \"te\": " + str( te ) + ", \"tm\": " + str( tm ) + ",\n     \"analysis\": " + analysis + ",\n     \"synthesis\": " + synthesis + "}";
+}
+
+static std::vector<CASE> cases()
+{
+    std::vector<CASE> v;
+
+    // Every type at the panel's defaults, analysed and synthesized
+    for( int t = 0; t < 9; ++t )
+    {
+        v.push_back( { std::string( TYPE_NAMES[t] ) + " defaults, analyse", t, false } );
+        v.push_back( { std::string( TYPE_NAMES[t] ) + " defaults, synthesize", t, true } );
+    }
+
+    // The other radio button
+    for( int t : { 4, 5, 6, 7, 8 } )
+        v.push_back( { std::string( TYPE_NAMES[t] ) + " defaults, synthesize the second parameter", t, true, 2 } );
+
+    // Coupled lines with a real even / odd target (DEFAULT 2-D synthesis), an electrical length, other geometry
+    v.push_back( { "Coupled_MicroStrip 60/40 ohm, synthesize", 1, true, 1, { { "Zeven", 60 }, { "Zodd", 40 }, { "Ang_l", 1.5 } } } );
+    v.push_back( { "Coupled_MicroStrip 70/35 ohm on RO4350B, synthesize", 1, true, 1, { { "Er", 3.66 }, { "TanD", 0.0037 }, { "H", 0.508 }, { "Zeven", 70 },
+                                                                                       { "Zodd", 35 }, { "Ang_l", 0.7 } } } );
+    v.push_back( { "Coupled_Stripline 60/40 ohm, synthesize", 3, true, 1, { { "Zeven", 60 }, { "Zodd", 40 } } } );
+    v.push_back( { "Coupled_Stripline offset, analyse", 3, false, 1, { { "a", 0.05 }, { "W", 0.15 }, { "S", 0.1 } } } );
+    v.push_back( { "Coupled_Stripline offset 55/45 ohm, synthesize", 3, true, 1, { { "a", 0.07 }, { "Zeven", 55 }, { "Zodd", 45 } } } );
+
+    // Geometry and frequency variations of the four new calculators
+    v.push_back( { "Coax RG58-like at 10 GHz, analyse", 7, false, 1, { { "Er", 2.25 }, { "TanD", 4e-4 }, { "Din", 0.9 }, { "Dout", 2.95 }, { "Frequency", 10 } } } );
+    v.push_back( { "Coax 75 ohm outer diameter, synthesize", 7, true, 2, { { "Er", 2.1 }, { "Z0", 75 }, { "Ang_l", 3.14159 } } } );
+    v.push_back( { "Coax Dout <= Din, analyse", 7, false, 1, { { "Din", 3 }, { "Dout", 2 } } } );
+    v.push_back( { "RectWaveGuide WR-90 at 10 GHz, analyse", 6, false, 1, { { "Er", 1 }, { "TanD", 0 }, { "a", 22.86 }, { "b", 10.16 }, { "Frequency", 10 } } } );
+    v.push_back( { "RectWaveGuide WR-90 at 30 GHz, analyse", 6, false, 1, { { "Er", 1 }, { "TanD", 0 }, { "a", 22.86 }, { "b", 10.16 }, { "Frequency", 30 } } } );
+    v.push_back( { "RectWaveGuide WR-90 at 80 GHz (truncated modes), analyse", 6, false, 1, { { "Er", 1 }, { "a", 22.86 }, { "b", 10.16 }, { "Frequency", 80 } } } );
+    v.push_back( { "RectWaveGuide 500 ohm at 10 GHz, synthesize", 6, true, 1, { { "Er", 1 }, { "Z0", 500 }, { "Ang_l", 2 }, { "Frequency", 10 } } } );
+    v.push_back( { "CoPlanar 1.6 mm FR4 at 5 GHz, analyse", 4, false, 1, { { "H", 1.6 }, { "W", 1.0 }, { "S", 0.15 }, { "Frequency", 5 } } } );
+    v.push_back( { "GrCoPlanar 1.6 mm FR4 at 5 GHz, analyse", 5, false, 1, { { "H", 1.6 }, { "W", 1.0 }, { "S", 0.15 }, { "Frequency", 5 } } } );
+    v.push_back( { "GrCoPlanar 50 ohm gap, synthesize", 5, true, 2, { { "H", 0.4 }, { "W", 0.6 }, { "Ang_l", 1 } } } );
+    v.push_back( { "CoPlanar thin copper, analyse", 4, false, 1, { { "T", 0 }, { "Frequency", 0.1 } } } );
+    v.push_back( { "TwistedPair 20 twists/m, analyse", 8, false, 1, { { "Twists", 20 }, { "Er", 3 }, { "Din", 0.5 }, { "Dout", 1.0 }, { "Frequency", 0.01 } } } );
+    v.push_back( { "TwistedPair 100 ohm outer diameter, synthesize", 8, true, 2, { { "Twists", 30 }, { "Din", 0.5 }, { "Z0", 100 }, { "Ang_l", 1 } } } );
+
+    // The panel-level controls: Djordjevic-Sarkar dispersion and the soldermask overlay
+    CASE ds{ "MicroStrip Djordjevic-Sarkar at 5 GHz spec 1 GHz, analyse", 0, false, 1, { { "Frequency", 5 } } };
+    ds.Model = 1;
+    v.push_back( ds );
+    CASE dsc{ "Coax Djordjevic-Sarkar, synthesize", 7, true, 1, { { "Frequency", 3 } } };
+    dsc.Model = 1; dsc.SpecFreq = 2e9;
+    v.push_back( dsc );
+    CASE mms{ "MicroStrip soldermask, analyse", 0, false };
+    mms.MaskPresent = 1;
+    v.push_back( mms );
+    CASE mcp{ "CoPlanar soldermask filling gaps, analyse", 4, false };
+    mcp.MaskPresent = 1;
+    v.push_back( mcp );
+    CASE mcp2{ "GrCoPlanar soldermask on the traces only, analyse", 5, false };
+    mcp2.MaskPresent = 1; mcp2.Fills = 0; mcp2.MaskTUm = 30; mcp2.MaskEr = 3.8;
+    v.push_back( mcp2 );
+    CASE mcms{ "Coupled_MicroStrip soldermask, analyse", 1, false };
+    mcms.MaskPresent = 1;
+    v.push_back( mcms );
+
+    return v;
+}
+} // namespace CALC
+
 int main()
 {
     std::string out = "{\n  \"kicad\": \"25ec2335\",\n  \"transline\": [\n";
@@ -1282,6 +1541,12 @@ int main()
                + str( columnName( c.Column ) ) + ",\n     \"result\": " + p.calculateTrackParametersForCell( c.Column ) + "}"
                + ( i + 1 < cases.size() ? ",\n" : "\n" );
     }
+
+    out += "  ],\n  \"calculator\": [\n";
+    const auto calc = CALC::cases();
+
+    for( size_t i = 0; i < calc.size(); ++i )
+        out += CALC::run( calc[i] ) + ( i + 1 < calc.size() ? ",\n" : "\n" );
 
     out += "  ]\n}\n";
     fputs( out.c_str(), stdout );

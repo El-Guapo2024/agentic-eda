@@ -1,0 +1,8 @@
+// The help texts of the Resistor Calculator and E-Series panels, verbatim from KiCad 25ec2335 pcb_calculator/r_calculator_help.md and
+// eseries_display_help.md (the panels show `ConvertMarkdown2Html` of them, kicad-port/markdownHtml.ts).
+
+/** r_calculator_help.md. */
+export const R_CALCULATOR_HELP = "- This calculator finds combinations of standard E-series (between 10Ω and 1MΩ) to create arbitrary values.\n- You can enter the required resistance from 0.0025 to 4000 kΩ.\n- Solutions using up to 4 components are given.\n\nThe requested value is always excluded from the solution set.<br>\nOptionally up to two additional values can be excluded in case of component availability problems.\n\nSolutions are given in the following formats:\n\n\tR1 + R2 +...+ Rn\tresistors in series\n\tR1 | R2 |...| Rn\tresistors in parallel\n\tR1 + (R2|R3)...\t\tany combination of the above\n";
+
+/** eseries_display_help.md. */
+export const ESERIES_DISPLAY_HELP = "Passive components are commonly made with E-series values appropriate to their precision.\nCapacitors commonly use E12 values. 10% and 5% resistors commonly use E24 values. 1%\nresistors use E96 values. Other series are not commonly used.\n\nTo select a value begin with the calculated target value and then round it to 2\nsignificant figures for E24 or below or 3 significant figures for E48 and up.\nThen find the value in the table which is nearest to the significant figures\nremaining and substitute it for those figures.\n\nFor example if the calculated target value is 16,834.2Ω then this rounds to 16,800Ω.\nThe nearest value to 168 is 169 and the selected E96 value is 16.9kΩ.\n\nThe value 0 is a special case and is not present in any series.";
