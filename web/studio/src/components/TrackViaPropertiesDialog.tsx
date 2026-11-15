@@ -13,6 +13,7 @@ import {
   ANNULAR_RING_CHOICES,
   BACKDRILL_CHOICES,
   editLayerChoices,
+  netSelectorEnabled,
   PADSTACK_MODE_CHOICES,
   POST_MACHINE_CHOICES,
   sizeOn,
@@ -21,6 +22,7 @@ import {
   VIA_TYPE_CHOICES,
   viaLayerDepth,
   withNetAnswers,
+  withNetChosen,
   type BackdrillChoice,
   type PadstackMode,
   type PostChoice,
@@ -142,7 +144,7 @@ export function TrackViaPropertiesDialog({
           <div className="kv-grid">
             <span>Net</span>
             <span>
-              <select aria-label="Net" value={form.net ?? "\u0000"} onChange={(e) => setForm((f) => ({ ...f, net: e.target.value === "\u0000" ? null : e.target.value }))}>
+              <select aria-label="Net" disabled={!netSelectorEnabled(form)} value={form.net ?? "\u0000"} onChange={(e) => setForm((f) => withNetChosen(f, e.target.value === "\u0000" ? null : e.target.value))}>
                 {form.net == null && <option value={"\u0000"}>{"<...>"}</option>}
                 <option value="">{"<no net>"}</option>
                 {nets.map((n) => (
@@ -152,6 +154,23 @@ export function TrackViaPropertiesDialog({
                 ))}
               </select>
             </span>
+            {hasVias && (
+              <>
+                <span title="Automatically change the net of this via when the pads or zones it touches are changed">Automatically update via nets</span>
+                <span>
+                  <input
+                    type="checkbox"
+                    aria-label="Automatically update via nets"
+                    title="Automatically change the net of this via when the pads or zones it touches are changed"
+                    checked={form.notFree === true}
+                    ref={(el) => {
+                      if (el) el.indeterminate = form.notFree == null;
+                    }}
+                    onChange={(e) => setForm((f) => ({ ...f, notFree: e.target.checked }))}
+                  />
+                </span>
+              </>
+            )}
             <span>Locked</span>
             <span>
               <input

@@ -2374,8 +2374,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
             format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
         }
-        Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } => format!(
-            "via place --net {net:?} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}{}{}{}",
+        Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, free, .. } => format!(
+            "via place --net {net:?} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}{}{}{}{}",
             mm(*x),
             mm(*y),
             mm(*drill),
@@ -2383,6 +2383,7 @@ fn cmd_line(c: &Cmd) -> String {
             split_track.as_ref().map(|t| format!(" --split {t}")).unwrap_or_default(),
             if *allow_drc_violations { " --allow-drc" } else { "" },
             if hidden_layers.is_empty() { String::new() } else { format!(" --hidden {:?}", hidden_layers.join(" ")) },
+            if *free { " --free" } else { "" },
         ),
         Cmd::DeleteVia { id } => format!("via delete {id}"),
         Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm(*x), mm(*y)),
@@ -2531,6 +2532,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetSolderMask { ids, solder_mask, .. } => format!("solder-mask {} {}", if *solder_mask { "on" } else { "off" }, ids.join(" ")),
         Cmd::SetCornerRadius { ids, radius } => format!("shape corner-radius {} {}", mm(*radius), ids.join(" ")),
         Cmd::SetViaProps { id, .. } => format!("via props {id}"),
+        Cmd::SetViaFree { ids, free } => format!("via free {} {}", if *free { "on" } else { "off" }, ids.join(" ")),
         Cmd::SetTeardropParams { ids, .. } => format!("teardrop params {}", ids.join(" ")),
         Cmd::EditBoardFootprintText { id, delete, .. } => format!("footprint text {id}{}", if *delete { " delete" } else { "" }),
         Cmd::SetFootprintPasteMargin { part, .. } => format!("footprint paste-margin {part}"),
@@ -2901,7 +2903,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditTextStyle { .. } => "text",
         Cmd::SetSolderMask { .. } => "solder-mask",
         Cmd::SetCornerRadius { .. } => "shape",
-        Cmd::SetViaProps { .. } => "via",
+        Cmd::SetViaProps { .. } | Cmd::SetViaFree { .. } => "via",
         Cmd::SetTeardropParams { .. } => "teardrops",
         Cmd::EditBoardFootprintText { .. } => "footprint-text",
         Cmd::SetFootprintPasteMargin { .. } | Cmd::SetFootprintSolderMask { .. } => "footprint",
@@ -3262,7 +3264,7 @@ pub fn run(
                 let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via place", "needs --to-layer LAYER"))?;
                 let split_track = flag(rest, "--split");
                 let hidden_layers = flag(rest, "--hidden").map(|h| h.split_whitespace().map(str::to_string).collect()).unwrap_or_default();
-                let cmd = Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations: has(rest, "--allow-drc"), hidden_layers, barcode_shapes: Default::default() };
+                let cmd = Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations: has(rest, "--allow-drc"), hidden_layers, barcode_shapes: Default::default(), free: has(rest, "--free") };
                 step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
@@ -3274,7 +3276,20 @@ pub fn run(
                 let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "via move", "needs --to x,y, mm"))?)?;
                 step_with(&dir, Cmd::MoveVia { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
-            other => Err(fail("board_usage", other, "usage: eda board via <add|place|delete|move> ...")),
+            // `PCB_VIA::SetIsFree` (Track & Via Properties' "Automatically update via nets" off): `eda board via free on|off <id>..`
+            "free" => {
+                let free = match rest.get(2).map(String::as_str) {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err(fail("board_usage", "via free", "usage: eda board via free on|off <id>..")),
+                };
+                let ids: Vec<String> = rest.iter().skip(3).cloned().collect();
+                if ids.is_empty() {
+                    return Err(fail("board_usage", "via free", "usage: eda board via free on|off <id>.."));
+                }
+                step_with(&dir, Cmd::SetViaFree { ids, free }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board via <add|place|delete|move|free> ...")),
         },
         "zone" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
@@ -4901,7 +4916,7 @@ pub(crate) mod tests {
     fn the_logged_draw_via_line_runs_as_a_cli_command() {
         let dir = scratch("via_place_line");
         setup(&dir);
-        let cmd = Cmd::PlaceVia { net: String::new(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: true, hidden_layers: vec!["B.Cu".into()], barcode_shapes: Default::default() };
+        let cmd = Cmd::PlaceVia { net: String::new(), x: mm(10.0), y: mm(15.0), drill: mm(0.3), diameter: mm(0.6), from_layer: "F.Cu".into(), to_layer: "B.Cu".into(), split_track: None, allow_drc_violations: true, hidden_layers: vec!["B.Cu".into()], barcode_shapes: Default::default(), free: false };
         step(&dir, cmd, false, "ui").unwrap();
         let log = std::fs::read_to_string(dir.join("activity.jsonl")).unwrap();
         let line = serde_json::from_str::<serde_json::Value>(log.lines().last().unwrap()).unwrap()["cmd"].as_str().unwrap().to_string();

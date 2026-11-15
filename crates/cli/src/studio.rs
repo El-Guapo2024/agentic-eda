@@ -1645,6 +1645,8 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                     "props": extra.map(|e| e.props()).filter(|p| *p != eda_model::via_extra::ViaProps::default()),
                     // Its own teardrop parameters (`PCB_VIA::GetTeardropParams`, `eda_model::teardrop_params`); absent when Board Setup's block serves it.
                     "teardrops": extra.and_then(|e| e.teardrops()),
+                    // `PCB_VIA::GetIsFree` (`(free yes)`): its net is not changed by what it touches ("Automatically update via nets" off); absent when it is not free.
+                    "free": extra.is_some_and(|e| e.is_free()).then_some(true),
                 })
             }).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({

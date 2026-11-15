@@ -283,12 +283,22 @@ test("a track and an arc: lock, layer, net, then width and the two end points", 
 
 test("a via: position, lock, net, and its Via Properties group", () => {
   assert.deepEqual(names(board(), ["via_a"]), [
-    ["Basic Properties", ["Position X", "Position Y", "Locked", "Net"]],
+    ["Basic Properties", ["Position X", "Position Y", "Locked", "Net", "Automatically Update Net"]],
     ["Via Properties", ["Diameter", "Hole", "Layer Top", "Layer Bottom", "Via Type", "Front tenting", "Back tenting", "Front covering", "Back covering", "Front plugging", "Back plugging", "Capping", "Filling"]],
     ["Backdrill", ["Backdrill Mode"]],
     ["Post-machining", ["Front Post-machining", "Back Post-machining"]],
     ["Teardrops", ["Enable Teardrops", "Best Length Ratio", "Max Length", "Best Width Ratio", "Max Width", "Curved Teardrops", "Allow Teardrops To Span Two Tracks", "Max Width Ratio"]],
   ]);
+});
+
+test("a via's Automatically Update Net (KiCad 25ec2335 PCB_VIA::GetIsNotFree): !free, set_via_free on a change (task-v20-modelgaps)", () => {
+  const b = board();
+  assert.equal(rowOf(b, ["via_a"], "Automatically Update Net")!.value, true, "a via that is not free follows its connections");
+  assert.deepEqual(edit(b, ["via_a"], "Automatically Update Net", false), [{ op: "set_via_free", ids: ["via_a"], free: true }]);
+  assert.deepEqual(edit(b, ["via_a"], "Automatically Update Net", true), [], "no change");
+  b.routing!.vias[0]!.free = true;
+  assert.equal(rowOf(b, ["via_a"], "Automatically Update Net")!.value, false);
+  assert.deepEqual(edit(b, ["via_a"], "Automatically Update Net", true), [{ op: "set_via_free", ids: ["via_a"], free: false }]);
 });
 
 test("a copper zone and a rule area: what each has, and none of a zone's position or layer", () => {

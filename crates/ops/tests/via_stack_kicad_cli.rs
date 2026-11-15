@@ -176,7 +176,7 @@ fn placed_stacks_are_kept_and_judged_by_kicad_cli() {
     // loose microvias in a column, unfilled: kicad-cli's fill check (the stack would have filled them)
     let mut loose = Board::new(design.clone(), &model, mm(0.1), mm(0.3));
     for (a, z) in [("F.Cu", "In1.Cu"), ("In1.Cu", "In2.Cu")] {
-        let via = Cmd::PlaceVia { net: String::new(), x: mm(80.0), y: mm(20.0), drill: mm(0.1), diameter: mm(0.3), from_layer: a.into(), to_layer: z.into(), split_track: None, allow_drc_violations: true, hidden_layers: vec![], barcode_shapes: Default::default() };
+        let via = Cmd::PlaceVia { net: String::new(), x: mm(80.0), y: mm(20.0), drill: mm(0.1), diameter: mm(0.3), from_layer: a.into(), to_layer: z.into(), split_track: None, allow_drc_violations: true, hidden_layers: vec![], barcode_shapes: Default::default(), free: false };
         loose.apply(&via).unwrap();
     }
     let mut d = loose.design().clone();

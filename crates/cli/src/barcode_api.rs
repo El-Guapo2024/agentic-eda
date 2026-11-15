@@ -314,7 +314,7 @@ pub(crate) fn with_via_barcode_shapes(cmd: &Cmd, dir: &Path, design: &Design, mo
     fn fill(c: &Cmd, shapes: &std::collections::BTreeMap<String, Vec<Vec<Point>>>) -> Cmd {
         match c {
             Cmd::Batch { cmds } => Cmd::Batch { cmds: cmds.iter().map(|c| fill(c, shapes)).collect() },
-            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, .. } => Cmd::PlaceVia {
+            Cmd::PlaceVia { net, x, y, drill, diameter, from_layer, to_layer, split_track, allow_drc_violations, hidden_layers, free, .. } => Cmd::PlaceVia {
                 net: net.clone(),
                 x: *x,
                 y: *y,
@@ -326,6 +326,7 @@ pub(crate) fn with_via_barcode_shapes(cmd: &Cmd, dir: &Path, design: &Design, mo
                 allow_drc_violations: *allow_drc_violations,
                 hidden_layers: hidden_layers.clone(),
                 barcode_shapes: shapes.clone(),
+                free: *free,
             },
             c => c.clone(),
         }

@@ -246,6 +246,26 @@ fn set_via_props_writes_the_tokens_kicad_writes_and_the_drcs_tenting_follows() {
     assert_eq!(b.apply(&Cmd::SetViaProps { id: "via_nope".into(), props: props.clone() }).unwrap_err()[0].check, "ops_unknown_via");
 }
 
+/// `Cmd::SetViaFree`: Track & Via Properties' "Automatically update via nets" and the panel's "Automatically Update Net" (`SetIsFree( !value )`): the `(free yes)`
+/// token where `format( const PCB_TRACK* )` writes it, the via's other tokens kept; refused when nothing changes or an id is no via.
+#[test]
+fn set_via_free_sets_the_free_token_and_keeps_the_rest() {
+    use eda_model::via_extra::ViaProps;
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: ViaProps { capping: Some(true), ..Default::default() } }).unwrap();
+    b.apply(&Cmd::SetViaFree { ids: ids(&["via_a"]), free: true }).unwrap();
+    let e = drawings(&b).via_extra("via_a").unwrap();
+    assert!(e.is_free());
+    assert_eq!(e.tokens, ["(free yes)", "(capping yes)"]);
+    assert_eq!(b.apply(&Cmd::SetViaFree { ids: ids(&["via_a"]), free: true }).unwrap_err()[0].check, "ops_nothing_to_change");
+    assert_eq!(b.apply(&Cmd::SetViaFree { ids: ids(&["via_nope"]), free: true }).unwrap_err()[0].check, "ops_unknown_via");
+    b.apply(&Cmd::SetViaFree { ids: ids(&["via_a"]), free: false }).unwrap();
+    assert_eq!(drawings(&b).via_extra("via_a").unwrap().tokens, ["(capping yes)"]);
+    b.apply(&Cmd::SetViaProps { id: "via_a".into(), props: ViaProps::default() }).unwrap();
+    assert!(drawings(&b).via_extra("via_a").is_none());
+}
+
 #[test]
 fn set_teardrop_params_gives_vias_and_pads_their_own_and_none_gives_them_back_to_board_setup() {
     use eda_model::teardrop_params::TeardropParams;

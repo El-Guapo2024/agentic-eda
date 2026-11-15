@@ -468,6 +468,11 @@
     "net": "GND",
     "props": [
      {
+      "name": "Automatically Update Net",
+      "kind": "bool",
+      "value": true
+     },
+     {
       "name": "Diameter",
       "kind": "int",
       "value": 600000
@@ -634,6 +639,11 @@
     "net": "VCC",
     "props": [
      {
+      "name": "Automatically Update Net",
+      "kind": "bool",
+      "value": true
+     },
+     {
       "name": "Diameter",
       "kind": "int",
       "value": 800000
@@ -794,6 +804,11 @@
     ],
     "net": "VCC",
     "props": [
+     {
+      "name": "Automatically Update Net",
+      "kind": "bool",
+      "value": true
+     },
      {
       "name": "Diameter",
       "kind": "int",
@@ -5176,6 +5191,7 @@
     "Arrow Direction",
     "Associated Layer",
     "Auto Thickness",
+    "Automatically Update Net",
     "Back Post-machining",
     "Back Post-machining Angle",
     "Back Post-machining Depth",

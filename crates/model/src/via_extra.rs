@@ -100,7 +100,7 @@ impl ViaExtra {
             self.tokens.insert(i, t.clone());
         }
         if mode.removes() {
-            let at = head.len() + usize::from(self.tokens.get(head.len()).is_some_and(|t| t == "free"));
+            let at = head.len() + usize::from(self.tokens.get(head.len()).is_some_and(|t| t == "free" || matches!(flag_token(t), Some(("free", _)))));
             self.tokens.insert(at, keep_zone_layers.unwrap_or_else(|| "(zone_layer_connections)".to_string()));
         }
     }
@@ -582,6 +582,32 @@ impl ViaExtra {
     pub fn set_teardrops(&mut self, params: Option<&crate::teardrop_params::TeardropParams>) {
         crate::teardrop_params::set_in_tokens(&mut self.tokens, params);
     }
+
+    /// `PCB_VIA::GetIsFree` as `PCB_IO_KICAD_SEXPR_PARSER::parsePCB_VIA` reads it (`case T_free: via->SetIsFree( parseMaybeAbsentBool( true ) )`, KiCad
+    /// 25ec2335 and 8303b2ad alike): `(free yes)`, a bare `(free)` or an older file's bare word `free` is free, `(free no)` is not; the last one read wins. A free
+    /// via is one whose net its connections do not change ("Automatically update via nets" off: `CN_ITEM( via, !via->GetIsFree() )`, connectivity_items.cpp).
+    pub fn is_free(&self) -> bool {
+        let mut free = false;
+        for t in &self.tokens {
+            if t == "free" {
+                free = true;
+            } else if let Some(("free", v)) = flag_token(t) {
+                free = v;
+            }
+        }
+        free
+    }
+
+    /// `PCB_VIA::SetIsFree` on the tokens: every `free` token goes, and a free via gets `(free yes)` where `PCB_IO_KICAD_SEXPR::format( const PCB_TRACK* )` writes
+    /// it -- after the unconnected-layer settings (`remove_unused_layers`, `keep_end_layers`, `start_end_only`; the lock, written between them by `KICAD_FORMAT::FormatBool(
+    /// m_out, "locked", true )`, is the via's own here) and before `(zone_layer_connections ..)` and everything else. A via that is not free writes nothing.
+    pub fn set_free(&mut self, free: bool) {
+        self.tokens.retain(|t| t != "free" && !matches!(flag_token(t), Some(("free", _))));
+        if free {
+            let at = self.tokens.iter().take_while(|t| matches!(flag_token(t), Some(("remove_unused_layers" | "keep_end_layers" | "start_end_only", _)))).count();
+            self.tokens.insert(at, "(free yes)".to_string());
+        }
+    }
 }
 
 /// `(name yes)` or `(name no)`: a file token that is one boolean setting. A bare `(name)` is `yes` (`parseMaybeAbsentBool( true )`).
@@ -721,5 +747,33 @@ mod tests {
         assert_eq!(z.tokens, ["(remove_unused_layers yes)", "(keep_end_layers yes)", "(zone_layer_connections \"F.Cu\" \"In1.Cu\")"]);
         z.set_unconnected_layers(UnconnectedLayers::KeepAll);
         assert!(z.tokens.is_empty() && z.is_default());
+    }
+
+    /// `parsePCB_VIA`'s `case T_free` (`parseMaybeAbsentBool( true )`) and `format( const PCB_TRACK* )`'s `if( via->GetIsFree() ) FormatBool( m_out, "free", true )`:
+    /// read in every form a file has, written as `(free yes)` after the unconnected-layer settings and before the zone layer connections.
+    #[test]
+    fn a_vias_free_flag_is_read_in_every_form_and_written_where_format_writes_it() {
+        assert!(!extra(&[]).is_free());
+        assert!(extra(&["free"]).is_free());
+        assert!(extra(&["(free yes)"]).is_free());
+        assert!(extra(&["(free)"]).is_free());
+        assert!(!extra(&["(free no)"]).is_free());
+        let mut e = extra(&["(remove_unused_layers yes)", "(keep_end_layers no)", "(zone_layer_connections)", "(tenting (front yes) (back no))"]);
+        e.set_free(true);
+        assert_eq!(e.tokens, ["(remove_unused_layers yes)", "(keep_end_layers no)", "(free yes)", "(zone_layer_connections)", "(tenting (front yes) (back no))"]);
+        assert!(e.is_free());
+        // an older file's bare word is replaced, not doubled
+        let mut old = extra(&["free", "(capping no)"]);
+        old.set_free(true);
+        assert_eq!(old.tokens, ["(free yes)", "(capping no)"]);
+        old.set_free(false);
+        assert_eq!(old.tokens, ["(capping no)"]);
+        let mut only = extra(&["(free yes)"]);
+        only.set_free(false);
+        assert!(only.is_default());
+        // the annular-ring mode set after keeps the zone layer list after `(free yes)`
+        let mut z = extra(&["(free yes)"]);
+        z.set_unconnected_layers(UnconnectedLayers::RemoveAll);
+        assert_eq!(z.tokens, ["(remove_unused_layers yes)", "(keep_end_layers no)", "(free yes)", "(zone_layer_connections)"]);
     }
 }

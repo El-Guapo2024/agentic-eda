@@ -354,6 +354,39 @@ impl Board<'_> {
         Ok(())
     }
 
+    /// `Cmd::SetViaFree`: `via->SetIsFree( free )` on each via of `ids` -- `DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`'s `if( m_viaNotFree->Get3StateValue()
+    /// != wxCHK_UNDETERMINED ) via->SetIsFree( !m_viaNotFree->GetValue() )` and `PCB_VIA::SetIsNotFree`, the Properties panel's "Automatically Update Net" (KiCad
+    /// 25ec2335 `PCB_VIA_DESC`). The flag is the via's `(free yes)` token. Refused for an id that is no via and when no via changes.
+    pub(crate) fn set_via_free(&mut self, ids: &[String], free: bool) -> Result<(), Vec<CheckResult>> {
+        for id in ids {
+            if !self.design.routing.as_ref().is_some_and(|rt| rt.vias.iter().any(|v| v.id == *id)) {
+                return Err(fail("ops_unknown_via", id, "no via with this id"));
+            }
+        }
+        let mut changed = false;
+        for id in ids {
+            let dr = self.drawings_mut();
+            let mut extra = dr.via_extra(id).cloned().unwrap_or(ViaExtra { id: id.clone(), ..Default::default() });
+            if extra.is_free() == free {
+                continue;
+            }
+            extra.set_free(free);
+            changed = true;
+            match (dr.via_extras.iter().position(|e| e.id == *id), extra.is_default()) {
+                (Some(i), true) => {
+                    dr.via_extras.remove(i);
+                }
+                (Some(i), false) => dr.via_extras[i] = extra,
+                (None, false) => dr.via_extras.push(extra),
+                (None, true) => {}
+            }
+        }
+        if !changed {
+            return Err(fail("ops_nothing_to_change", "set_via_free", if free { "the vias are already free" } else { "the vias already follow their connections' nets" }));
+        }
+        Ok(())
+    }
+
     /// `Cmd::SetTeardropParams`: `GetTeardropParams() = params` on every via and pad named (`REF.NUM`, `REF.NUM#k`) -- Track & Via Properties' and Pad Properties'
     /// Teardrops parts (`DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow`, `DIALOG_PAD_PROPERTIES::transferDataToPad`) and the Properties panel's Teardrops
     /// rows. A via's land on its `(teardrops ..)` token, a pad's on its edit ([`eda_model::fp_edit::PadEdit::teardrops`]); `None` takes an item's own parameters
