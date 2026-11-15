@@ -133,3 +133,29 @@ export function sameSettings(a: ComponentClassSettings, b: ComponentClassSetting
     });
   return norm(a) === norm(b);
 }
+
+/**
+ * `FOOTPRINT::GetComponentClass()`'s constituent names, sorted, each once (`COMPONENT_CLASS_MANAGER::sortClassNames`): the whole class the server works out
+ * (`component_class`: the static classes -- the schematic's, else the board file's -- with the ones the project's assignment rules give), else the static ones.
+ */
+export function footprintClassNames(part: { component_class?: readonly string[]; component_classes?: readonly string[] }): string[] {
+  return [...new Set(part.component_class ?? part.component_classes ?? [])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** `COMPONENT_CLASS_MANAGER::GetFullClassNameForConstituents`: the class's name (`GetName`, what `GetComponentClassAsString` and the Properties panel say). */
+export function fullClassName(sorted: readonly string[]): string {
+  return sorted.join(",");
+}
+
+/**
+ * `COMPONENT_CLASS::GetHumanReadableName` (KiCad 25ec2335 `pcbnew/component_classes/component_class.cpp`), what the message panel says
+ * (`FOOTPRINT::GetMsgPanelInfo`'s "Component Class"): `<None>`, the one name, "A and B", "A, B and C", "A, B and 2 more".
+ */
+export function humanReadableClassName(sorted: readonly string[]): string {
+  const [a, b, c] = sorted;
+  if (sorted.length === 0) return "<None>";
+  if (sorted.length === 1) return a!;
+  if (sorted.length === 2) return `${a} and ${b}`;
+  if (sorted.length === 3) return `${a}, ${b} and ${c}`;
+  return `${a}, ${b} and ${sorted.length - 2} more`;
+}

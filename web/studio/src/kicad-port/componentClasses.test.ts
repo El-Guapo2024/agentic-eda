@@ -3,7 +3,7 @@
 // selection's references.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CONDITION_MENU, CONDITION_TITLE, assignmentData, assignmentErrorMessage, conditionField, draftOf, newAssignment, newCondition, sameSettings, selectionRefsText, settingsOf } from "./componentClasses";
+import { CONDITION_MENU, CONDITION_TITLE, assignmentData, assignmentErrorMessage, conditionField, draftOf, footprintClassNames, fullClassName, humanReadableClassName, newAssignment, newCondition, sameSettings, selectionRefsText, settingsOf } from "./componentClasses";
 
 test("the + menu lists KiCad's seven conditions in its order, with its words", () => {
   assert.deepEqual(
@@ -49,4 +49,16 @@ test("the page is read and sent back as the project has it", () => {
 test("Import references from selection: each reference once, sorted, comma separated; none disables the entry", () => {
   assert.equal(selectionRefsText(["U2", "R10", "R2", "U2"]), "R10,R2,U2", "wxString::Cmp order");
   assert.equal(selectionRefsText([]), null);
+});
+
+test("a footprint's class is the server's whole class, else its static one, named as KiCad names it", () => {
+  assert.deepEqual(footprintClassNames({ component_classes: ["B", "A", "B"] }), ["A", "B"]);
+  assert.deepEqual(footprintClassNames({ component_classes: ["STATIC"], component_class: ["STATIC", "DYN"] }), ["DYN", "STATIC"], "the whole class wins");
+  assert.deepEqual(footprintClassNames({}), []);
+  assert.equal(fullClassName(["A", "B"]), "A,B");
+  assert.equal(humanReadableClassName([]), "<None>");
+  assert.equal(humanReadableClassName(["A"]), "A");
+  assert.equal(humanReadableClassName(["A", "B"]), "A and B");
+  assert.equal(humanReadableClassName(["A", "B", "C"]), "A, B and C");
+  assert.equal(humanReadableClassName(["A", "B", "C", "D", "E"]), "A, B and 3 more");
 });

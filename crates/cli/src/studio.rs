@@ -1384,6 +1384,9 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
     let mut parts = Vec::new();
     let off_board = design.symbols_excluded_from_board();
     let derived_sch: std::cell::OnceCell<Option<eda_model::ir::Design>> = std::cell::OnceCell::new();
+    // `FOOTPRINT::GetComponentClass()` of each footprint: its static classes, and the ones the project's assignment rules give it, as the rule engine works them
+    // out (`GetDynamicComponentClassesForFootprint`) -- asked of the rule board only when the project has an assignment rule or sheet classes.
+    let component_classes = crate::sch_component_classes::effective_classes(&design, &model);
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
         let resolved = model.footprint_of(part);
@@ -1532,9 +1535,18 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                     });
                 }
             }
-            // `FOOTPRINT_DESC`'s Library Description, Keywords, Component Class and the solder paste overrides: what the board file said of the footprint
-            // (`FootprintExtra`: its `(descr ..)`, `(tags ..)`, `(component_classes ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
+            // `FOOTPRINT_DESC`'s Library Description, Keywords and the solder paste overrides: what the board file said of the footprint (`FootprintExtra`: its
+            // `(descr ..)`, `(tags ..)`, `(solder_paste_margin ..)`, `(solder_paste_margin_ratio ..)`).
             let record = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == part.reference));
+            // its static classes (`GetStaticComponentClass`: the schematic's, else its file's), and its whole class (`GetComponentClass`, the Properties panel's
+            // Component Class and the message panel's)
+            let static_classes = eda_model::component_classes::static_classes(record, model.symbol_links.get(&part.reference));
+            if !static_classes.is_empty() {
+                p["component_classes"] = json!(static_classes);
+            }
+            if let Some(all) = component_classes.get(&part.reference).filter(|c| !c.is_empty()) {
+                p["component_class"] = json!(all);
+            }
             if let Some(e) = record {
                 // The footprint was read from a board file: its own tokens are kept (`set_footprint_paste_margin` edits its paste margins there). A library footprint's
                 // record (UI-LEFT PP5) has its description and keywords there too, its paste margins in its edit, as a footprint made here.
@@ -1545,9 +1557,6 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
                 }
                 if let Some(k) = facts.keywords {
                     p["keywords"] = json!(k);
-                }
-                if !e.component_classes.is_empty() {
-                    p["component_classes"] = json!(e.component_classes);
                 }
                 if e.holds_file_form() {
                     if let Some(m) = facts.paste_margin {

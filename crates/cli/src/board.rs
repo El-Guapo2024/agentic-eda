@@ -298,6 +298,9 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
     // The Net Inspector's renames and deletes of the board's nets, on top of the names the schematic gives them (`board_net_edits`).
     crate::board_net_edits::apply(design, &mut model);
     model.symbol_links = drawn.links;
+    // The component classes the schematic gives each footprint (the `Component Class` fields, the directive labels of the rule areas around a symbol or its sheet):
+    // what Update PCB from Schematic makes the footprint's static class (`crate::sch_component_classes`).
+    crate::sch_component_classes::fold(design, &mut model, &project);
     // What an imported netlist said of each footprint (its path, sheet, fields and pin names, its value) over what its symbol says (`eda_model::netlist_import`).
     if let Some(rec) = design.drawings.as_ref().and_then(|d| d.imported_netlist.as_ref()) {
         rec.apply(&mut model);
@@ -719,7 +722,7 @@ pub(crate) fn label_field_shown_of(sheet: &eda_model::text_vars::SchSheet, field
 }
 
 /// `SCH_RULE_AREA::RefreshContainedItemsAndDirectives`' reach of an edge for a directive's connection point: `CollideEdge( pt, nullptr, 5 )`, 5 schematic IU (100 nm each).
-const RULE_AREA_EDGE_NM: f64 = 500.0;
+pub(crate) const RULE_AREA_EDGE_NM: f64 = 500.0;
 
 /// True when `p` lies on the polyline `pts` (one of its points, or on a segment between two).
 fn polyline_touches(pts: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
@@ -735,12 +738,12 @@ fn point_segment_distance(a: eda_model::ir::Point, b: eda_model::ir::Point, p: e
 }
 
 /// The distance of `p` to the nearest edge of the closed outline `poly` (`SHAPE_LINE_CHAIN::CollideEdge`).
-fn polygon_edge_distance(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> f64 {
+pub(crate) fn polygon_edge_distance(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> f64 {
     (0..poly.len()).map(|i| point_segment_distance(poly[i], poly[(i + 1) % poly.len()], p)).fold(f64::INFINITY, f64::min)
 }
 
 /// `SHAPE_POLY_SET::Collide( VECTOR2I )`: inside the outline or on its edge.
-fn point_in_polygon(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
+pub(crate) fn point_in_polygon(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> bool {
     if polygon_edge_distance(poly, p) == 0.0 {
         return true;
     }
@@ -763,7 +766,7 @@ fn point_in_polygon(poly: &[eda_model::ir::Point], p: eda_model::ir::Point) -> b
 }
 
 /// `SHAPE_POLY_SET::Collide( SHAPE_SEGMENT )` at the line's centre: an end inside, or the segment crossing an edge.
-fn segment_collides_polygon(poly: &[eda_model::ir::Point], a: eda_model::ir::Point, b: eda_model::ir::Point) -> bool {
+pub(crate) fn segment_collides_polygon(poly: &[eda_model::ir::Point], a: eda_model::ir::Point, b: eda_model::ir::Point) -> bool {
     if point_in_polygon(poly, a) || point_in_polygon(poly, b) {
         return true;
     }

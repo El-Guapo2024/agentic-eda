@@ -236,6 +236,10 @@ test("a footprint's Clearance Override (empty: none) and Zone Connection Style g
   u1.component_classes = ["b", "a"];
   assert.equal(rowOf(b, ["U1"], "Library Description")!.value, "an MCU");
   assert.equal(rowOf(b, ["U1"], "Component Class")!.value, "a,b");
+  // the whole class the server works out (the assignment rules' classes with the static ones) is what the row says (`GetComponentClassAsString`)
+  u1.component_class = ["a", "b", "DYN"];
+  assert.equal(rowOf(b, ["U1"], "Component Class")!.value, "DYN,a,b");
+  delete u1.component_class;
   assert.equal(rowOf(b, ["U1"], "Clearance Override")!.value, "");
   assert.deepEqual(edit(b, ["U1"], "Clearance Override", 250_000), [{ op: "set_footprint_zone_connection", part: "U1", zone_connection: "Full", clearance: 250_000 }]);
   assert.deepEqual(edit(b, ["U1"], "Clearance Override", ""), []);

@@ -15,6 +15,7 @@ import type { TunePatternReply } from "../api/tuneTypes";
 import { tuningPatternMsgPanel } from "../kicad-port/tuningPanel";
 import { formatDelay } from "../kicad-port/netInspector";
 import { layerDisplayName } from "../kicad-port/boardLayers";
+import { footprintClassNames, humanReadableClassName } from "../kicad-port/componentClasses";
 
 export function MessagePanel() {
   const state = useStudioState();
@@ -81,6 +82,7 @@ export function MessagePanel() {
     const p = board.parts.find((x) => x.ref === selectedRefs[0]);
     if (p) {
       const nets = [...new Set((p.pads ?? []).map((q) => q.net).filter((n): n is string => !!n))];
+      const classes = footprintClassNames(p);
       return (
         <div className="message-panel">
           <span className="kv">
@@ -114,6 +116,13 @@ export function MessagePanel() {
             <b>Nets</b>
             {nets.length}
           </span>
+          {classes.length > 0 && (
+            // `FOOTPRINT::GetMsgPanelInfo`: "Component Class" with `GetHumanReadableName()` when the footprint is in one
+            <span className="kv" data-msg="component-class">
+              <b>Component Class</b>
+              {humanReadableClassName(classes)}
+            </span>
+          )}
         </div>
       );
     }

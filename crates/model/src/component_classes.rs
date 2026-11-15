@@ -169,9 +169,65 @@ impl ComponentClassSettings {
     }
 }
 
+/// The name of the field that gives a symbol, and through Update PCB from Schematic its footprint, a component class (`SCH_FIELD::GetUntranslatedName() ==
+/// "Component Class"`). A directive label (`SCH_DIRECTIVE_LABEL`) may carry it too, for every symbol in the rule areas it is attached to.
+pub const COMPONENT_CLASS_FIELD: &str = "Component Class";
+
+/// `FOOTPRINT::GetStaticComponentClass`'s constituent names, sorted, each once (`COMPONENT_CLASS_MANAGER::sortClassNames`): the classes the schematic gives the
+/// footprint where it is linked to a symbol (`SymbolLink::component_classes`; Update PCB from Schematic sets the footprint's static class to the netlist's, and the
+/// schematic and the board are one design here, so the board always has what the update would give it), else the ones its board file or an imported netlist
+/// gave it (`FootprintExtra::component_classes`).
+pub fn static_classes(extra: Option<&crate::ir::FootprintExtra>, link: Option<&crate::SymbolLink>) -> Vec<String> {
+    let names: Vec<String> = match link.and_then(|l| l.component_classes.as_ref()) {
+        Some(from_schematic) => from_schematic.clone(),
+        None => extra.map(|e| e.component_classes.clone()).unwrap_or_default(),
+    };
+    let set: std::collections::BTreeSet<String> = names.into_iter().filter(|n| !n.is_empty()).collect();
+    set.into_iter().collect()
+}
+
+/// `COMPONENT_CLASS_MANAGER::GetFullClassNameForConstituents`: the sorted constituent names joined by commas -- the class's name (`COMPONENT_CLASS::GetName`,
+/// what `FOOTPRINT::GetComponentClassAsString` and the Properties panel's Component Class say).
+pub fn full_class_name(sorted: &[String]) -> String {
+    sorted.join(",")
+}
+
+/// `COMPONENT_CLASS::GetHumanReadableName` (KiCad 25ec2335 `pcbnew/component_classes/component_class.cpp`): `<None>` for no class, the name of one, "A and B",
+/// "A, B and C", "A, B and 3 more" -- what the message panel says (`FOOTPRINT::GetMsgPanelInfo`).
+pub fn human_readable_name(sorted: &[String]) -> String {
+    match sorted {
+        [] => "<None>".to_string(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} more", rest.len()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The schematic's classes stand over the file's where the footprint has a link that says something of them (even nothing); otherwise the file's (or the
+    /// imported netlist's) stand. The names come out sorted, each once, and named as KiCad names them.
+    #[test]
+    fn the_static_class_is_the_schematics_where_it_speaks_else_the_files() {
+        let extra = crate::ir::FootprintExtra { id: "U1".into(), component_classes: vec!["FILE".into(), "B".into()], ..Default::default() };
+        assert_eq!(static_classes(Some(&extra), None), vec!["B".to_string(), "FILE".to_string()]);
+        let silent = crate::SymbolLink::default();
+        assert_eq!(static_classes(Some(&extra), Some(&silent)), vec!["B".to_string(), "FILE".to_string()], "an imported netlist's link says nothing of classes");
+        let none = crate::SymbolLink { component_classes: Some(vec![]), ..Default::default() };
+        assert!(static_classes(Some(&extra), Some(&none)).is_empty(), "the schematic gives no class: the update removes the file's");
+        let some = crate::SymbolLink { component_classes: Some(vec!["Z".into(), "A".into(), "Z".into()]), ..Default::default() };
+        let names = static_classes(Some(&extra), Some(&some));
+        assert_eq!(names, vec!["A".to_string(), "Z".to_string()]);
+        assert_eq!(full_class_name(&names), "A,Z");
+        assert_eq!(human_readable_name(&[]), "<None>");
+        assert_eq!(human_readable_name(&names), "A and Z");
+        let four: Vec<String> = ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(human_readable_name(&four[..3]), "A, B and C");
+        assert_eq!(human_readable_name(&four), "A, B and 2 more");
+    }
 
     /// The assignments of KiCad's own `component_classes.kicad_pro` (trimmed): read, written and read again, they are the same, and a condition of a kind that is there
     /// twice keeps both.

@@ -1121,7 +1121,8 @@ impl<'c> Updater<'c> {
     /// `BOARD_NETLIST_UPDATER::updateComponentClass`: the footprint's static component class is the component's (`GetEffectiveStaticComponentClass( ..
     /// GetComponentClassNames() )`: its constituent names sorted, shown joined by commas, `GetFullClassNameForConstituents`).
     fn update_component_class(&mut self, b: &mut Board<'_>, reference: &str, c: &NetlistComponent) {
-        let cur: Vec<String> = Self::extra_of(b, reference).map(|e| e.component_classes.clone()).unwrap_or_default();
+        // the footprint's static class as the board has it now (the schematic's where the footprint is linked to a symbol, else its file's or a netlist's)
+        let cur: Vec<String> = eda_model::component_classes::static_classes(Self::extra_of(b, reference), b.model.symbol_links.get(reference));
         let mut cur_sorted = cur.clone();
         cur_sorted.sort();
         let new: Vec<String> = c.component_classes.iter().cloned().collect(); // a `BTreeSet`: sorted as `sortClassNames` sorts them
