@@ -392,10 +392,21 @@ impl Parser {
         ok
     }
 
-    /// `checkUnresolvedTextVariable`.
+    /// `checkUnresolvedTextVariable` (KiCad 25ec2335): the first `${..}` of the token that is not a component class selector (`${Class:X}`, which
+    /// `testFootprintSelector` reads: `IsComponentClassSelector`, "CLASS:" in any case) is "Unresolved text variable"; an unclosed `${` is one too.
     fn check_unresolved(&mut self) -> Result<bool, ParseError> {
-        if let Some(pos) = self.lx.text.find("${") {
-            let at = self.lx.text[..pos].chars().count();
+        let text = self.lx.text.clone();
+        let mut from = 0;
+        while let Some(rel) = text[from..].find("${") {
+            let pos = from + rel;
+            if let Some(end) = text[pos + 2..].find('}') {
+                let token = &text[pos + 2..pos + 2 + end];
+                if token.to_uppercase().starts_with("CLASS:") {
+                    from = pos + 2;
+                    continue;
+                }
+            }
+            let at = text[..pos].chars().count();
             self.error_at::<()>("Unresolved text variable", at)?;
             return Ok(true);
         }
@@ -935,6 +946,17 @@ mod tests {
         let e = parse("(version 1)\n(rule x (constraint clearance (min 1mm)", &env()).err().unwrap();
         assert_eq!((e.message.as_str(), e.line, e.offset), ("ERROR: Missing ')'.", 3, 0));
         assert_eq!(err("(version 1)(rule \"x"), "Unterminated delimited string");
+    }
+
+    /// KiCad 25ec2335 `checkUnresolvedTextVariable`: a component class selector (`${Class:X}`, `IsComponentClassSelector`) is no unresolved text variable;
+    /// another `${..}` still is, even after one.
+    #[test]
+    fn a_component_class_selector_is_no_unresolved_text_variable() {
+        let r = rules("(version 1)(rule \"${Class:PWR}\" (constraint clearance (min 1mm)))");
+        assert_eq!(r[0].name, "${Class:PWR}");
+        assert_eq!(rules("(version 1)(rule \"${CLASS:a}-${class:b}\" (constraint clearance (min 1mm)))").len(), 1, "the keyword in any case");
+        assert!(err("(version 1)(rule \"${Class:PWR}-${FOO}\" (constraint clearance (min 1mm)))").contains("Unresolved text variable"));
+        assert!(err("(version 1)(rule \"${FOO}\" (constraint clearance (min 1mm)))").contains("Unresolved text variable"));
     }
 
     #[test]

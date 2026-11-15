@@ -40,6 +40,7 @@ import { zoneEditCmd as zoneCmd } from "./zoneCmd";
 import { padZoneForm, setPadZoneCmd, type PadZoneForm } from "./padZone";
 import { padTeardrops, viaTeardrops } from "./teardropParams";
 import { LINE_STYLE_CHOICES } from "./strokeDash";
+import { footprintClassNames, fullClassName } from "./componentClasses";
 import {
   BACKDRILL_MODE_CHOICES,
   backdrillEnd,
@@ -795,7 +796,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   add({ owner: "FOOTPRINT", name: "Library Link", kind: "string", get: (i) => i.part!.lib_link ?? i.part!.footprint ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Library Description", kind: "string", get: (i) => i.part!.lib_description ?? "" }, "Footprint Properties");
   add({ owner: "FOOTPRINT", name: "Keywords", kind: "string", get: (i) => i.part!.keywords ?? "" }, "Footprint Properties");
-  add({ owner: "FOOTPRINT", name: "Component Class", kind: "string", get: (i) => [...(i.part!.component_classes ?? [])].sort().join(",") }, "Footprint Properties");
+  // `GetComponentClassAsString`: the whole class's name (`GetComponentClass()->GetName()`: its static classes and the ones the assignment rules give, sorted, joined by commas)
+  add({ owner: "FOOTPRINT", name: "Component Class", kind: "string", get: (i) => fullClassName(footprintClassNames(i.part!)) }, "Footprint Properties");
   // `FOOTPRINT_DESC`'s "Attributes" and "Overrides": "Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate" and
   // "Exempt From Courtyard Requirement" are all written to the footprint's `(attr ..)`. (The footprint's type, SMD or through hole, is the dialog's "Component Type"
   // radio: KiCad's panel has no row for it.)

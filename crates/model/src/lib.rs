@@ -1150,6 +1150,13 @@ pub struct SymbolLink {
     /// KiCad's default name of a named pin's net has (`unconnected-(U1A-NC-Pad5)`). Empty for a symbol of one unit.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub units: BTreeMap<String, String>,
+    /// The component's classes as the netlist gives them (`NETLIST_EXPORTER_XML::getComponentClassNamesForAllSymbolUnits`: the `Component Class` fields of
+    /// every unit of the symbol, those of the directive labels on the rule areas around each unit and around the sheets it is under; sorted, each once), which
+    /// Update PCB from Schematic makes the footprint's static class (`BOARD_NETLIST_UPDATER::updateComponentClass`). `Some` for a link the schematic gives
+    /// (empty when it gives no class: the footprint then has none, whatever its file said); `None` for one that says nothing of classes (an imported netlist's
+    /// record, whose classes are the footprint's `FootprintExtra::component_classes`). [`component_classes::static_classes`] reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_classes: Option<Vec<String>>,
 }
 
 /// The atomic unit for both schematic and PCB.

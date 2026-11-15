@@ -921,15 +921,30 @@ pub fn match_dp_suffix(net: &str) -> (i32, String, String) {
     (polarity, String::new(), String::new())
 }
 
-/// `testFootprintSelector`: the reference, or the library id when the selector has a colon, matches (a wildcard pattern).
+/// `testFootprintSelector`: a component class directive `${Class:NAME}` (the keyword in any case, the name as written: `COMPONENT_CLASS::ContainsClassName`)
+/// names the footprints of that class; else the reference, or the library id when the selector has a colon, matches (a wildcard pattern). A selector that
+/// is a directive is never also read as a reference or a library id (`else if`), even when the footprint is not in the class.
 fn footprint_selected(fp: &FootprintFacts, selector: &str) -> bool {
     if selector.is_empty() {
         return false;
+    }
+    if let Some(name) = class_selector(selector) {
+        return fp.classes.iter().any(|c| c == name);
     }
     if wx_matches(&fp.reference, selector) {
         return true;
     }
     selector.contains(':') && wx_matches(&fp.fpid, selector)
+}
+
+/// The class a footprint selector names when it is the directive `${Class:NAME}` (`aSelector[0] == '$' && aSelector.Last() == '}' && aSelector.Upper().StartsWith(
+/// "${CLASS:" )`, the name `aSelector.Mid( 8, aSelector.Length() - 9 )`).
+fn class_selector(selector: &str) -> Option<&str> {
+    let head = selector.get(..8)?;
+    if !head.eq_ignore_ascii_case("${CLASS:") || !selector.ends_with('}') || selector.len() < 9 {
+        return None;
+    }
+    Some(&selector[8..selector.len() - 1])
 }
 
 /// The footprints `searchFootprints` visits for `arg`: A, B, or those whose reference or library id matches.

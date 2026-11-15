@@ -1427,13 +1427,18 @@ pub(crate) fn write_footprint(
                 writeln!(out, "\t\t{token}").unwrap();
             }
         }
-        if !e.component_classes.is_empty() {
-            write!(out, "\t\t(component_classes").unwrap();
-            for class in &e.component_classes {
-                write!(out, " (class {})", sexpr_str(class)).unwrap();
-            }
-            writeln!(out, ")").unwrap();
+    }
+    // `GetStaticComponentClass()`'s constituents (sorted): the schematic's where the footprint is linked to a symbol (Update PCB from Schematic sets them), else
+    // the file's (`eda_model::component_classes::static_classes`).
+    let classes = eda_model::component_classes::static_classes(own_extra, link);
+    if !classes.is_empty() {
+        write!(out, "\t\t(component_classes").unwrap();
+        for class in &classes {
+            write!(out, " (class {})", sexpr_str(class)).unwrap();
         }
+        writeln!(out, ")").unwrap();
+    }
+    if let Some(e) = own_extra {
         if let Some(name) = e.sheetname.as_deref().filter(|n| !n.is_empty()) {
             writeln!(out, "\t\t(sheetname {})", sexpr_str(name)).unwrap();
         }
@@ -2294,6 +2299,28 @@ mod tests {
         assert_eq!(nets_of("2"), ["unconnected-(U1-Pad2)", "unconnected-(U1-Pad2)_1"], "{out}");
         assert_eq!(nets_of("3"), ["GND", "GND"]);
         assert!(out.contains("(net 3 \"unconnected-(U1-Pad2)_1\")") || out.lines().any(|l| l.trim_start().starts_with("(net ") && l.contains("unconnected-(U1-Pad2)_1")), "the net is declared");
+    }
+
+    /// `format( FOOTPRINT )`'s `(component_classes ..)` is `GetStaticComponentClass()`'s constituents, sorted: the schematic's where the footprint is linked to a
+    /// symbol that says what they are (Update PCB from Schematic sets them), over the file's; the file's where the link says nothing of classes.
+    #[test]
+    fn a_footprints_classes_are_its_schematics_where_it_has_a_link() {
+        let (mut design, mut model) = fixture();
+        design.drawings.get_or_insert_with(Default::default).footprint_extras = vec![
+            eda_model::ir::FootprintExtra { id: "U1".into(), component_classes: vec!["FILE".into()], ..Default::default() },
+            eda_model::ir::FootprintExtra { id: "C1".into(), component_classes: vec!["Z_FILE".into(), "A_FILE".into()], ..Default::default() },
+        ];
+        model.symbol_links.insert("U1".into(), eda_model::SymbolLink { path: "/u1".into(), sheetname: "/".into(), component_classes: Some(vec!["POWER".into(), "ANALOG".into()]), ..Default::default() });
+        model.symbol_links.insert("C1".into(), eda_model::SymbolLink { path: "/c1".into(), sheetname: "/".into(), ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |r: &str| out.split("(footprint ").find(|f| f.contains(&format!("\"Reference\" \"{r}\""))).unwrap().to_string();
+        assert!(block("U1").contains("(component_classes (class \"ANALOG\") (class \"POWER\"))"), "{}", block("U1"));
+        assert!(!block("U1").contains("FILE"));
+        assert!(block("C1").contains("(component_classes (class \"A_FILE\") (class \"Z_FILE\"))"), "{}", block("C1"));
+        // a link that says the schematic gives none: no classes
+        model.symbol_links.get_mut("U1").unwrap().component_classes = Some(vec![]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(!out.split("(footprint ").find(|f| f.contains("\"Reference\" \"U1\"")).unwrap().contains("component_classes"));
     }
 
     fn fixture() -> (Design, ConstraintModel) {

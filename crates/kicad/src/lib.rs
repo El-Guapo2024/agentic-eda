@@ -1242,14 +1242,15 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                 continue;
             }
             let (_, _, datasheet) = symbol_texts(sym, part, resolved.as_ref());
-            // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields
+            // the fields as the writer writes them: every one the sheet shows but the Reference, Value and Footprint, then the simulation fields; and not the
+            // component class, which is the footprint's class and no field of it (`updateFootprintParameters`: `compFields.erase( wxT( "Component Class" ) )`)
             let real_symbol = model.real_symbol_of(&lib_id, part);
             let geom = eda_engine::symgeom::SymbolGeom::of_in(sch, sym, part, real_symbol.as_ref());
             let shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), real_symbol.as_ref(), &geom);
             let mut fields: Vec<(String, String)> = Vec::new();
             for f in &shown {
                 match f.name.as_str() {
-                    "Reference" | "Value" | "Footprint" => {}
+                    "Reference" | "Value" | "Footprint" | eda_model::component_classes::COMPONENT_CLASS_FIELD => {}
                     "Datasheet" => fields.push((f.name.clone(), datasheet.clone())),
                     _ => fields.push((f.name.clone(), f.text.clone())),
                 }
@@ -1288,7 +1289,7 @@ pub fn symbol_links(design: &Design, model: &ConstraintModel) -> BTreeMap<String
                 None => BTreeMap::new(),
             };
             let uuid = duid_plain(&format!("{seed}sym:{}", eda_model::ir::field_key(&sym.id, sym.unit)));
-            out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units });
+            out.insert(reference.clone(), eda_model::SymbolLink { path: format!("{uuids}/{uuid}"), sheetname: names.clone(), sheetfile: e.file.clone(), fields, pins, units, component_classes: None });
         }
     }
     out

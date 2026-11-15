@@ -19,6 +19,7 @@
 
 mod board;
 mod net_names;
+mod sch_component_classes;
 mod board_control_api;
 mod board_output_api;
 mod body_api;

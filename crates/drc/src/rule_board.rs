@@ -342,7 +342,8 @@ impl<'a> RuleBoard<'a> {
                 courtyard_front: if flipped { Vec::new() } else { outlines.clone() },
                 courtyard_back: if flipped { outlines.clone() } else { Vec::new() },
                 sheet,
-                classes: extra.map(|e| sorted_classes(e.component_classes.iter().cloned())).unwrap_or_default(),
+                // `GetStaticComponentClass()`: the schematic's classes where the footprint is linked to a symbol, else its file's
+                classes: eda_model::component_classes::static_classes(extra, link),
             };
             let mut it = RuleItem::new(fp.id.clone(), Class::Footprint);
             it.layers = vec![side_layer.to_string()];
@@ -1227,7 +1228,8 @@ fn assignment_condition(a: &eda_model::component_classes::ClassAssignment) -> St
         let primary = c.primary.trim();
         let expr = match c.kind {
             ConditionKind::Reference => {
-                let refs: Vec<String> = c.primary.trim().split(',').map(|r| format!("A.Reference == '{r}'")).collect();
+                // each reference trimmed (KiCad 25ec2335 `getRefExpr`: `aRef.Strip( wxString::both )`)
+                let refs: Vec<String> = c.primary.trim().split(',').map(|r| format!("A.Reference == '{}'", r.trim())).collect();
                 if primary.is_empty() && refs.len() == 1 {
                     // (`wxSplit` of an empty text gives no element)
                     String::new()
@@ -1635,6 +1637,28 @@ mod footprint_facts_tests {
         assert!(holds(&rb, "A.ComponentClass != 'STATIC'", &r5));
         let pad = (0..board.pads.len()).filter_map(|i| rb.pad_item_at(i)).find(|p| p.footprint.as_ref().is_some_and(|f| f.reference == "R6")).unwrap();
         assert!(holds(&rb, "A.hasComponentClass('STATIC')", &pad), "a pad answers for its footprint");
+        // `testFootprintSelector`'s `${Class:NAME}` (the keyword in any case, the name as written): a footprint selector naming the class's footprints
+        assert!(holds(&rb, "A.memberOfFootprint('${Class:STATIC}')", &pad));
+        assert!(holds(&rb, "A.memberOfFootprint('${CLASS:SIXES}')", &pad), "the keyword in any case");
+        assert!(!holds(&rb, "A.memberOfFootprint('${Class:static}')", &pad), "the name is case-sensitive");
+        assert!(!holds(&rb, "A.memberOfFootprint('${Class:PWR}')", &pad));
+        assert!(!holds(&rb, "A.memberOfFootprint('${Class:R6}')", &pad), "a directive is never read as a reference");
+    }
+
+    /// Update PCB from Schematic (`updateComponentClass`): where the footprint is linked to a symbol that says what its classes are, those are its static class,
+    /// over the board file's; a link that says nothing of classes (an imported netlist's record) leaves the file's.
+    #[test]
+    fn the_schematics_classes_are_the_footprints_static_class() {
+        let (design, model) = hv_board(|d, m| {
+            d.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![eda_model::ir::FootprintExtra { id: "R6".into(), component_classes: vec!["FILE".into()], ..Default::default() }, eda_model::ir::FootprintExtra { id: "R5".into(), component_classes: vec!["FILE".into()], ..Default::default() }], ..Default::default() });
+            m.symbol_links.get_mut("R5").unwrap().component_classes = Some(vec!["FROM_SCH".into(), "ANALOG".into()]);
+        });
+        let board = crate::board::build(&design, &model);
+        let rb = RuleBoard::new(&design, &model, &board, Units::Mm, None);
+        assert_eq!(rb.footprint_item("R5").unwrap().footprint.as_ref().unwrap().classes, ["ANALOG", "FROM_SCH"]);
+        assert_eq!(rb.footprint_item("R6").unwrap().footprint.as_ref().unwrap().classes, ["FILE"]);
+        let r5 = rb.footprint_item("R5").unwrap();
+        assert!(holds(&rb, "A.hasComponentClass('FROM_SCH') && !A.hasComponentClass('FILE')", &r5));
     }
 
     /// R5-D5 (`checkFootprint`, `PAD::SameLogicalPadAs`): two unnumbered pads keep the footprint; pads that share a number stand in by the last of them.

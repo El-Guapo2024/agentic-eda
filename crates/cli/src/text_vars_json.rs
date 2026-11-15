@@ -257,7 +257,7 @@ pub(crate) struct SchShown {
     variant_changed: HashMap<usize, std::collections::BTreeSet<String>>,
 }
 
-fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::ir::SymbolInstance, subpart: &eda_model::annotate::SubpartIds) -> SchSymbol {
+pub(crate) fn symbol_of(sch: &SchematicSection, model: &ConstraintModel, sym: &eda_model::ir::SymbolInstance, subpart: &eda_model::annotate::SubpartIds) -> SchSymbol {
     let part = model.part(&sym.id);
     let lib = part.and_then(|p| model.real_symbol_of_instance(sch, sym, p));
     let units = lib.as_ref().map_or(1, |l| l.unit_count);

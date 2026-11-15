@@ -381,8 +381,11 @@ export interface Part {
   /** `FOOTPRINT::GetLibDescription` and `GetKeywords`: the board file's `(descr ..)` and `(tags ..)` of the footprint; absent when it has none. */
   lib_description?: string;
   keywords?: string;
-  /** The component classes the board file gives the footprint itself (`(component_classes ..)`); absent when none. */
+  /** The footprint's static classes (`GetStaticComponentClass`, written as `(component_classes ..)`): the ones its symbol gives it in the schematic (its
+   *  `Component Class` fields and the directive labels of the rule areas around it, as Update PCB from Schematic sets them), else its board file's; absent when none. */
   component_classes?: string[];
+  /** `GetComponentClass()`'s constituent names, sorted: the static classes and the ones the project's assignment rules give the footprint; absent when none. */
+  component_class?: string[];
   /** The footprint's own `(solder_paste_margin ..)` (nm) and `(solder_paste_margin_ratio ..)` (`GetLocalSolderPasteMargin`, `..Ratio`); absent when it has none. */
   paste_margin?: Nm;
   paste_margin_ratio?: number;
