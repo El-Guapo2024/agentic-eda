@@ -259,10 +259,17 @@ fn read_files_table(conn: &Connection, library_id: i64) -> HashMap<String, (i64,
     st.query_map([library_id], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
 }
 
+type Rows = HashMap<(&'static str, String), super::store::LibRow>;
+
+/// Every library row by kind and path, read once for a refresh.
+fn rows_of(store: &Store) -> Rows {
+    store.libraries().into_iter().map(|r| ((if r.kind == "symbol" { "symbol" } else { "footprint" }, r.path.clone()), r)).collect()
+}
+
 /// What library `t` needs, its row as it is in the database.
-fn need_of(store: &Store, t: &Target, deep: bool) -> Need {
+fn need_of(store: &Store, rows: &Rows, t: &Target, deep: bool) -> Need {
     let Some(stamp) = shallow_stamp(t.kind, &t.path) else { return Need::Gone };
-    let row = store.library(t.kind, &t.path);
+    let row = rows.get(&(kind_name(t.kind), t.path.to_string_lossy().into_owned())).cloned();
     let current = row.as_ref().and_then(|r| r.stamp.clone());
     if current.as_deref() == Some(stamp.as_str()) && !deep {
         return Need::Nothing;
@@ -313,6 +320,17 @@ pub(crate) fn refresh_targets(store: &Store, targets: &[Target], deep: bool, mod
     let started = Instant::now();
     let owner = format!("{}-{:?}-{}", std::process::id(), std::thread::current().id(), nanos(SystemTime::now()));
     let mut report = Report { libraries: targets.len(), ..Default::default() };
+    // nothing to do is found without writing anything (no lease): a query's look before it answers
+    let rows = rows_of(store);
+    let idle = targets.iter().all(|t| match need_of(store, &rows, t, deep) {
+        Need::Nothing => true,
+        Need::Gone => !rows.contains_key(&(kind_name(t.kind), t.path.to_string_lossy().into_owned())),
+        _ => false,
+    });
+    if idle && schema::meta(&store.conn, "models_stamp").as_deref() == Some(models.stamp().as_str()) {
+        report.ms = started.elapsed().as_millis();
+        return Ok(report);
+    }
     // one build at a time: wait for another process's (it may make ours a no-op)
     let wait_from = Instant::now();
     while !store.take_lease(&owner)? {
@@ -331,8 +349,9 @@ pub(crate) fn refresh_targets(store: &Store, targets: &[Target], deep: bool, mod
 
 fn build(store: &Store, targets: &[Target], deep: bool, models: &ModelCtx, owner: &str, report: &mut Report) -> Result<(), String> {
     let mut work: Vec<(&Target, Need)> = Vec::new();
+    let rows = rows_of(store);
     for t in targets {
-        match need_of(store, t, deep) {
+        match need_of(store, &rows, t, deep) {
             Need::Nothing => {}
             Need::Gone => {
                 if store.library(t.kind, &t.path).is_some() {

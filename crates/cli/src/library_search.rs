@@ -531,11 +531,18 @@ pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Ar
             return Ok(hit.clone());
         }
     }
-    let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
-    let mut summaries = eda_kicad::scan_symbols(&text);
-    eda_kicad::inherit_symbol_summaries(&mut summaries);
-    summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
-    summaries.dedup_by(|b, a| a.name == b.name);
+    // the parts cache's rows when they are of this very state of the library (phase 1b, `crate::parts`): the same summaries without reading the library
+    let (summaries, load_error) = match stamp.and_then(|t| crate::parts::cached_symbols(&path, t)) {
+        Some(hit) => hit,
+        None => {
+            let (text, load_error) = eda_kicad::read_symbol_library(&path)?;
+            let mut summaries = eda_kicad::scan_symbols(&text);
+            eda_kicad::inherit_symbol_summaries(&mut summaries);
+            summaries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.name.cmp(&b.name)));
+            summaries.dedup_by(|b, a| a.name == b.name);
+            (summaries, load_error)
+        }
+    };
     let terms = summaries.iter().map(|s| symbol_terms(lib, s)).collect();
     let by_name = summaries.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
     let built = Arc::new(SymbolLib { stamp, load_error, summaries, terms, by_name });
@@ -561,6 +568,13 @@ pub(crate) fn footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result
         if hit.stamp == stamp {
             return Ok(hit.clone());
         }
+    }
+    if let Some((names, infos)) = stamp.and_then(|t| crate::parts::cached_footprints(&dir, t)) {
+        // the parts cache's rows of this state of the folder (phase 1b, `crate::parts`): the same names and summaries without reading its files
+        let terms = names.iter().zip(&infos).map(|(n, i)| footprint_terms(lib, n, i)).collect();
+        let built = Arc::new(FootprintLib { stamp, names, infos, terms });
+        lock(footprint_cache()).insert(dir, built.clone());
+        return Ok(built);
     }
     let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -743,22 +757,36 @@ fn tag_sub_libraries<S: LibSource + ?Sized>(src: &S, lib: &str, items: &mut [Val
     }
 }
 
+/// A library whose KiCad verdict is not known yet goes to the parts indexer's thread, which asks kicad-cli (`crate::parts::queue_verdict`).
+fn queue_unknown_verdict(kind: Kind, path: &Path) {
+    if crate::library_verdict::verdict(kind, path, false).is_none() {
+        crate::parts::queue_verdict(kind, path);
+    }
+}
+
 /// `GET /api/library/entries?kind=&lib=`: the items of one library with their descriptions, in the tree's order (names sorted naturally),
-/// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`. KiCad's parser's verdict on the library is asked
-/// of kicad-cli now when it is not known (the library opened, as the trees' `GET /api/library/items` does).
+/// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`. KiCad's parser's verdict on the library is the one
+/// known; one not known yet is asked of kicad-cli by the parts indexer's thread (`crate::parts`, phase 1b), never on the request loop, and a later answer
+/// leaves out what it refuses (the trees' `GET /api/library/items`, which the library's opening asks first, still asks now).
 pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     entries_asking(kind, src, lib, filter, true)
 }
 
-/// [`entries_in`], asking kicad-cli for the library's verdict when it is not known and reading a footprint library's files whole for this crate's reader's
-/// refusals (`ask`), or leaving out only what KiCad's parser is known to refuse (the search's rule: its index never waits for either).
+/// [`entries_in`]: for the library opened (`ask`), an unknown verdict is queued for the parts indexer and a footprint library's files are read whole for this
+/// crate's reader's refusals; otherwise only what KiCad's parser is known to refuse is left out (the search's rule). kicad-cli is never asked here.
 fn entries_asking<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter, ask: bool) -> Value {
     let mut v = match kind {
         Kind::Symbol => match symbol_lib(src, lib) {
             Ok(idx) => {
                 // what KiCad's parser refuses is not in the library, and the library says so (UI-LEFT-3 L3-6)
                 let (refused, load_error) = match symbol_path(src, lib) {
-                    Ok(p) => crate::library_verdict::symbol_refusals(&p, ask),
+                    Ok(p) => {
+                        // KiCad's parser's verdict as far as it is known: one not known yet is asked by the parts indexer's thread, never here (phase 1b)
+                        if ask {
+                            queue_unknown_verdict(Kind::Symbol, &p);
+                        }
+                        crate::library_verdict::symbol_refusals_from(&p, crate::library_verdict::kicad_refused(Kind::Symbol, &p, false), idx.load_error.clone())
+                    }
                     Err(_) => (Vec::new(), idx.load_error.clone()),
                 };
                 let mut entries: Vec<Value> = idx.summaries.iter().filter(|s| filter.symbol_passes(s.power) && !refused.contains(&s.name)).map(|s| symbol_item(s, None)).collect();
@@ -776,8 +804,9 @@ fn entries_asking<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter:
             Ok(idx) => {
                 // `FP_CACHE::Load`: what KiCad's parser refuses, and what this crate's reader refuses, is not in the library (UI-LEFT-3 L3-6); the reader's
                 // refusals read every file of the library whole, so only the library opened has them (`footprint_library_refusals`), as for the search
-                let mut refused = kicad_refused(kind, src, lib, ask);
+                let mut refused = kicad_refused(kind, src, lib, false);
                 if let Some(dir) = footprint_dir(src, lib).ok().filter(|_| ask) {
+                    queue_unknown_verdict(Kind::Footprint, &dir);
                     refused.extend(eda_kicad::library_save::footprint_library_refusals(&dir).0);
                 }
                 json!({
@@ -999,7 +1028,14 @@ pub(crate) fn load_errors_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Valu
         .iter()
         .filter_map(|info| {
             let path = symbol_path(src, &info.name).ok()?;
-            crate::library_verdict::symbol_refusals(&path, false).1.map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
+            // the reader's message as the parts cache keeps it for this state of the library (phase 1b), else read now
+            let ours = match Kind::Symbol.modified(&path).and_then(|t| crate::parts::cached_load_error(&path, t)) {
+                Some(load_error) => load_error,
+                None => eda_kicad::symbol_library_load_errors(&path),
+            };
+            crate::library_verdict::symbol_refusals_from(&path, crate::library_verdict::kicad_refused(Kind::Symbol, &path, false), ours)
+                .1
+                .map(|e| json!({ "lib": info.name, "path": path.display().to_string(), "error": e }))
         })
         .collect();
     json!({ "kind": "symbol", "errors": errors })
