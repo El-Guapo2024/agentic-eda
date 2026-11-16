@@ -20,6 +20,7 @@
 //! A library is known by its kind and its path (the path a table row resolves to); nicknames are the tables' business and are resolved per board through
 //! `library_tables::libs` on every query.
 
+pub(crate) mod api;
 pub(crate) mod cmd;
 pub(crate) mod query;
 pub(crate) mod refresh;

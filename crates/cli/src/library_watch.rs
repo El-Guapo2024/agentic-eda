@@ -52,6 +52,8 @@ fn own_writes() -> &'static Mutex<HashMap<PathBuf, String>> {
 /// The studio wrote the library at `path` (a symbol library's file or folder, a footprint library's `.pretty` folder): the times its files have now are its
 /// own, not a change to offer for reloading.
 pub(crate) fn note_written(kind: Kind, path: &Path) {
+    // the parts cache reads the library again (`crate::parts`)
+    crate::parts::invalidate(kind, path);
     let mut own = own_writes().lock().unwrap_or_else(PoisonError::into_inner);
     match kind {
         Kind::Symbol => {
