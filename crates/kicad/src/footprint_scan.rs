@@ -201,7 +201,8 @@ pub struct FootprintDetail {
     pub exclude_from_pos: bool,
     /// Every `(pad ..)` in file order.
     pub pads: Vec<PadDetail>,
-    /// The smallest distance between the centres of two numbered copper pads at different places, nanometres rounded to the micrometre; 0 for fewer than two.
+    /// The smallest distance between the centres of two numbered copper pads of different numbers at different places, nanometres rounded to the micrometre;
+    /// 0 for fewer than two.
     pub pitch_nm: i64,
     /// The box of the `F.CrtYd` graphics, and of the `B.CrtYd` ones (lines, rectangles, circles, arcs and polygons; an arc by its true extent).
     pub courtyard_front: Option<BoxNm>,
@@ -403,11 +404,13 @@ pub fn scan_footprint_detail(text: &str) -> Option<FootprintDetail> {
             _ => {}
         }
     }
-    // the pitch: the nearest two numbered copper pads (a pad stacked on another is not a pitch)
-    let centres: Vec<(i64, i64)> = d.pads.iter().filter(|p| p.copper && p.pad_type != "np_thru_hole" && is_numbered_pad(&p.number)).map(|p| (p.x, p.y)).collect();
+    // the pitch: the nearest two numbered copper pads of different numbers (a pad stacked on another, or the thermal vias of an exposed pad -- pads of one
+    // number -- are no pitch)
+    let centres: Vec<(&str, i64, i64)> = d.pads.iter().filter(|p| p.copper && p.pad_type != "np_thru_hole" && is_numbered_pad(&p.number)).map(|p| (p.number.as_str(), p.x, p.y)).collect();
     let mut best: Option<f64> = None;
     for (i, a) in centres.iter().enumerate() {
-        for b in &centres[i + 1..] {
+        for b in centres[i + 1..].iter().filter(|b| b.0 != a.0) {
+            let (a, b) = ((a.1, a.2), (b.1, b.2));
             let dist = (((a.0 - b.0) as f64).powi(2) + ((a.1 - b.1) as f64).powi(2)).sqrt();
             if dist >= 1000.0 && best.is_none_or(|v| dist < v) {
                 best = Some(dist);
@@ -538,6 +541,11 @@ mod tests {
         assert_eq!(d.pitch_nm, 2_540_000);
         assert_eq!((d.pads[1].rot, d.pads[1].drill), (90.0, 800_000));
         assert_eq!(d.models, ["${KICAD10_3DMODEL_DIR}/X.3dshapes/X.wrl", "/abs/Y.step"]);
+        // an exposed pad's thermal vias share its number: no pitch between them
+        let vias = r#"(footprint "Q" (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu")) (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu"))
+            (pad "3" smd rect (at 0 0) (size 2 2) (layers "F.Cu")) (pad "3" thru_hole circle (at 0 0.5) (size 0.3 0.3) (drill 0.2) (layers "*.Cu"))
+            (pad "3" thru_hole circle (at 0 -0.5) (size 0.3 0.3) (drill 0.2) (layers "*.Cu")))"#;
+        assert_eq!(scan_footprint_detail(vias).unwrap().pitch_nm, 2_000_000, "pad 3's vias are 1 mm apart, its centre 2 mm from pads 1 and 2; via to pad 1 is 2.06 mm");
         assert!(scan_footprint_detail("(kicad_symbol_lib)").is_none());
         assert_eq!(scan_footprint_detail("(footprint \"Y\")").unwrap().attr, "unspecified");
     }

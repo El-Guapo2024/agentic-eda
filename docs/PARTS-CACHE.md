@@ -62,7 +62,7 @@ Lengths are nanometres; 1 mm is 1,000,000. Booleans are 0/1.
 
 Definitions of the fields:
 
-- **Pitch**: the smallest distance between the centres of two numbered copper pads, rounded to the micrometre.
+- **Pitch**: the smallest distance between the centres of two numbered copper pads with different numbers (an exposed pad's thermal vias share its number), rounded to the micrometre.
 - **Courtyard**: the box around `F.CrtYd`, or `B.CrtYd` when there is no front one.
 - **`model_found`**: the footprint names a 3D model, and every model it names resolves the way the board's 3D view resolves it.
 - **SQL function `kicad_wildcard(pattern, text)`**: KiCad's whole-text `*` / `?` match. Case does not matter.

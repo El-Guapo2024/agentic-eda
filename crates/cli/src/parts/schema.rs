@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS footprints (
     smd_pads INTEGER NOT NULL,
     tht_pads INTEGER NOT NULL,
     npth_pads INTEGER NOT NULL,
-    pitch_nm INTEGER NOT NULL,             -- nearest two numbered copper pads, to the micrometre; 0 for fewer than two
+    pitch_nm INTEGER NOT NULL,             -- nearest two numbered copper pads of different numbers, to the micrometre; 0 for fewer than two
     courtyard_w_nm INTEGER NOT NULL,       -- the F.CrtYd box, else the B.CrtYd one
     courtyard_h_nm INTEGER NOT NULL,
     has_courtyard INTEGER NOT NULL,
