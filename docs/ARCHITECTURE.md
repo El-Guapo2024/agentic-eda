@@ -325,3 +325,36 @@ never edited as masters.
   (drag, route, tune, cleanup) refuse a move that adds in-process gate
   failures: instant. The CLI's `--strict` also compares KiCad's gates on the
   board before and after through kicad-cli (seconds).
+
+## Parts cache
+
+- **One SQLite index of the installed libraries** (2026-11-16, `task-v21-parts`;
+  `crates/cli/src/parts/`, `docs/PARTS-CACHE.md`): `~/.cache/eda-studio/parts.sqlite`
+  (`EDA_PARTS_DB` moves it; `tools/run-all-checks.sh` gives each run its own) holds
+  every symbol (fields, pins), footprint (pads, pitch, courtyard size, 3D models
+  found), library (stamps, files, load errors, KiCad's parser's verdict) and the
+  board tables' rows, with FTS5 trigram indexes; the phase-2 supplier tables
+  (`parts`, `part_params`, `part_links`, `offers`) are there, empty. It is a
+  cache, never a source of truth: the library files are. Another schema is
+  rebuilt; another scanner version reads every library again. `rusqlite`
+  (`bundled`, `functions`) is the one dependency it added (the user's OK).
+- **Who writes**: `eda board serve`'s `parts-indexer` thread (a deep refresh at
+  start, then on `parts::invalidate` -- a save, Save Library As, a table write, a
+  query that met a stale library -- or every five minutes), `eda parts refresh`,
+  and every CLI query, which first reads again the libraries whose stamp moved.
+  Libraries are read in worker threads and written by one writer, one
+  transaction per library; a `lease` row lets one process build at a time.
+- **Who reads**: `eda parts search|show|fits|stats|check-board|sql|status`,
+  `GET /api/parts/*` (answered on the connection's own thread with a read-only
+  connection, never on the request loop), and the choosers' indexes
+  (`library_search::symbol_lib` / `footprint_lib`, phase 1b) when the rows are of
+  the library's present state. The `/api/library/*` answers are unchanged: the
+  choosers keep KiCad's scoring, and the cache's search scores and ranks as they
+  do (tested).
+- **kicad-cli never runs on a query or on the request loop**: KiCad's parser's
+  verdict (`library_verdict`) is imported where it is known and asked only by the
+  indexer thread (one library at a time), `eda parts verify` and
+  `refresh --verify`. `GET /api/library/entries` and `/api/library/items` leave
+  out what is known to be refused and queue an unknown verdict for the indexer;
+  `items` answers `"verdict": "pending"` meanwhile and the tree's client asks
+  again until it has landed.
