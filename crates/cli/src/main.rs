@@ -63,6 +63,7 @@ mod library_search;
 mod library_tables;
 mod library_verdict;
 mod library_watch;
+mod parts;
 mod rescue_api;
 mod legacy_import;
 mod legacy_rescue;
