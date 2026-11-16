@@ -393,6 +393,145 @@ pub fn parse_symbol_checked(text: &str, summaries: &[SymbolSummary], name: &str)
     section.flatten(name).map(Some)
 }
 
+/// One pin of a library symbol as the parts cache keeps it ([`scan_symbol_pins`]): what a fit, a search by pin name and a pin map need, none of its drawing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PinDetail {
+    /// The `<unit>` of the `Name_<unit>_<style>` block it is drawn in: 0 is the block every unit shares.
+    pub unit: u32,
+    /// The `<style>` of that block: 1 the normal body, 2 the DeMorgan one, 0 shared.
+    pub body_style: u32,
+    pub number: String,
+    pub name: String,
+    /// KiCad's electrical type token (`input`, `power_in`, `passive`, ...).
+    pub electrical_type: String,
+    /// KiCad's graphic style token (`line`, `inverted`, `clock`, ...).
+    pub shape: String,
+    /// `hide` or `(hide yes)`.
+    pub hidden: bool,
+}
+
+/// Every top-level symbol of `.kicad_sym` text with its pins (in file order, the order of the summaries [`scan_symbols`] gives), found in one pass like
+/// theirs: a `(pin <type> <shape> ..)` at depth 3 inside a `Name_<unit>_<style>` block, its `(name "..")`, `(number "..")` and `hide` / `(hide yes)` one level in
+/// (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbolPin`). A derived symbol that draws no pin of its own has its base's, to the end of the chain, as [`inherit`] gives it its
+/// base's units (`LIB_SYMBOL::Flatten`).
+pub fn scan_symbol_pins(text: &str) -> Vec<(String, Vec<PinDetail>)> {
+    let b = text.as_bytes();
+    let n = b.len();
+    let mut out: Vec<(String, Option<String>, Vec<PinDetail>)> = Vec::new();
+    let mut cur: Option<(String, Option<String>, Vec<PinDetail>)> = None;
+    let (mut unit, mut style) = (0u32, 0u32);
+    let mut pin: Option<PinDetail> = None;
+    let (mut i, mut depth) = (0usize, 0usize);
+    while i < n {
+        match b[i] {
+            b'"' => i = string_end(b, i),
+            b'(' => {
+                let tag_end = word_end(b, i + 1);
+                let tag = &b[i + 1..tag_end];
+                let mut next = tag_end;
+                if depth == 1 && tag == b"symbol" {
+                    if let Some((name, after)) = read_string(text, skip_ws(b, tag_end)) {
+                        cur = Some((name, None, Vec::new()));
+                        next = after;
+                    }
+                } else if let Some(sym) = cur.as_mut() {
+                    match (depth, tag) {
+                        (2, b"extends") => {
+                            if let Some((base, after)) = read_string(text, skip_ws(b, tag_end)) {
+                                sym.1 = Some(base);
+                                next = after;
+                            }
+                        }
+                        (2, b"symbol") => {
+                            if let Some((sub, after)) = read_string(text, skip_ws(b, tag_end)) {
+                                (unit, style) = unit_and_style(&sub).unwrap_or((0, 0));
+                                next = after;
+                            }
+                        }
+                        (3, b"pin") => {
+                            let t0 = skip_ws(b, tag_end);
+                            let t1 = word_end(b, t0);
+                            let s0 = skip_ws(b, t1);
+                            let s1 = word_end(b, s0);
+                            pin = Some(PinDetail {
+                                unit,
+                                body_style: style,
+                                electrical_type: text[t0..t1].to_string(),
+                                shape: text[s0..s1].to_string(),
+                                ..Default::default()
+                            });
+                            next = s1;
+                        }
+                        (4, b"name") | (4, b"number") if pin.is_some() => {
+                            if let Some((v, after)) = read_string(text, skip_ws(b, tag_end)) {
+                                let p = pin.as_mut().expect("checked");
+                                if tag == b"name" {
+                                    p.name = v;
+                                } else {
+                                    p.number = v;
+                                }
+                                next = after;
+                            }
+                        }
+                        (4, b"hide") if pin.is_some() => {
+                            let v0 = skip_ws(b, tag_end);
+                            let v1 = word_end(b, v0);
+                            // `(hide)` alone or `(hide yes)`
+                            pin.as_mut().expect("checked").hidden = v1 == v0 || &b[v0..v1] == b"yes";
+                            next = v1;
+                        }
+                        _ => {}
+                    }
+                }
+                depth += 1;
+                i = next;
+            }
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 3 {
+                    if let (Some(p), Some(sym)) = (pin.take(), cur.as_mut()) {
+                        sym.2.push(p);
+                    }
+                } else if depth == 1 {
+                    if let Some(sym) = cur.take() {
+                        out.push(sym);
+                    }
+                }
+                i += 1;
+            }
+            _ => {
+                // the bare `hide` of an older pin: `(pin input line (at ..) (length ..) hide (name ..) ..)`
+                if depth == 4 && pin.is_some() && b[i..].starts_with(b"hide") && word_end(b, i) == i + 4 && i > 0 && is_ws(b[i - 1]) {
+                    pin.as_mut().expect("checked").hidden = true;
+                    i += 4;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    let index: HashMap<String, usize> = out.iter().enumerate().map(|(i, s)| (s.0.clone(), i)).collect();
+    let mut pins: Vec<Vec<PinDetail>> = out.iter().map(|s| s.2.clone()).collect();
+    for i in 0..out.len() {
+        if !pins[i].is_empty() {
+            continue;
+        }
+        let (mut base, mut hops) = (out[i].1.as_ref().and_then(|b| index.get(b)).copied(), 0);
+        while let Some(bi) = base {
+            if bi == i || hops > 8 {
+                break;
+            }
+            if !out[bi].2.is_empty() {
+                pins[i] = out[bi].2.clone();
+                break;
+            }
+            base = out[bi].1.as_ref().and_then(|b| index.get(b)).copied();
+            hops += 1;
+        }
+    }
+    out.into_iter().zip(pins).map(|((name, _, _), p)| (name, p)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,5 +694,68 @@ mod tests {
         let parsed = parse_symbol(&text, &list, "LM358").unwrap();
         assert_eq!(parsed.unit_count, 3);
         assert_eq!(parsed.pins.len(), 8);
+    }
+
+    #[test]
+    fn the_pins_of_every_symbol_are_read_with_their_unit_style_type_and_hidden_flag() {
+        let all = scan_symbol_pins(LIB);
+        let names: Vec<&str> = all.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["LM358", "LM2904", "GND", "Demorgan"], "the order of scan_symbols");
+        let lm = &all[0].1;
+        assert_eq!(lm.len(), 8);
+        assert_eq!(lm[0], PinDetail { unit: 1, body_style: 1, number: "3".into(), name: "+".into(), electrical_type: "input".into(), shape: "line".into(), hidden: false });
+        assert_eq!((lm[7].unit, lm[7].number.as_str(), lm[7].name.as_str(), lm[7].electrical_type.as_str()), (3, "4", "V-", "power_in"));
+        assert_eq!(all[1].1, *lm, "a derived symbol has its base's pins");
+        let gnd = &all[2].1;
+        assert_eq!(gnd.len(), 1);
+        assert!(gnd[0].hidden, "the bare `hide` of an older pin");
+        let dm = &all[3].1;
+        assert_eq!(dm.iter().map(|p| (p.body_style, p.number.as_str())).collect::<Vec<_>>(), [(1, "1"), (2, "1"), (2, "2")], "both body styles are kept");
+        let new_hide = scan_symbol_pins(r#"(kicad_symbol_lib (symbol "H" (symbol "H_0_1" (pin passive inverted (at 0 0 0) (length 1) (hide yes) (name "A \"q\"" (effects (font (size 1 1)))) (number "7")))))"#);
+        assert_eq!(new_hide[0].1, [PinDetail { unit: 0, body_style: 1, number: "7".into(), name: "A \"q\"".into(), electrical_type: "passive".into(), shape: "inverted".into(), hidden: true }]);
+        assert!(scan_symbol_pins("(kicad_symbol_lib (symbol \"cut\" (symbol \"cut_1_1\" (pin input line").is_empty());
+    }
+
+    /// Slow tier (`EDA_SLOW_TESTS=1`): every installed symbol's pins agree with the full reader's (`parse_symbol`, the flattened `LibrarySymbol`): number, name,
+    /// electrical type, shape, hidden, unit and body style, as multisets.
+    #[test]
+    fn slow_every_installed_symbols_pins_agree_with_the_full_reader() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            return;
+        }
+        let root = crate::default_symbol_library_root();
+        if !root.is_dir() {
+            eprintln!("no KiCad symbol libraries at {}; skipping", root.display());
+            return;
+        }
+        let started = std::time::Instant::now();
+        let (mut symbols, mut pins, mut unparsed) = (0usize, 0usize, 0usize);
+        let mut failures: Vec<String> = Vec::new();
+        for name in crate::list_symbol_libraries(&root) {
+            let path = crate::find_symbol_library_file(&root, &name).unwrap();
+            let text = crate::read_symbol_library_text(&path).unwrap();
+            let summaries = scan_symbols(&text);
+            for (sym, ours) in scan_symbol_pins(&text) {
+                let Some(full) = parse_symbol(&text, &summaries, &sym) else {
+                    unparsed += 1;
+                    continue;
+                };
+                symbols += 1;
+                pins += ours.len();
+                let key = |unit: u32, style: u32, n: &str, nm: &str, t: &str, s: &str, h: bool| (unit, style, n.to_string(), nm.to_string(), t.to_string(), s.to_string(), h);
+                let mut a: Vec<_> = ours.iter().map(|p| key(p.unit, p.body_style, &p.number, &p.name, &p.electrical_type, &p.shape, p.hidden)).collect();
+                let mut b: Vec<_> = full.pins.iter().map(|p| key(p.unit, p.body_style, &p.number, &p.name, &p.electrical_type, &p.shape, p.hidden)).collect();
+                a.sort();
+                b.sort();
+                if a != b {
+                    let only_ours: Vec<_> = a.iter().filter(|x| !b.contains(x)).take(2).collect();
+                    let only_theirs: Vec<_> = b.iter().filter(|x| !a.contains(x)).take(2).collect();
+                    failures.push(format!("{name}:{sym}: {} vs {} pins; ours only {only_ours:?}; theirs only {only_theirs:?}", a.len(), b.len()));
+                }
+            }
+        }
+        eprintln!("{symbols} symbols, {pins} pins compared ({unparsed} the full reader refuses) in {:?}", started.elapsed());
+        assert!(symbols > 10_000, "{symbols}");
+        assert!(failures.is_empty(), "{} differ:\n{}", failures.len(), failures.iter().take(20).cloned().collect::<Vec<_>>().join("\n"));
     }
 }

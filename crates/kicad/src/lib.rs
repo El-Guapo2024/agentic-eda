@@ -87,9 +87,9 @@ pub use symbol_import::{parse_library_symbols, ParsedSymbols};
 
 // What the Symbol and Footprint Choosers index of the installed libraries without parsing their drawings (see each module's doc).
 mod symbol_scan;
-pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, parse_symbol_checked, scan_symbols, symbol_text, SymbolSummary};
+pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, parse_symbol_checked, scan_symbol_pins, scan_symbols, symbol_text, PinDetail, SymbolSummary};
 mod footprint_scan;
-pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
+pub use footprint_scan::{is_numbered_pad, scan_footprint, scan_footprint_detail, BoxNm, FootprintDetail, FootprintSummary, PadDetail};
 
 mod symbol_lib;
 // A symbol library that is a folder of `.kicad_sym` files (KiCad 10's `Device.kicad_symdir`), read as the one library text it stands for.
