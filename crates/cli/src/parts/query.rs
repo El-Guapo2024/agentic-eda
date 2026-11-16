@@ -499,13 +499,25 @@ pub(crate) fn stats(store: &Store, by_lib: bool) -> Value {
     v
 }
 
+/// The board's design and parts as its intent names them -- `board::build_model`'s reading without its library resolution (which parses whole libraries: the
+/// cache answers for them here).
+fn board_parts(dir: &Path) -> Result<(eda_model::ir::Design, eda_model::ConstraintModel), String> {
+    let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
+    let meta: crate::board::Meta = serde_json::from_str(&read(&dir.join("board.json"))?).map_err(|e| format!("board.json: {e}"))?;
+    let design: eda_model::ir::Design = serde_json::from_str(&read(&dir.join("design.json"))?).map_err(|e| format!("design.json: {e}"))?;
+    let intent = crate::board::intent_path(dir, &meta, &design);
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&read(Path::new(&intent))?).map_err(|e| format!("{intent}: {e}"))?;
+    eda_model::fp_assign::apply_part_renames(&design, &mut model);
+    Ok((design, model))
+}
+
 /// `eda parts check-board -C dir`, `GET /api/parts/check`: for every part of the board, whether its symbol and its footprint are in the board's libraries, whether
 /// the symbol's pins all land on a pad of the footprint, and whether the footprint's 3D model is found. A part drawn with a generated symbol (`eda:..`) has no
 /// library symbol to check.
 pub(crate) fn check_board(store: &Store, dir: &Path, sym_set: &dyn LibSource, fp_set: &dyn LibSource) -> Value {
-    let (_, design, model) = match crate::board::load(dir) {
+    let (design, model) = match board_parts(dir) {
         Ok(b) => b,
-        Err(fails) => return json!({ "error": fails.iter().map(|f| f.hint.clone().unwrap_or_default()).collect::<Vec<_>>().join("; ") }),
+        Err(e) => return json!({ "error": e }),
     };
     let placed: HashMap<&str, &str> = design.schematic.as_ref().map(|s| s.symbols.iter().filter(|i| !i.lib_id.is_empty()).map(|i| (i.id.as_str(), i.lib_id.as_str())).collect()).unwrap_or_default();
     let (mut parts, mut problems) = (Vec::new(), 0usize);
@@ -514,14 +526,16 @@ pub(crate) fn check_board(store: &Store, dir: &Path, sym_set: &dyn LibSource, fp
         let mut issues: Vec<String> = Vec::new();
         let generated = !lib_id.contains(':') || lib_id.starts_with("eda:") || lib_id.starts_with(eda_model::gensym::GENERATED_PREFIX);
         let sym = if generated { None } else { find_symbol(store, sym_set, &lib_id).map_err(|e| issues.push(e)).ok() };
-        let fp = match p.footprint.as_deref().filter(|f| !f.is_empty()) {
+        // the part's footprint as named (`Lib:Name`), else the KiCad footprint its package stands for (`kicad_footprint_of_part`, what the board places)
+        let footprint = p.footprint.clone().filter(|f| f.contains(':')).or_else(|| eda_model::footprint::kicad_footprint_of_part(p).map(|f| f.id()));
+        let fp = match footprint.as_deref().filter(|f| !f.is_empty()) {
             None => {
                 issues.push("no footprint".into());
                 None
             }
             Some(f) => find_footprint(store, fp_set, f).map_err(|e| issues.push(e)).ok(),
         };
-        let mut row = json!({ "reference": p.reference, "symbol": lib_id, "footprint": p.footprint, "generated_symbol": generated });
+        let mut row = json!({ "reference": p.reference, "symbol": lib_id, "footprint": footprint, "generated_symbol": generated });
         if let Some((_, fid, f)) = &fp {
             row["model_found"] = json!(f.model_found);
             if !f.models.is_empty() && !f.model_found {
