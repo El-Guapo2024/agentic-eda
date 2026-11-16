@@ -252,18 +252,41 @@ pub(crate) fn kicad_refused(kind: Kind, path: &Path, ask: bool) -> Vec<PathBuf> 
         lock(recent()).insert(key, (std::time::Instant::now(), Vec::new()));
         return Vec::new();
     }
+    ask_now(kind, path, &stamp).unwrap_or_default()
+}
+
+/// kicad-cli asked about the library in its state `stamp`, one check at a time, and the answer kept; `None` when it cannot answer.
+fn ask_now(kind: Kind, path: &Path, stamp: &str) -> Option<Vec<PathBuf>> {
     let _one = lock(running());
+    if let Some(hit) = known(kind, path, stamp) {
+        return Some(hit);
+    }
+    let refused = refused_files_with(kind, path, &kicad_loads)?;
+    keep(kind, path, stamp, &refused);
+    lock(recent()).insert((kind, path.to_path_buf()), (std::time::Instant::now(), refused.clone()));
+    Some(refused)
+}
+
+/// The verdict on the library at `path` in its present state, known (in memory or in the library cache's `verdicts/`) or -- `ask` -- asked of kicad-cli now
+/// (`crate::parts`' indexer thread and `eda parts verify`, never a query). `None` when it is not known and not asked, when verdicts are off, or when kicad-cli
+/// cannot answer.
+pub(crate) fn verdict(kind: Kind, path: &Path, ask: bool) -> Option<Vec<PathBuf>> {
+    if !enabled(path) {
+        return None;
+    }
+    let stamp = stamp(kind, path)?;
     if let Some(hit) = known(kind, path, &stamp) {
-        return hit;
+        return Some(hit);
     }
-    match refused_files_with(kind, path, &kicad_loads) {
-        Some(refused) => {
-            keep(kind, path, &stamp, &refused);
-            lock(recent()).insert(key, (std::time::Instant::now(), refused.clone()));
-            refused
-        }
-        None => Vec::new(),
+    if !ask {
+        return None;
     }
+    ask_now(kind, path, &stamp)
+}
+
+/// Whether KiCad's parser's verdict on the library at `path` is still to come: verdicts are on, kicad-cli is there, and none is known for its present state.
+pub(crate) fn pending(kind: Kind, path: &Path) -> bool {
+    enabled(path) && stamp(kind, path).is_some_and(|s| known(kind, path, &s).is_none())
 }
 
 /// `"Unable to read file '%s'\n%s"`, the entry `FP_CACHE::Load` and the folder `Load` queue for a file.
@@ -290,12 +313,14 @@ pub(crate) fn footprint_refusals(dir: &Path, ask: bool) -> (Vec<String>, Vec<Str
 /// symbol (it does not load), a folder library's files' symbols ("Unable to read file '%s'" for each, then "The library cannot be saved until these errors
 /// are fixed manually.").
 pub(crate) fn symbol_refusals(path: &Path, ask: bool) -> (Vec<String>, Option<String>) {
-    let ours = eda_kicad::symbol_library_load_errors(path);
+    symbol_refusals_from(path, kicad_refused(Kind::Symbol, path, ask), eda_kicad::symbol_library_load_errors(path))
+}
+
+/// [`symbol_refusals`] with KiCad's refused files and this crate's reader's message given (`crate::parts` keeps the second, so a library it has indexed is
+/// not read again for it).
+pub(crate) fn symbol_refusals_from(path: &Path, kicad: Vec<PathBuf>, ours: Option<String>) -> (Vec<String>, Option<String>) {
     // a file this crate's reader refuses already says so, in its own words
-    let refused: Vec<PathBuf> = kicad_refused(Kind::Symbol, path, ask)
-        .into_iter()
-        .filter(|f| !ours.as_deref().is_some_and(|m| m.contains(&format!("Unable to read file '{}'", f.display()))))
-        .collect();
+    let refused: Vec<PathBuf> = kicad.into_iter().filter(|f| !ours.as_deref().is_some_and(|m| m.contains(&format!("Unable to read file '{}'", f.display())))).collect();
     if refused.is_empty() {
         return (Vec::new(), ours);
     }
@@ -325,6 +350,17 @@ pub(crate) mod tests {
     /// Ask kicad-cli about the libraries under `root` (a test's own folder).
     pub(crate) fn check_with_kicad_cli(root: &Path) {
         lock(allowed()).push(root.to_path_buf());
+    }
+
+    /// What kicad-cli would say of the library at `path` in its present state, kept in memory as if it had been asked (a test's own library only): false when
+    /// verdicts are off here (no kicad-cli, or a library outside the test's folders).
+    pub(crate) fn plant(kind: Kind, path: &Path, refused: &[PathBuf]) -> bool {
+        if !super::enabled(path) {
+            return false;
+        }
+        let Some(stamp) = super::stamp(kind, path) else { return false };
+        lock(verdicts()).insert((kind, path.to_path_buf()), (stamp, refused.to_vec()));
+        true
     }
 
     pub(super) fn checked(path: &Path) -> bool {

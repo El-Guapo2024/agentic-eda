@@ -337,6 +337,11 @@ fn a_footprint_file_the_reader_refuses_is_not_listed_and_its_library_says_why() 
     assert!(why.starts_with(&format!("Unable to read file '{}'\n", pretty.join("Broken.kicad_mod").display())), "{why}");
 }
 
+/// What the parts indexer's thread does for a library whose verdict a query found pending: kicad-cli asked, the verdict kept.
+fn settle(kind: Kind, path: &std::path::Path) {
+    assert!(crate::library_verdict::verdict(kind, path, true).is_some(), "kicad-cli answers for {}", path.display());
+}
+
 /// UI-LEFT-3 L3-6, slow tier (kicad-cli): a footprint file and a symbol file this crate's reader takes but KiCad's parser refuses (an unknown token) are not in
 /// their libraries -- the tree, the chooser's items and its search -- and the libraries say which file (`FP_CACHE::Load`, the folder `Load`); a file library
 /// KiCad's parser refuses lists nothing.
@@ -351,7 +356,12 @@ fn a_file_only_kicads_parser_refuses_is_not_listed_and_its_library_says_so() {
     let strict = CHIP.replace("\"Chip\"", "\"Strict\"").replace("(attr", "(frobnicate 1)\n\t(attr");
     assert!(eda_kicad::parse_library_footprint(&strict).is_ok(), "this crate's reader takes it");
     std::fs::write(pretty.join("Strict.kicad_mod"), &strict).unwrap();
+    // the request loop does not ask kicad-cli: the tree is told the verdict is to come (the parts indexer's thread asks), and has it once it has landed
+    let first = crate::library_index::items(&dir, Kind::Footprint, "Fp");
+    assert_eq!(first["verdict"], "pending", "{first}");
+    settle(Kind::Footprint, &pretty);
     let v = crate::library_index::items(&dir, Kind::Footprint, "Fp");
+    assert!(v.get("verdict").is_none(), "{v}");
     assert_eq!(strings(&v["names"]), ["Chip", "Other"], "{v}");
     assert_eq!(v["load_error"].as_str().unwrap_or_default(), format!("Unable to read file '{}'\n{}", pretty.join("Strict.kicad_mod").display(), crate::library_verdict::KICAD_REFUSES));
     let e = crate::library_search::entries(&dir, Kind::Footprint, "Fp", &crate::library_search::Filter::default());
@@ -370,6 +380,7 @@ fn a_file_only_kicads_parser_refuses_is_not_listed_and_its_library_says_so() {
     crate::library_verdict::tests::check_with_kicad_cli(&dir);
     let other = std::fs::read_to_string(path.join("Other.kicad_sym")).unwrap().replace("(property \"Reference\" \"R\"", "(frobnicate 1)\n\t\t(property \"Reference\" \"R\"");
     std::fs::write(path.join("Other.kicad_sym"), other).unwrap();
+    settle(Kind::Symbol, &path);
     let v = crate::library_index::items(&dir, Kind::Symbol, "Mine");
     assert_eq!(strings(&v["names"]), ["Alpha", "Zeta"], "{v}");
     let why = v["load_error"].as_str().unwrap_or_default();
@@ -378,6 +389,7 @@ fn a_file_only_kicads_parser_refuses_is_not_listed_and_its_library_says_so() {
     let (dir, path) = board_with("libbuf_symfile_kicad_refuses", false);
     crate::library_verdict::tests::check_with_kicad_cli(&dir);
     std::fs::write(&path, LIB.replace("(property \"Reference\" \"R\"", "(frobnicate 1)\n\t\t(property \"Reference\" \"R\"")).unwrap();
+    settle(Kind::Symbol, &path);
     let v = crate::library_index::items(&dir, Kind::Symbol, "Mine");
     assert!(strings(&v["names"]).is_empty(), "{v}");
 }

@@ -700,7 +700,10 @@ fn normalized_for(env: &Env, vars: &Vars, dir: &Path, path: &Path, global: bool)
 /// `POST /api/library_tables` `{kind, rows}`: the Project tab's OK. The rows go through KiCad's `VerifyTable` (a row with no path is dropped, a nickname must be
 /// there and legal, no two alike) and the project's table is written; the answer is the view again, or `{error, row, column}` for the row that was refused.
 pub(crate) fn set_table(dir: &Path, body: &[u8]) -> Value {
-    set_table_with(&Env::discover(), dir, body)
+    let v = set_table_with(&Env::discover(), dir, body);
+    // the parts cache's indexer looks at the libraries the tables name now (`crate::parts`)
+    crate::parts::invalidate_tables(dir);
+    v
 }
 
 pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
@@ -800,7 +803,9 @@ fn chained_tables(l: &Loaded) -> Vec<PathBuf> {
 /// (options "") (descr "KiCad Default Libraries"))`. It takes place at once, whatever the dialog's OK or Cancel (KiCad: "this action takes place even if the dialog is
 /// canceled"); the dialog asks first ("This action will reset your global library table on disk and cannot be undone.") when the table has rows. The answer is the view.
 pub(crate) fn reset_global(dir: &Path, body: &[u8]) -> Value {
-    reset_global_with(&Env::discover(), dir, body)
+    let v = reset_global_with(&Env::discover(), dir, body);
+    crate::parts::invalidate_tables(dir);
+    v
 }
 
 pub(crate) fn reset_global_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
@@ -843,7 +848,9 @@ pub(crate) fn reset_global_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 /// go and whether that exists, so the dialog can ask KiCad's question first ("File '%s' already exists. Do you want overwrite this file?" / "Folder '%s' already
 /// exists. Do you want overwrite any existing footprints?", Yes / No / Cancel). `{results: [{row, error?, uri?, type?, options?, dest, exists}]}`.
 pub(crate) fn migrate_rows(dir: &Path, body: &[u8]) -> Value {
-    migrate_rows_with(&Env::discover(), dir, body, &|kind, from, to, row: &lt::Row| crate::library_convert::migrate_row(kind, from, to, &row.lib_type, &row.options))
+    let v = migrate_rows_with(&Env::discover(), dir, body, &|kind, from, to, row: &lt::Row| crate::library_convert::migrate_row(kind, from, to, &row.lib_type, &row.options));
+    crate::parts::invalidate_tables(dir);
+    v
 }
 
 pub(crate) fn migrate_rows_with(env: &Env, dir: &Path, body: &[u8], migrate: &dyn Fn(TableKind, &Path, &Path, &lt::Row) -> Result<(), String>) -> Value {
@@ -971,7 +978,9 @@ pub(crate) fn normalize_with(env: &Env, dir: &Path, typed: &str) -> Value {
 /// either way a row is added to the board's table (never the global one) with the path written as KiCad writes it (`NormalizePath`) and the nickname the file's name makes
 /// (`LIB_ID::FixIllegalChars`).
 pub(crate) fn add_library(dir: &Path, body: &[u8]) -> Value {
-    add_library_with(&Env::discover(), dir, body)
+    let v = add_library_with(&Env::discover(), dir, body);
+    crate::parts::invalidate_tables(dir);
+    v
 }
 
 pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {

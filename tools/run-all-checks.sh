@@ -64,6 +64,8 @@ e2e="$repo/web/studio/e2e"
 
 scratch="$(mktemp -d -p /tmp run-all-checks.XXXX)"
 echo "run-all-checks: scratch $scratch"
+# one parts cache per run (`crate::parts`, `docs/PARTS-CACHE.md`), which this run's servers share and build once: never the machine's
+export EDA_PARTS_DB="$scratch/parts.sqlite"
 
 if [ "$build" = 1 ]; then
     echo "run-all-checks: building the studio and eda-cli"

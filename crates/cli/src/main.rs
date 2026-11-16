@@ -63,6 +63,7 @@ mod library_search;
 mod library_tables;
 mod library_verdict;
 mod library_watch;
+mod parts;
 mod rescue_api;
 mod legacy_import;
 mod legacy_rescue;
@@ -1341,6 +1342,10 @@ fn run_main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+    // `eda parts ...`: the parts cache (`crate::parts`), its own surface like `fab`
+    if argv.first().map(String::as_str) == Some("parts") {
+        return parts::cmd::run(&argv[1..]);
     }
     if argv.first().map(String::as_str) == Some("board") {
         let r = board::run(&argv[1..], |model| {

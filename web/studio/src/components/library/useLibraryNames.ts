@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEditorNames } from "../../api/types";
 import { fetchFootprintLibraryNames, fetchSymbolEditorNames } from "../../api/client";
 import { fetchModified } from "../../api/librarySaveClient";
-import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, onInstalledLibrariesReset, type LibraryKind } from "../../api/libraryIndexClient";
+import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, onInstalledItemsUpdated, onInstalledLibrariesReset, type LibraryKind } from "../../api/libraryIndexClient";
 import type { InstalledLib, TreeItem } from "../../kicad-port/libraryTreeModel";
 
 const listeners = new Set<() => void>();
@@ -129,6 +129,16 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
           .catch(() => {
             /* the server is busy: the next change asks again */
           });
+      }),
+    [kind]
+  );
+
+  // A library's names changed once KiCad's parser's verdict on it landed (a file it refuses leaves the tree): the shown list follows.
+  useEffect(
+    () =>
+      onInstalledItemsUpdated((k, lib, names) => {
+        if (k !== kind || !alive.current) return;
+        setLoaded((prev) => (prev.has(lib) ? new Map(prev).set(lib, names) : prev));
       }),
     [kind]
   );

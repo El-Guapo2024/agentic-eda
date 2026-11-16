@@ -99,6 +99,8 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     );
     // KiCad 25ec2335 `IFACE::PreloadLibraries`: the symbol libraries load in the background as the project opens (`crate::library_search`)
     crate::library_search::preload_symbol_libraries(dir);
+    // the parts cache's indexer (`crate::parts::api`): the board's libraries brought up to date in the background
+    crate::parts::api::start_indexer(dir);
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
     // The kicad-cli export a GLB needs can take minutes on a many-part
@@ -138,6 +140,14 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
                         let done = read_request(&stream).and_then(|(method, target, body)| model_routes(&mut stream, &method, &target, &body, &dir, &lane, true).unwrap_or(Err("not a model route".into())));
                         if let Err(e) = done {
                             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
+                        }
+                        return;
+                    }
+                    // The parts cache (`crate::parts::api`): read-only lookups on a connection of their own, never behind the loop.
+                    if head[..n].starts_with(b"GET /api/parts/") || head[..n].starts_with(b"POST /api/parts/") {
+                        if let Ok((method, target, _)) = read_request(&stream) {
+                            let v = crate::parts::api::answer(&dir, &method, &target).unwrap_or_else(|| serde_json::json!({ "error": "no such route" }));
+                            let _ = respond(&mut stream, "200 OK", "application/json", v.to_string().as_bytes());
                         }
                         return;
                     }
@@ -897,7 +907,12 @@ fn handle(
         ("GET", "/api/library/modified") => respond(stream, "200 OK", "application/json", crate::library_save_api::modified(dir, &query_value(target, "kind")).to_string().as_bytes()),
         ("GET", "/api/library/saved") => respond(stream, "200 OK", "application/json", crate::library_save_api::saved(dir, &query_value(target, "kind"), &query_value(target, "id"), &query_value(target, "lib")).to_string().as_bytes()),
         ("POST", "/api/library/save") => respond(stream, "200 OK", "application/json", crate::library_save_api::save(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/library/save_as") => respond(stream, "200 OK", "application/json", crate::library_save_api::save_library_as(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library/save_as") => {
+            let v = crate::library_save_api::save_library_as(dir, &body);
+            // a new library file, maybe a new table row: the parts cache looks again (`crate::parts`)
+            crate::parts::invalidate_tables(dir);
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         // UI-LEFT-2 LL1, LL3, LL6: Revert and a reload as one undoable step, the derived symbols Delete takes, the watch on the open item's library
         ("POST", "/api/library/revert") => respond(stream, "200 OK", "application/json", crate::library_save_api::revert(dir, &body).to_string().as_bytes()),
         ("POST", "/api/library/clear_modify") => respond(stream, "200 OK", "application/json", crate::library_save_api::clear_modify(dir, &body).to_string().as_bytes()),
