@@ -385,14 +385,22 @@ pub(crate) fn listed<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, ask:
     Ok((names.iter().filter(|n| !refused.contains(n)).cloned().collect(), error))
 }
 
-/// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..], "load_error"?}` -- the bare item names of one library ([`listed`]), or `{"error"}`.
+/// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..], "load_error"?, "verdict"?}` -- the bare item names of one library ([`listed`]), or
+/// `{"error"}`. KiCad's parser's verdict is the one known: one not known yet is asked of kicad-cli by the parts indexer's thread (`crate::parts`), never on the
+/// request loop, and the answer says `"verdict": "pending"` so the tree asks again until it has landed (`libraryIndexClient.ts`'s `fetchInstalledItems`).
 pub fn items(dir: &Path, kind: Kind, lib: &str) -> Value {
     let libs = crate::library_tables::libs(dir, kind);
-    match listed(kind, &*libs, lib, true) {
+    match listed(kind, &*libs, lib, false) {
         Ok((names, error)) => {
             let mut v = json!({ "lib": lib, "names": names });
             if let Some(e) = error {
                 v["load_error"] = json!(e);
+            }
+            if let Ok(path) = libs.lib_path(kind, lib) {
+                if crate::library_verdict::pending(kind, &path) {
+                    crate::parts::queue_verdict(kind, &path);
+                    v["verdict"] = json!("pending");
+                }
             }
             v
         }

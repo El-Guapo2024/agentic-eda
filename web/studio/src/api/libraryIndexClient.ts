@@ -81,16 +81,60 @@ export function fetchInstalledLibraries(kind: LibraryKind): Promise<InstalledLib
   });
 }
 
+type ItemsAnswer = { names: string[]; load_error?: string; error?: string; verdict?: "pending" };
+
+const itemListeners = new Set<(kind: LibraryKind, lib: string, names: string[]) => void>();
+
+/** Told when a library's item names changed after they were first given (KiCad's parser's verdict landed); returns the unsubscribe. */
+export function onInstalledItemsUpdated(listener: (kind: LibraryKind, lib: string, names: string[]) => void): () => void {
+  itemListeners.add(listener);
+  return () => itemListeners.delete(listener);
+}
+
+/** How often, and how long, a library whose KiCad verdict is still to come is asked again. */
+export const VERDICT_POLL_MS = 1000;
+export const VERDICT_POLL_LIMIT_MS = 180000;
+
+function takeItems(kind: LibraryKind, lib: string, r: ItemsAnswer): string[] {
+  // a folder library with a file that did not read: its names are listed, and the status bar warns (`GetLibraryLoadErrors`); a footprint library's file the
+  // reader refuses is left out and said the same way (`FP_CACHE::Load`, UI-LEFT-2 LL6)
+  if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
+  else clearLoadError(lib);
+  knownItems.set(`${kind}/${lib}`, r.names);
+  return r.names;
+}
+
+/**
+ * A library whose KiCad verdict is still to come (`"verdict": "pending"`: the server's parts indexer asks kicad-cli on a thread of its own, never on the request
+ * loop): asked again until the verdict has landed, then its names are the kept answer and the trees are told (`onInstalledItemsUpdated`).
+ */
+async function followVerdict(kind: LibraryKind, lib: string, first: string[]): Promise<void> {
+  const key = `${kind}/${lib}`;
+  const t0 = Date.now();
+  while (Date.now() - t0 < VERDICT_POLL_LIMIT_MS) {
+    await new Promise((resolve) => setTimeout(resolve, VERDICT_POLL_MS));
+    if (!itemLists.has(key)) return; // forgotten (the tables changed): the next ask starts over
+    let r: ItemsAnswer;
+    try {
+      r = await get<ItemsAnswer>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`);
+    } catch {
+      continue;
+    }
+    if (r.verdict === "pending") continue;
+    const names = takeItems(kind, lib, r);
+    itemLists.set(key, Promise.resolve(names));
+    if (names.join("\u0001") !== first.join("\u0001")) for (const l of [...itemListeners]) l(kind, lib, names);
+    return;
+  }
+}
+
 /** The bare item names of one installed library (`Lib` -> `["R", "C", ...]`; the tree key is `Lib:Name`). */
 export function fetchInstalledItems(kind: LibraryKind, lib: string): Promise<string[]> {
   return once(itemLists, `${kind}/${lib}`, async () => {
-    const r = await get<{ names: string[]; load_error?: string; error?: string }>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`);
-    // a folder library with a file that did not read: its names are listed, and the status bar warns (`GetLibraryLoadErrors`); a footprint library's file the
-    // reader refuses is left out and said the same way (`FP_CACHE::Load`, UI-LEFT-2 LL6)
-    if (r.load_error) reportLoadErrors([{ lib, error: r.load_error }]);
-    else clearLoadError(lib);
-    knownItems.set(`${kind}/${lib}`, r.names);
-    return r.names;
+    const r = await get<ItemsAnswer>(`/api/library/items?kind=${kind}&lib=${encodeURIComponent(lib)}`);
+    const names = takeItems(kind, lib, r);
+    if (r.verdict === "pending") void followVerdict(kind, lib, names);
+    return names;
   });
 }
 

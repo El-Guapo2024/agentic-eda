@@ -128,7 +128,9 @@
     const w1 = await window.__runCheckWriteFile?.(`${folder}/Good.kicad_mod`, text("Good", ""));
     const w2 = await window.__runCheckWriteFile?.(`${folder}/Strict.kicad_mod`, text("Strict", "\t(frobnicate 1)\n"));
     if (!t(w1 === "ok" && w2 === "ok", `two files written (${dir}): ${w1} ${w2}`)) return;
-    const items = await json(`/api/library/items?kind=footprint&lib=${FP}`);
+    // KiCad's parser's verdict is asked of kicad-cli by the parts indexer's thread, never on the request loop (task-v21-parts): the first answer may say it is
+    // still to come (`verdict: "pending"`), and the refused file leaves the list once it has landed
+    const items = (await until(async () => { const r = await json(`/api/library/items?kind=footprint&lib=${FP}`); return r.verdict !== "pending" ? r : null; }, 60000)) ?? {};
     t(JSON.stringify(items.names) === JSON.stringify(["Good"]), `the tree's items: ${JSON.stringify(items.names)}`);
     t(/Unable to read file '.*Strict\.kicad_mod'/.test(items.load_error ?? ""), `the library says which: ${(items.load_error ?? "").slice(0, 160)}`);
     const entries = await json(`/api/library/entries?kind=footprint&lib=${FP}`);

@@ -284,6 +284,11 @@ pub(crate) fn verdict(kind: Kind, path: &Path, ask: bool) -> Option<Vec<PathBuf>
     ask_now(kind, path, &stamp)
 }
 
+/// Whether KiCad's parser's verdict on the library at `path` is still to come: verdicts are on, kicad-cli is there, and none is known for its present state.
+pub(crate) fn pending(kind: Kind, path: &Path) -> bool {
+    enabled(path) && stamp(kind, path).is_some_and(|s| known(kind, path, &s).is_none())
+}
+
 /// `"Unable to read file '%s'\n%s"`, the entry `FP_CACHE::Load` and the folder `Load` queue for a file.
 fn unable(file: &Path, why: &str) -> String {
     format!("Unable to read file '{}'\n{why}", file.display())
