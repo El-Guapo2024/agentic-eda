@@ -390,7 +390,7 @@ impl Filter {
     }
 
     /// The shown columns (Item and Description by default).
-    fn shown_columns(&self) -> Vec<&str> {
+    pub(crate) fn shown_columns(&self) -> Vec<&str> {
         match &self.columns {
             Some(c) => c.iter().map(String::as_str).collect(),
             None => vec!["Item", "Description"],
@@ -408,11 +408,11 @@ impl Filter {
     }
 
     /// Whether a symbol passes the power part of the filter.
-    fn symbol_passes(&self, power: bool) -> bool {
+    pub(crate) fn symbol_passes(&self, power: bool) -> bool {
         !(self.exclude_power && power) && !(self.only_power && !power)
     }
 
-    fn footprint_passes(&self, lib: &str, name: &str, numbered_pads: u32) -> bool {
+    pub(crate) fn footprint_passes(&self, lib: &str, name: &str, numbered_pads: u32) -> bool {
         if let Some(n) = self.pins {
             if numbered_pads as usize != n {
                 return false;
@@ -445,7 +445,7 @@ impl SymbolLib {
 }
 
 /// `LIB_SYMBOL::cacheSearchTerms` (`m_sourceSearchTerms`); the shown columns' fields are added per search ([`column_terms`]).
-fn symbol_terms(lib: &str, s: &SymbolSummary) -> Vec<Term> {
+pub(crate) fn symbol_terms(lib: &str, s: &SymbolSummary) -> Vec<Term> {
     let mut terms = vec![term(lib, 4), term(&s.name, 8), term(&format!("{lib}:{}", s.name), 16)];
     terms.extend(s.keywords.split_whitespace().map(|k| term(k, 4)));
     terms.push(term(&s.keywords, 1));
@@ -473,7 +473,7 @@ fn chooser_field<'a>(s: &'a SymbolSummary, name: &str) -> Option<&'a str> {
 }
 
 /// `LIB_TREE_NODE::RebuildSearchTerms`: the value of each of the symbol's chooser fields whose column is shown, weight 4 (a footprint has no chooser fields).
-fn column_terms(s: &SymbolSummary, shown: &[&str]) -> Vec<Term> {
+pub(crate) fn column_terms(s: &SymbolSummary, shown: &[&str]) -> Vec<Term> {
     shown.iter().filter_map(|name| chooser_field(s, name)).map(|v| term(v, 4)).collect()
 }
 
@@ -486,7 +486,7 @@ pub(crate) struct FootprintLib {
 }
 
 /// `FOOTPRINT_INFO::GetSearchTerms`.
-fn footprint_terms(lib: &str, name: &str, f: &FootprintSummary) -> Vec<Term> {
+pub(crate) fn footprint_terms(lib: &str, name: &str, f: &FootprintSummary) -> Vec<Term> {
     let mut terms = vec![term(lib, 4), term(name, 8), term(&format!("{lib}:{name}"), 16)];
     terms.extend(f.tags.split_whitespace().map(|k| term(k, 4)));
     terms.push(term(&f.tags, 1));

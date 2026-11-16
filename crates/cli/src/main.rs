@@ -1343,6 +1343,10 @@ fn run_main() -> ExitCode {
             }
         };
     }
+    // `eda parts ...`: the parts cache (`crate::parts`), its own surface like `fab`
+    if argv.first().map(String::as_str) == Some("parts") {
+        return parts::cmd::run(&argv[1..]);
+    }
     if argv.first().map(String::as_str) == Some("board") {
         let r = board::run(&argv[1..], |model| {
             let empty = Design {
