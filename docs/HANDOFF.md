@@ -2,18 +2,33 @@
 
 For a fresh session, for example on the `ws-agentic-eda` cloud box (`~/work/agentic-eda`). Read this first, then `docs/ARCHITECTURE.md` and `docs/parity/GAPS.md`.
 
-## Start here (2026-11-15): round 3 done
+## Start here (2026-11-17): feature work paused; the studio is in real use
 
-- **Main 57c49812** (+ UI-ACTIONS 3ab0c07b) holds all of round 3: batches v13-v19 and the gate fixes. Every `docs/parity/UI-LEFT-3.md` entry is done except Draw Ellipse Arc. Full suite on a6ad1dc0: web 4044/0 and node 3961/0; Rust 5338 passed, only the 2 known failures; browser 201 checks, all green after `task-v19-gatefix2` (a check reading the info bar; 3D click picks a footprint by its pads, `kicad-port/padPick3d.ts`).
-- **TODO (the user, 2026-11-15: skipped for now, leave it):**
-  - Native ellipse shape (KiCad 25ec2335 `SHAPE_T::ELLIPSE` / `ELLIPSE_ARC`): model, file format, editors, painters, plot, 3D. It unlocks Draw Ellipse Arc (UI-LEFT-3 S3-28) and native ellipses for P3-28 / II5 imports. Unevenly scaled circles and arcs stay KiCad's polylines until then.
-  - Font hinting (skrifa) and shaping (rustybuzz) crates (UI-LEFT-3 C3-3 / C3-8 follow-up): not added.
-  - Python scripting, action plugins and footprint wizards: skipped; the AI agent driving `eda` / the IR does what scripts would.
-- **Kept (the user, 2026-11-15):** one project folder per server (`eda board serve -C dir`); no New/Open Project or project manager.
-  - Footprint Viewer and Symbol Viewer windows (the editors' library trees browse parts).
-  - Hyperlynx and footprint-report (.rpt) exporters (kicad-cli has neither; ours would be a second exporter).
-- **Batch v20 (merged in the gate, 2026-11-15):** KiCad's calculators (`task-v20-calc`, PARITY-common §32); Component Classes from the schematic to the board (`task-v20-compclass`, PARITY-pcb §125, PARITY-sch §104); the small model gaps: most were already done (GAPS lines struck), the via's free flag ported (`task-v20-modelgaps`, PARITY-pcb §126).
-- **Lessons:** the v19 X3-2 change (no stand-in box for a part without a model) broke 3D picking only on the merged tree; gate the merged tree before pushing.
+- **Main d7a5b49a** holds everything: round 3 (batches v13-v19), batch v20 (calculators, Component Classes, free vias) and the parts cache (`task-v21-parts`, `docs/PARTS-CACHE.md`). No branch is left unmerged. Full suite on d7a5b49a: web 4147/0 and node 3966/0; Rust 5369 passed, only the 2 known failures; parity reexport ok; browser 205/205 (pcbmisc-v18 and rescue-symbols passed on retry, load flakes).
+- **The user's call (2026-11-17):** stop adding features and use the studio on real boards. Fix what real use finds. Pick items below only when needed.
+- **How to run a batch again:** worktrees `~/work/agentic-eda-<lane>` on `task-vNN-*` branches from main, 3-4 lane agents (`docs/agent-briefs/common.md`), merge into `~/work/agentic-eda-gate`, quick tests per batch, the full suite only before a push (cargo check, web unit + node runner, release build, `cargo test --release --workspace` with `EDA_SLOW_TESTS=1`, `tools/parity_report.py`, `tools/run-all-checks.sh -j 3` then a `-j 1` retry of failures), push, rebuild `target/release` + `web/studio/dist` in `~/work/agentic-eda`, restart `eda board serve`.
+
+### TODO (not needed now; ranked by how much they would matter)
+
+1. **Supplier data, parts cache phase 2** (`docs/PARTS-CACHE.md`): the `parts`, `part_params`, `part_links`, `offers` tables exist and are empty. ATTACH jlcparts' `~/src/jlcparts/cache.sqlite3` (~3.1M parts, LCSC numbers, stock, price; read by `tools/parts/jlc_query.py` today), seed `part_links` from symbols' MPN / LCSC / Manufacturer fields, add `eda parts` queries for stock and price. DigiKey / Mouser need API keys (the user's).
+2. **Free vias** (PARITY-pcb §126): the flag is read, written and edited, but the studio has no `PropagateNets` step, so a via that is not free does not follow its connections' net.
+3. **Component Classes** (PARITY-pcb §125): a design variant's own Component Class text (`m_exportVariant`) is not read; a pin's inverted or clock decoration is not counted in the rule-area test.
+4. **Calculators** (PARITY-common §32): the attenuator, via and transmission-line pictures; a regulator file at a disk path (it lives in browser storage and downloads).
+5. **Parts cache:** footprint select and CvPcb auto-associate through SQL (`kicad_wildcard`); the results are already identical, this is only speed. A footprint edited in place by another program is seen by the deep check only (server start, every 5 min, `eda parts refresh --deep`).
+6. **Native ellipse shape** (KiCad 25ec2335 `SHAPE_T::ELLIPSE` / `ELLIPSE_ARC`): model, file format, editors, painters, plot, 3D. It unlocks Draw Ellipse Arc (UI-LEFT-3 S3-28) and native ellipses for P3-28 / II5 imports. Unevenly scaled circles and arcs stay KiCad's polylines until then.
+7. **A fresh review against KiCad** (a round 4 list like `docs/parity/UI-LEFT-3.md`), best done after real boards show what matters.
+8. **Font hinting (skrifa) and shaping (rustybuzz) crates** (UI-LEFT-3 C3-3 / C3-8 follow-up): new dependencies, barely visible.
+9. **Footprint Viewer and Symbol Viewer windows** (the editors' library trees browse parts).
+10. **Hyperlynx and footprint-report (.rpt) exporters** (kicad-cli has neither; ours would be a second exporter, against ARCHITECTURE.md).
+11. **Python scripting, action plugins and footprint wizards:** skipped on purpose; the AI agent driving `eda` and the IR does what scripts would, and scripts on the server would need sandboxing.
+
+- **Kept by the user's decision:** one project folder per server (`eda board serve -C dir`), no New/Open Project or project manager; the symbol updated at Footprint Properties' OK; Strict mode on by default; the studio's own placer.
+- **Housekeeping:** the finished `~/work/agentic-eda-v1*-*` / `-v2*-*` worktrees can be removed (`git worktree remove`) or their `target/` cleared to free disk.
+- **Lessons:** branches that pass alone can clash once merged (v19's X3-2 broke 3D picking only on the merged tree): gate the merged tree before pushing.
+
+## Earlier (2026-11-15): round 3 done, batch v20
+
+- Round 3 on main 57c49812, batch v20 on 8b27db23; the user's TODO decisions of 2026-11-15 are folded into the list above.
 
 ## Earlier (2026-11-13): round 2 done; round 3 (leftovers) starting
 
