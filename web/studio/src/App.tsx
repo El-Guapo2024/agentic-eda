@@ -102,6 +102,9 @@ import { useAppearanceSync } from "./components/panels/appearance/useAppearanceS
 import { useSnapOrigin } from "./actions/useSnapOrigin";
 import { HotkeyCyclePopup } from "./components/HotkeyCyclePopup";
 import { PcbInfoBar } from "./components/PcbInfoBar";
+import { NoProjectScreen, WorkspaceDialogs } from "./components/WorkspaceDialogs";
+import { loadWorkspace, useWorkspace } from "./state/workspace";
+import { projectCaption } from "./kicad-port/workspace";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -395,13 +398,36 @@ function StudioFrame() {
       <ImportGraphicsDialog />
       <ForeignImportDialogs />
       <FileDropHost />
+      <WorkspaceDialogs />
     </div>
   );
 }
 
+/** The window's caption: the open project and the editor on screen, as KiCad's (kicad-port/workspace.ts `projectCaption`). */
+function useProjectCaption(tab: string | null) {
+  const ws = useWorkspace();
+  const project = ws.info?.active ?? null;
+  useEffect(() => {
+    if (ws.loaded && ws.info) document.title = projectCaption(project, tab ?? "pcb");
+  }, [ws.loaded, ws.info, project, tab]);
+}
+
+function CaptionHost() {
+  useProjectCaption(useStudioState().tab);
+  return null;
+}
+
 export default function App() {
+  // The workspace is read before the editors mount: a workspace with no project open has no editors to show (`eda board serve --workspace`).
+  const ws = useWorkspace();
+  useEffect(() => {
+    void loadWorkspace();
+  }, []);
+  if (!ws.loaded) return null;
+  if (ws.info?.workspace && !ws.info.active) return <NoProjectScreen />;
   return (
     <StudioProvider>
+      <CaptionHost />
       <FootprintEditorProvider>
         <SymbolEditorProvider>
           <SchControlProvider>

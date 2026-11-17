@@ -22,6 +22,8 @@ import { useStudioState } from "../state/store";
 import { HELP_MENU } from "../kicad-port/helpMenu";
 import { useCliExporters } from "../state/cliExporters";
 import { cliExporterReason } from "../kicad-port/cliExporters";
+import { useWorkspace } from "../state/workspace";
+import { withWorkspaceFileMenu } from "../kicad-port/workspace";
 
 /** The board editor's menus with this studio's own entries appended (kicad/menuExtras.ts), without the ones KiCad shows only with an advanced setting (kicad/advancedConfig.ts). */
 const menusFile = withSubmenuExtras(menusWithoutAdvanced(menusData as MenusFile), PCB_EDITOR_SUBMENU_EXTRAS);
@@ -96,7 +98,10 @@ export function MenuBar() {
   // than showing an empty/fake one -- most of it is disabled there
   // anyway, same as everywhere else this app hasn't ported an action.
   // The two library editors are frames of their own in KiCad, each with its own menu bar (menubar_footprint_editor.cpp, menubar_symbol_editor.cpp).
-  const activeMenus = state.tab === "schematic" ? schMenusFile : state.tab === "footprint" ? fpMenusFile : state.tab === "symbol" ? symMenusFile : menusFile;
+  const editorMenus = state.tab === "schematic" ? schMenusFile : state.tab === "footprint" ? fpMenusFile : state.tab === "symbol" ? symMenusFile : menusFile;
+  // A workspace's File menu: New Project..., Open Project... and Open Recent (kicad-port/workspace.ts)
+  const ws = useWorkspace();
+  const activeMenus = ws.info?.workspace && (state.tab === "pcb" || state.tab === "schematic") ? withWorkspaceFileMenu(editorMenus, ws.info.recent) : editorMenus;
 
   if (activeMenus.menus.length === 0) {
     return (

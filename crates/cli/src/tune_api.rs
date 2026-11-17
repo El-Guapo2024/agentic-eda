@@ -41,6 +41,13 @@ thread_local! {
     static SCENES: RefCell<HashMap<PathBuf, (Stamp, Rc<Scene>)>> = RefCell::new(HashMap::new());
 }
 
+/// The project in `dir` is closed (`studio::Session::close`): a tuning gesture is not carried over, and its scene is let go. Called on the request loop,
+/// the thread that holds them.
+pub(crate) fn forget_dir(dir: &Path) {
+    SESSIONS.with(|s| s.borrow_mut().remove(dir));
+    SCENES.with(|s| s.borrow_mut().remove(dir));
+}
+
 fn body_json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }

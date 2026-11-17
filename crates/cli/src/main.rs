@@ -112,6 +112,7 @@ mod sch_setup_tests;
 mod u5_dialogs_tests;
 mod studio;
 mod view_api;
+mod workspace;
 mod appearance_api;
 mod kicad_engine;
 mod kicad_lane;
@@ -1334,6 +1335,18 @@ fn run_main() -> ExitCode {
     }
     if argv.first().map(String::as_str) == Some("fab") {
         return match fab_cmd::run(&argv[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(fails) => {
+                for f in &fails {
+                    eprintln!("FAIL {} @ {}: {}", f.check, f.location.as_deref().unwrap_or("-"), f.hint.as_deref().unwrap_or(""));
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // `eda workspace list|new|open`: the projects of a workspace folder (`crate::workspace`), the CLI face of File > New / Open Project...
+    if argv.first().map(String::as_str) == Some("workspace") {
+        return match workspace::run(&argv[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(fails) => {
                 for f in &fails {

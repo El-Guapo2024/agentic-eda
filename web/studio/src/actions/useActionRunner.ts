@@ -22,7 +22,7 @@ import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "..
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
-import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
+import { zoomAbout, fitTransform, boundsOfPoints, boardFitBounds, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute, attemptFinishInteractiveRoute } from "../components/canvas/routing";
 import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { chosenDiffPair, chosenTrackWidthOf, routeWidthAfterChange, stepDiffPairIndex, stepTrackWidth } from "../kicad-port/routerSizes";
@@ -968,9 +968,10 @@ export function useActionRunner() {
         if (sb) setView(fitTransform(sb, rect.width, rect.height, 80));
         return;
       }
-      const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
-      if (!bounds) return;
-      setView(fitTransform(bounds, rect.width, rect.height));
+      if (!state.board) return;
+      // the outline's box, or the page on a board with no outline yet (PCB_BASE_FRAME::GetBoardBoundingBox)
+      const b = state.board;
+      setView(fitTransform(boardFitBounds(b.outline?.length ? b.outline : (b.outline_polys ?? []).flatMap((p) => p.outer), b.page?.size_nm), rect.width, rect.height));
     });
     // common_tools.cpp ZoomFitScreen (ZOOM_FIT_ALL -- the worksheet page,
     // or the edited object if there's no page) vs. ZoomFitObjects
@@ -1796,9 +1797,10 @@ export function useActionRunner() {
     // Pure math lives in kicad-port/cursorControl.ts, markerNav.ts and
     // itemText.ts (unit tested). saveAs, updatePcbFromSchematic and
     // openPreferences are registered further down (kicad-port/saveAs.ts,
-    // updatePcb.ts, preferences.ts). Not ported (no subsystem behind
-    // them; tools/ui-parity-missing.json holds the reasons): new, open,
-    // toggleGridOverrides, pasteSpecial, cycleArcEditMode.
+    // updatePcb.ts, preferences.ts); new and open are a workspace's
+    // project manager actions (commonSuiteActions.ts). Not ported (no
+    // subsystem behind them; tools/ui-parity-missing.json holds the
+    // reasons): toggleGridOverrides, pasteSpecial, cycleArcEditMode.
     // ===================================================================
     const onCanvasTab = state.tab === "pcb" || state.tab === "schematic";
     const canvasOnly =

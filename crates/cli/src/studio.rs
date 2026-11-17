@@ -75,8 +75,98 @@ fn built_ui(cli_ui: Option<&Path>) -> Option<PathBuf> {
 }
 
 pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<CheckResult>> {
+    serve_in(Some(dir), None, port, ui)
+}
+
+/// What the studio holds for the project it has open (`serve`): dropped whole and made again when a workspace opens another project
+/// ([`Session::close`]), so nothing of one project is seen from the next.
+pub(crate) struct Session {
+    pub(crate) dir: PathBuf,
+    /// What the routing thread is doing.
+    job: Job,
+    /// The schematic picture, by the design's modification time.
+    schematic: Mutex<Option<(std::time::SystemTime, String)>>,
+    /// The kicad-cli export a GLB needs can take minutes on a many-part board (see GlbBuild's doc comment) -- this server handles one request at a time,
+    /// so that export runs on its own background thread rather than inside handle(), and this slot is how the next /api/board.glb poll finds out how it's
+    /// going. Cached by the same version string /api/version returns, same reasoning as `schematic` above: an unchanged board should never re-run kicad-cli.
+    glb_job: GlbJob,
+    /// The in-progress interactive-router session (gap #7), if any -- lives only in memory for the span of one route/drag gesture; see `route_api`'s own
+    /// doc comment for why it's safe to hold across requests without re-reading the board each time. Boxed: its address names the session's pending
+    /// drops (`route_api::PENDING_DROPS`).
+    route_session: Box<crate::route_api::RouteCell>,
+}
+
+impl Session {
+    /// Open the project in `dir`: checked by loading it (a project that does not load leaves the open one open), then the background work a project
+    /// starts -- the symbol libraries' preload (KiCad 25ec2335 `IFACE::PreloadLibraries`, `crate::library_search`) and the parts cache's indexer for the
+    /// project's library tables (`crate::parts::api`).
+    pub(crate) fn open(dir: &Path) -> Result<Session, Vec<CheckResult>> {
+        board::load(dir)?;
+        // not in the unit tests: both read every installed library of the machine
+        if !cfg!(test) {
+            crate::library_search::preload_symbol_libraries(dir);
+            crate::parts::api::start_indexer(dir);
+        }
+        Ok(Session {
+            dir: dir.to_path_buf(),
+            job: Arc::new(Mutex::new("idle".into())),
+            schematic: Mutex::new(None),
+            glb_job: Arc::new(Mutex::new(None)),
+            route_session: Box::new(Mutex::new(None)),
+        })
+    }
+
+    /// Why this project cannot be closed now, if it cannot: the board's autorouter is writing its design (KiCad's autorouter is modal; here it runs on a
+    /// thread of its own and would write the closed project's board when it ends).
+    fn busy(&self) -> Option<String> {
+        let j = self.job.lock().map(|j| j.clone()).unwrap_or_default();
+        (j == "running").then(|| "The autorouter is running on this project. Wait for it to finish before opening another project.".to_string())
+    }
+
+    /// Close the project (`KICAD_MANAGER_FRAME::CloseProject`): every edit is already in `design.json`, so nothing is asked or saved. What the server
+    /// keeps outside this struct for the project is let go here:
+    ///   * the parts cache's indexer ends (`parts::api::stop_indexer`), with what was queued for the project's libraries;
+    ///   * the interactive router's pending stacked-via drops of this session (`route_api::forget_session`);
+    ///   * the schematic editor's supplementary clipboard (the copied sheets' screens: `sch_clipboard_api::forget`), the last Specctra session's
+    ///     warning, the last netlist import's report and the edit notices not yet sent (`eda_ops`, thread-local to this loop);
+    ///   * the library editors' buffers held in memory (`library_buffer::forget_dir`; their flags are on disk beside the history and read again when the
+    ///     project is opened again) and the length tuner's session and scene (`tune_api::forget_dir`: a gesture is not carried over a close);
+    ///   * the kicad-cli api-server, which holds the project it last loaded (`eda_kicad_engine::api::shutdown`; the next job starts a new one).
+    ///
+    /// What stays is keyed by a path of the project's folder and checked against the file's stamp on every use (text variables, embedded files, design
+    /// block previews, `library_save_api`'s saved texts, the board's library tables: `library_tables::libs(dir, ..)` reads the project's own tables, so
+    /// the next project's libraries are its own), or not the project's at all (symbol and footprint indexes, library verdicts, 3D models, fonts: by
+    /// library file and stamp). History, view, appearance and activity are files in the project's folder. A kicad-cli run already started for this
+    /// project finishes in that folder's `.kicad/` and answers the request that asked for it; a simulation likewise.
+    fn close(self) {
+        crate::parts::api::stop_indexer();
+        crate::route_api::forget_session(&self.route_session);
+        crate::sch_clipboard_api::forget();
+        let _ = crate::specctra_api::take_session_warning();
+        let _ = eda_ops::netlist_update::take_report();
+        eda_ops::notice::clear();
+        crate::library_buffer::forget_dir(&self.dir);
+        crate::tune_api::forget_dir(&self.dir);
+        eda_kicad_engine::api::shutdown();
+    }
+}
+
+/// `serve` with an optional workspace (`eda board serve [-C dir] [--workspace ws]`): several projects in one folder, one open at a time on the same port
+/// and address (`crate::workspace`). With a workspace, `dir` is one of its projects, or none for the most recently opened one, or none at all: the
+/// studio then starts with no project open, and File > New Project... / Open Project... are the way in. Without one, `dir` is the one project served,
+/// as it always was.
+pub fn serve_in(dir: Option<&Path>, workspace: Option<&Path>, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<CheckResult>> {
+    let workspace = workspace.map(crate::workspace::Workspace::open).transpose()?;
+    let first: Option<PathBuf> = match (&workspace, dir) {
+        (None, Some(d)) => Some(d.to_path_buf()),
+        (Some(ws), Some(d)) => Some(ws.resolve(d).map_err(|e| vec![CheckResult::fail("serve_workspace", &d.display().to_string(), e)])?),
+        (Some(ws), None) => ws.most_recent(),
+        (None, None) => return Err(vec![CheckResult::fail("serve_usage", "-C", "eda board serve needs -C <dir> or --workspace <dir>")]),
+    };
     // Fail now, not on the first request, if this is no board.
-    board::load(dir)?;
+    if let Some(d) = &first {
+        board::load(d)?;
+    }
     // This process serves many requests, so its exports keep the api-server between jobs (X5-3): only a long-lived caller says so, and a one-shot
     // `eda board export` stays on per-run kicad-cli, where a server start would cost more than the job saves.
     eda_kicad_engine::api::long_lived_process();
@@ -89,53 +179,56 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     if got != port {
         eprintln!("board: port {port} is taken (another studio open there?), using {got}");
     }
-    eprintln!(
-        "board: serving {} at http://127.0.0.1:{got}/ ({})",
-        dir.display(),
-        match &ui_root {
-            Some(d) => format!("ui: {}", d.display()),
-            None => "ui: embedded studio.html".to_string(),
-        }
-    );
-    // KiCad 25ec2335 `IFACE::PreloadLibraries`: the symbol libraries load in the background as the project opens (`crate::library_search`)
-    crate::library_search::preload_symbol_libraries(dir);
-    // the parts cache's indexer (`crate::parts::api`): the board's libraries brought up to date in the background
-    crate::parts::api::start_indexer(dir);
-    let job: Job = Arc::new(Mutex::new("idle".into()));
-    let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
-    // The kicad-cli export a GLB needs can take minutes on a many-part
-    // board (see GlbBuild's doc comment) -- this server handles one
-    // request at a time, so that export runs on its own background
-    // thread rather than inside handle(), and this slot is how the next
-    // /api/board.glb poll finds out how it's going. Cached by the same
-    // version string /api/version returns, same reasoning as `schematic`
-    // above: an unchanged board should never re-run kicad-cli.
-    let glb_job: GlbJob = Arc::new(Mutex::new(None));
-    // The in-progress interactive-router session (gap #7), if any -- lives
-    // only in memory for the span of one route/drag gesture; see
-    // `route_api`'s own doc comment for why it's safe to hold across
-    // requests without re-reading the board each time.
-    let route_session: crate::route_api::RouteCell = Mutex::new(None);
-    // Where DRC, ERC, statistics and the exports run -- see `offload`.
+    let ui_said = match &ui_root {
+        Some(d) => format!("ui: {}", d.display()),
+        None => "ui: embedded studio.html".to_string(),
+    };
+    match (&workspace, &first) {
+        (Some(ws), Some(d)) => eprintln!("board: serving workspace {} (project {}) at http://127.0.0.1:{got}/ ({ui_said})", ws.root.display(), crate::workspace::project_name(d)),
+        (Some(ws), None) => eprintln!("board: serving workspace {} (no project open) at http://127.0.0.1:{got}/ ({ui_said})", ws.root.display()),
+        (None, d) => eprintln!("board: serving {} at http://127.0.0.1:{got}/ ({ui_said})", d.as_deref().unwrap_or(Path::new(".")).display()),
+    }
+    let mut session: Option<Session> = first.as_deref().map(Session::open).transpose()?;
+    if let (Some(ws), Some(d)) = (&workspace, &first) {
+        ws.note_opened(&crate::workspace::project_name(d));
+    }
+    // The project the connections' own threads answer for (the 3D models, the parts cache): the loop moves it when a workspace opens another.
+    let active: Arc<std::sync::RwLock<Option<PathBuf>>> = Arc::new(std::sync::RwLock::new(first.clone()));
+    // Where DRC, ERC, statistics and the exports run -- see `offload`. One for the process, whichever project is open: one kicad-cli at a time.
     let lane = Arc::new(Lane::default());
     // A browser opens connections ahead of the requests it will send on them (Chrome's preconnect) and this loop reads one request at a time: a connection that has
     // said nothing yet held every request behind it until the browser closed it -- 16 s, measured, with the 3D models of a board waiting. Each connection is
     // waited on by a thread of its own and joins the loop when the first bytes of its request are there.
     // The 3D model routes need nothing of the loop, so the connection's own thread answers them too: a model is not made to wait behind a slow `/api/state`.
     let (ready, requests) = std::sync::mpsc::channel::<TcpStream>();
-    let (model_dir, model_lane) = (dir.to_path_buf(), lane.clone());
+    let (model_active, model_lane) = (active.clone(), lane.clone());
     std::thread::Builder::new()
         .name("accept".into())
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let (ready, dir, lane) = (ready.clone(), model_dir.clone(), model_lane.clone());
+                let (ready, active, lane) = (ready.clone(), model_active.clone(), model_lane.clone());
                 std::thread::spawn(move || {
                     let mut head = [0u8; 32];
                     let n = stream.peek(&mut head).unwrap_or(0);
                     if n == 0 {
                         return;
                     }
+                    let own_thread = head[..n].starts_with(b"GET /api/3dmodel")
+                        || head[..n].starts_with(b"POST /api/3dmodel/")
+                        || head[..n].starts_with(b"GET /api/parts/")
+                        || head[..n].starts_with(b"POST /api/parts/");
+                    let dir = active.read().map(|a| a.clone()).unwrap_or_else(|e| e.into_inner().clone());
+                    let dir = match dir {
+                        Some(d) => d,
+                        None if own_thread => {
+                            if read_request(&stream).is_ok() {
+                                let _ = respond(&mut stream, "409 Conflict", "application/json", NO_PROJECT.to_string().as_bytes());
+                            }
+                            return;
+                        }
+                        None => PathBuf::new(),
+                    };
                     if head[..n].starts_with(b"GET /api/3dmodel") || head[..n].starts_with(b"POST /api/3dmodel/") {
                         let done = read_request(&stream).and_then(|(method, target, body)| model_routes(&mut stream, &method, &target, &body, &dir, &lane, true).unwrap_or(Err("not a model route".into())));
                         if let Err(e) = done {
@@ -170,10 +263,98 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
         })
         .map_err(|e| vec![CheckResult::fail("serve_thread", "accept", e.to_string())])?;
     for mut stream in requests {
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref(), &lane) {
+        let request = match read_request(&stream) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
+                continue;
+            }
+        };
+        let path = request.1.split('?').next().unwrap_or("/").to_string();
+        // The workspace (`crate::workspace`): its projects, and opening one -- answered on the loop, which owns the open project's state.
+        if path == "/api/workspace" || path.starts_with("/api/workspace/") {
+            let reply = workspace_route(&request.0, &path, &request.2, workspace.as_ref(), &mut session, &active);
+            let _ = respond(&mut stream, "200 OK", "application/json", reply.to_string().as_bytes());
+            continue;
+        }
+        let done = match &session {
+            Some(s) => handle(&mut stream, request, s, ui_root.as_deref(), &lane),
+            None => no_project(&mut stream, &request.0, &path, ui_root.as_deref()),
+        };
+        if let Err(e) = done {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
+    Ok(())
+}
+
+/// What a project's route answers while a workspace has no project open.
+const NO_PROJECT: &str = r#"{"error":"No project is open. Open or create one: File > Open Project... or File > New Project...","no_project":true}"#;
+
+/// A request while no project is open (a workspace started with none): the page and its files are served, so the person can open or create one; every
+/// project route answers [`NO_PROJECT`].
+fn no_project(stream: &mut TcpStream, method: &str, path: &str, ui_root: Option<&Path>) -> Result<(), String> {
+    match (method, path) {
+        ("GET", "/") => match ui_root {
+            Some(root) => serve_file(stream, root, "index.html"),
+            None => respond(stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        },
+        ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap_or(Path::new(".")), p.trim_start_matches('/')),
+        _ => respond(stream, "409 Conflict", "application/json", NO_PROJECT.as_bytes()),
+    }
+}
+
+/// `GET /api/workspace`, `POST /api/workspace/open {"name"}`, `POST /api/workspace/new {"name"}` (`crate::workspace`). Without a workspace the GET says so
+/// (`"workspace": null`) and names the one project served, for the caption, and the POSTs are refused. Opening closes the open project first
+/// ([`Session::close`]; KiCad's `LoadProject` calls `CloseProject`), and a project that does not load leaves the open one as it was.
+fn workspace_route(method: &str, path: &str, body: &[u8], workspace: Option<&crate::workspace::Workspace>, session: &mut Option<Session>, active: &std::sync::RwLock<Option<PathBuf>>) -> Value {
+    let refuse = |message: String| json!({ "ok": false, "message": message });
+    let Some(ws) = workspace else {
+        return match (method, path) {
+            ("GET", "/api/workspace") => json!({ "workspace": null, "active": session.as_ref().map(|s| crate::workspace::project_name(&s.dir)), "projects": [], "recent": [] }),
+            _ => refuse("This studio serves one project (eda board serve -C dir); start it with --workspace <dir> to open or create others.".into()),
+        };
+    };
+    let name = || serde_json::from_slice::<Value>(body).ok().and_then(|v| v["name"].as_str().map(str::to_string)).unwrap_or_default();
+    let dir = match (method, path) {
+        ("GET", "/api/workspace") => return ws.json(session.as_ref().map(|s| s.dir.as_path())),
+        ("POST", "/api/workspace/open") => match ws.project(&name()) {
+            Ok(d) => d,
+            Err(e) => return refuse(e),
+        },
+        ("POST", "/api/workspace/new") => {
+            if let Some(why) = session.as_ref().and_then(Session::busy) {
+                return refuse(why);
+            }
+            match ws.create(&name()) {
+                Ok(d) => d,
+                Err(e) => return refuse(e),
+            }
+        }
+        _ => return refuse(format!("no such route: {method} {path}")),
+    };
+    match switch_project(ws, session, active, &dir) {
+        Ok(()) => json!({ "ok": true, "active": crate::workspace::project_name(&dir) }),
+        Err(e) => refuse(e),
+    }
+}
+
+/// Close the open project and open the one in `dir` (the same one again reopens it, as KiCad's Open of the open project reloads it).
+pub(crate) fn switch_project(ws: &crate::workspace::Workspace, session: &mut Option<Session>, active: &std::sync::RwLock<Option<PathBuf>>, dir: &Path) -> Result<(), String> {
+    if let Some(why) = session.as_ref().and_then(Session::busy) {
+        return Err(why);
+    }
+    // the project is checked before the open one is closed: one that does not load leaves the studio as it was
+    board::load(dir).map_err(|e| board::reasons(&e))?;
+    if let Some(old) = session.take() {
+        old.close();
+    }
+    *active.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let opened = Session::open(dir).map_err(|e| board::reasons(&e))?;
+    *active.write().unwrap_or_else(|e| e.into_inner()) = Some(opened.dir.clone());
+    *session = Some(opened);
+    ws.note_opened(&crate::workspace::project_name(dir));
+    eprintln!("board: opened project {} ({})", crate::workspace::project_name(dir), dir.display());
     Ok(())
 }
 
@@ -513,7 +694,8 @@ fn mime_of(path: &Path) -> &'static str {
 fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &str, body: &[u8], work: impl FnOnce(&Path, &[u8]) -> Value + Send + 'static) -> Result<(), String> {
     // The loop drops its own handle on `stream` when it moves on; this one keeps the connection open for the answer.
     let mut out = stream.try_clone().map_err(|e| e.to_string())?;
-    let what = format!("{route} {}", String::from_utf8_lossy(body));
+    // the project too: a workspace that opened another project does not join a run of the one before
+    let what = format!("{} {route} {}", dir.display(), String::from_utf8_lossy(body));
     let (lane, dir, job, body) = (lane.clone(), dir.to_path_buf(), job.clone(), body.to_vec());
     std::thread::Builder::new()
         .name("kicad-cli".into())
@@ -640,18 +822,8 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
     }
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
-fn handle(
-    stream: &mut TcpStream,
-    dir: &Path,
-    job: &Job,
-    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
-    glb_job: &GlbJob,
-    route_session: &crate::route_api::RouteCell,
-    ui_root: Option<&Path>,
-    lane: &Arc<Lane>,
-) -> Result<(), String> {
-    let (method, target, body) = read_request(stream)?;
+fn handle(stream: &mut TcpStream, (method, target, body): (String, String, Vec<u8>), session: &Session, ui_root: Option<&Path>, lane: &Arc<Lane>) -> Result<(), String> {
+    let (dir, job, schematic, glb_job, route_session) = (session.dir.as_path(), &session.job, &session.schematic, &session.glb_job, &session.route_session);
     let (method, target) = (method.as_str(), target.as_str());
     let path = target.split('?').next().unwrap_or("/");
     if let Some(done) = model_routes(stream, method, target, &body, dir, lane, false) {
@@ -1378,7 +1550,12 @@ pub(crate) fn state_in(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock
     // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
     let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock)).with_variant(&design, &model, &variant);
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_nm, meta.spacing_nm);
-    let view = eda_ops::view::view(&b, &model)?;
+    // A board with no outline yet (File > New Project...'s, as KiCad's new board: Edge.Cuts is drawn in the editor) has no ninths to describe, so the
+    // agent's view refuses it; the editor shows it all the same, without the parts' blocks.
+    let view = match eda_ops::view::view(&b, &model) {
+        Err(e) if e.iter().all(|c| c.check == "view_no_outline") => json!({ "parts": [] }),
+        v => v?,
+    };
     // The copper layers the pads and vias that remove their unconnected layers (Remove Unused Pads) keep: empty, and not asked for, when none does.
     // With the layers the last fill forced them to flash on (`ZLO_FORCE_FLASHED`, kicad-cli's, kept in the fill cache).
     let forced = eda_kicad::zone_fills::load(dir).map(|f| f.forced).unwrap_or_default();
@@ -3753,6 +3930,77 @@ mod tests {
         assert_eq!(wire_label_driver(&sch, &wire("+3V3"), &globals), None, "a power symbol's net");
         assert_eq!(wire_label_driver(&sch, &wire("/Sub/PORT"), &globals), None, "a hierarchical label's");
         assert_eq!(wire_label_driver(&sch, &wire(""), &globals), None);
+    }
+
+
+    /// A workspace's project switch: after opening B nothing of A is seen -- the board and schematic answered are B's, the library tables are B's own
+    /// (A's project library is not offered), the router's session and the copied sheets are gone, the connections' threads answer for B, and the
+    /// history names B first. A project that does not load leaves A open; the autorouter running on A keeps A open.
+    #[test]
+    fn opening_another_project_of_the_workspace_leaves_nothing_of_the_first() {
+        let t = std::env::temp_dir().join(format!("eda-ws-switch-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let ws = crate::workspace::Workspace::open(&t).unwrap();
+        // A: a board with parts and a project symbol library; B: File > New Project...'s empty one
+        let a = ws.root.join("a");
+        let intent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/ldo.yaml");
+        let args: Vec<String> = vec!["new".into(), intent.display().to_string(), "-o".into(), a.display().to_string()];
+        crate::board::run(&args, |model| crate::seed_outline(&crate::workspace::empty_design(), model)).unwrap();
+        std::fs::write(a.join("sym-lib-table"), "(sym_lib_table\n\t(version 7)\n\t(lib (name \"OnlyInA\") (type \"KiCad\") (uri \"${KIPRJMOD}/only_a.kicad_sym\") (options \"\") (descr \"\"))\n)\n").unwrap();
+        std::fs::write(a.join("only_a.kicad_sym"), "(kicad_symbol_lib (version 20231120) (generator \"eda\"))\n").unwrap();
+        let b = ws.create("b").unwrap();
+        let has_a_lib = |dir: &Path| crate::library_tables::libs(dir, crate::library_index::Kind::Symbol).entries().iter().any(|e| e.name == "OnlyInA");
+        assert!(has_a_lib(&a) && !has_a_lib(&b));
+
+        let mut session = Some(Session::open(&a).unwrap());
+        let active = std::sync::RwLock::new(Some(a.clone()));
+        let parts = |s: &Option<Session>| state(&s.as_ref().unwrap().dir, &s.as_ref().unwrap().job, Default::default()).unwrap()["footprints"].as_array().map_or(0, Vec::len);
+        let a_parts = parts(&session);
+        assert!(a_parts > 0 || !board::load(&a).unwrap().2.parts.is_empty(), "A has parts");
+        // state of A's session that must not survive: a route gesture's cell and the schematic's copied sheets
+        *session.as_ref().unwrap().schematic.lock().unwrap() = Some((std::time::SystemTime::now(), "<svg>A</svg>".into()));
+        *session.as_ref().unwrap().job.lock().unwrap() = "running".into();
+        assert!(switch_project(&ws, &mut session, &active, &b).unwrap_err().contains("autorouter"), "the autorouter writing A keeps A open");
+        assert_eq!(session.as_ref().unwrap().dir, a);
+        *session.as_ref().unwrap().job.lock().unwrap() = "idle".into();
+        // a project that does not load leaves A open
+        let broken = ws.root.join("broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("board.json"), "{").unwrap();
+        std::fs::write(broken.join("design.json"), "{").unwrap();
+        assert!(switch_project(&ws, &mut session, &active, &broken).is_err());
+        assert_eq!(session.as_ref().unwrap().dir, a);
+        assert_eq!(*active.read().unwrap(), Some(a.clone()));
+
+        switch_project(&ws, &mut session, &active, &b).unwrap();
+        let s = session.as_ref().unwrap();
+        assert_eq!(s.dir, b);
+        assert_eq!(*active.read().unwrap(), Some(b.clone()), "the connections' threads (3D models, parts) answer for B");
+        assert!(s.schematic.lock().unwrap().is_none() && s.glb_job.lock().unwrap().is_none() && s.route_session.lock().unwrap().is_none());
+        assert_eq!(*s.job.lock().unwrap(), "idle");
+        assert_eq!(parts(&session), 0, "B's board is empty");
+        let sch = schematic_json(&b, "", Default::default()).unwrap();
+        assert!(sch["symbols"].as_array().is_none_or(Vec::is_empty), "B's schematic is empty");
+        assert!(!has_a_lib(&session.as_ref().unwrap().dir), "A's project library is not B's");
+        assert_eq!(ws.recent().first().map(String::as_str), Some("b"));
+        let listed = ws.json(Some(&b));
+        assert_eq!(listed["active"], "b");
+        assert_eq!(listed["projects"].as_array().unwrap().iter().filter(|p| p["active"] == true).count(), 1);
+        // the HTTP face: open by name, a bad name refused, back to A
+        let mut session2 = session;
+        let r = workspace_route("POST", "/api/workspace/open", br#"{"name":"../a"}"#, Some(&ws), &mut session2, &active);
+        assert_eq!(r["ok"], false);
+        let r = workspace_route("POST", "/api/workspace/open", br#"{"name":"a"}"#, Some(&ws), &mut session2, &active);
+        assert_eq!((r["ok"].as_bool(), r["active"].as_str()), (Some(true), Some("a")));
+        assert_eq!(session2.as_ref().unwrap().dir, a);
+        assert!(has_a_lib(&session2.as_ref().unwrap().dir));
+        let r = workspace_route("POST", "/api/workspace/new", br#"{"name":"c"}"#, Some(&ws), &mut session2, &active);
+        assert_eq!((r["ok"].as_bool(), r["active"].as_str()), (Some(true), Some("c")));
+        assert_eq!(workspace_route("GET", "/api/workspace", b"", Some(&ws), &mut session2, &active)["recent"], json!(["c", "a", "b"]));
+        // without a workspace: the one project is named and nothing opens
+        let r = workspace_route("GET", "/api/workspace", b"", None, &mut session2, &active);
+        assert_eq!((r["workspace"].clone(), r["active"].as_str()), (Value::Null, Some("c")));
+        assert_eq!(workspace_route("POST", "/api/workspace/open", br#"{"name":"a"}"#, None, &mut session2, &active)["ok"], false);
+        let _ = std::fs::remove_dir_all(&t);
     }
 
 }

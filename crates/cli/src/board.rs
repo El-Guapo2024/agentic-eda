@@ -3467,7 +3467,12 @@ pub fn run(
         "serve" => {
             let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
             let ui = flag(rest, "--ui").map(PathBuf::from);
-            crate::studio::serve(&dir, port, ui)
+            // `--workspace <dir>`: several projects in one folder, one open at a time (`crate::workspace`); `-C` then names the one to open first, and
+            // without it the most recently opened one is (or none).
+            match flag(rest, "--workspace").map(PathBuf::from) {
+                Some(ws) => crate::studio::serve_in(flag(rest, "-C").map(PathBuf::from).as_deref(), Some(&ws), port, ui),
+                None => crate::studio::serve(&dir, port, ui),
+            }
         }
         other => Err(fail(
             "board_usage",

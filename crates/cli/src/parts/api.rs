@@ -18,6 +18,7 @@ use super::store::Store;
 use crate::library_index::Kind;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -49,11 +50,43 @@ pub(crate) fn start_indexer(dir: &Path) {
     if std::env::var("EDA_PARTS_INDEXER").is_ok_and(|v| v == "off") {
         return;
     }
+    // a workspace's project switch (`studio::serve`): the indexer of the project closed ends first (`stop_indexer`), this one waits for it
+    let generation = GENERATION.fetch_add(1, AtomicOrdering::SeqCst) + 1;
     let dir = dir.to_path_buf();
-    let _ = std::thread::Builder::new().name("parts-indexer".into()).spawn(move || indexer(&dir));
+    let _ = std::thread::Builder::new().name("parts-indexer".into()).spawn(move || {
+        let _one = super::lock(running());
+        if GENERATION.load(AtomicOrdering::SeqCst) != generation {
+            return;
+        }
+        *super::lock(indexer_state()) = IndexerState { phase: "off", ..Default::default() };
+        indexer(&dir, generation)
+    });
 }
 
-fn indexer(dir: &Path) {
+/// Which indexer is the current one: [`start_indexer`] and [`stop_indexer`] move it on, and an indexer that is not current ends at its next look.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Held by the indexer thread that runs, so the next project's indexer starts once the last one has ended (one writer of the cache).
+fn running() -> &'static Mutex<()> {
+    static R: OnceLock<Mutex<()>> = OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// The project is closed (a workspace opens another, `studio::serve`): its indexer ends when its present step is done, and what was queued for its
+/// libraries is dropped. The status reads "off" until the next project's indexer starts.
+pub(crate) fn stop_indexer() {
+    GENERATION.fetch_add(1, AtomicOrdering::SeqCst);
+    let (q, cv) = super::queue();
+    let mut q = super::lock(q);
+    q.stale.clear();
+    q.verdicts.clear();
+    cv.notify_all();
+    drop(q);
+    *super::lock(indexer_state()) = IndexerState { phase: "off", ..Default::default() };
+}
+
+fn indexer(dir: &Path, generation: u64) {
+    let current = || GENERATION.load(AtomicOrdering::SeqCst) == generation;
     let db = super::db_path();
     let store = match Store::open(&db) {
         Ok(s) => s,
@@ -70,6 +103,9 @@ fn indexer(dir: &Path) {
     let mut last_deep = Instant::now();
     let mut extra_deep: Vec<PathBuf> = Vec::new();
     loop {
+        if !current() {
+            return;
+        }
         set_phase("building");
         let targets = refresh::board_targets(dir, &kinds);
         let models = ModelCtx::for_dir(dir);
@@ -104,13 +140,22 @@ fn indexer(dir: &Path) {
         let wanted: Vec<(Kind, PathBuf)> = std::mem::take(&mut super::lock(&super::queue().0).verdicts);
         let mut order: Vec<_> = targets.iter().filter(|t| wanted.iter().any(|(k, p)| *k == t.kind && *p == t.path)).cloned().collect();
         order.extend(targets.iter().filter(|t| !wanted.iter().any(|(k, p)| *k == t.kind && *p == t.path)).cloned());
+        if !current() {
+            return;
+        }
         let (asked, _) = refresh::verify_targets(&store, &order, true, |_| {});
+        if !current() {
+            return;
+        }
         super::lock(indexer_state()).verdicts_asked += asked;
         set_phase("ready");
         // wait for something to do
         let (q, cv) = super::queue();
         let mut guard = super::lock(q);
         loop {
+            if !current() {
+                return;
+            }
             if !guard.stale.is_empty() || !guard.verdicts.is_empty() {
                 break;
             }
