@@ -460,6 +460,13 @@ struct PendingDrop {
 /// The drops of the routing session (`m_pendingStackedExpansions`), cleared when a route starts and taken by its commit.
 static PENDING_DROPS: Mutex<Vec<(usize, PendingDrop)>> = Mutex::new(Vec::new());
 
+/// The project is closed (`studio::Session::close`): the drops of its routing session go with it, and its session ends.
+pub(crate) fn forget_session(cell: &RouteCell) {
+    let key = cell_key(cell);
+    PENDING_DROPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| *k != key);
+    *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// The routing session a drop belongs to: its cell's address (one cell per served board).
 fn cell_key(cell: &RouteCell) -> usize {
     cell as *const RouteCell as usize

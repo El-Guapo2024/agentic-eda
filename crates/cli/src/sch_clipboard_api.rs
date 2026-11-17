@@ -28,6 +28,11 @@ fn err(message: impl Into<String>) -> Value {
 /// sheet symbols, not what they show; KiCad keeps the screens beside it, and a paste of the sheets (here or in the same session) finds them there.
 static SUPPLEMENTARY: std::sync::Mutex<BTreeMap<String, SchematicSection>> = std::sync::Mutex::new(BTreeMap::new());
 
+/// The project is closed (`studio::Session::close`): its editor's supplementary clipboard goes with its frame.
+pub(crate) fn forget() {
+    SUPPLEMENTARY.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
 /// A copy replaces what the last one kept (`m_supplementaryClipboard.clear()` in `doCopy`): the screens of `files`, and of the sheets inside them.
 fn remember_screens(design: &Design, files: &[String]) {
     let mut kept: BTreeMap<String, SchematicSection> = BTreeMap::new();

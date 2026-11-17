@@ -218,6 +218,11 @@ fn state() -> &'static Mutex<HashMap<PathBuf, Buffers>> {
     STATE.get_or_init(Default::default)
 }
 
+/// The project in `dir` is closed (`studio::Session::close`): its buffers leave memory (they are on disk, [`buffers_file`], and read again on its next use).
+pub(crate) fn forget_dir(dir: &Path) {
+    state().lock().unwrap_or_else(PoisonError::into_inner).remove(dir);
+}
+
 /// Where the flags and the made symbols of a design are kept: beside its undo history (`board::history_root`), which they belong with (an Undo sets the flag).
 fn buffers_file(dir: &Path) -> PathBuf {
     dir.join(".history").join("library-buffers.json")
