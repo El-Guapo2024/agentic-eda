@@ -54,6 +54,18 @@ export function boundsOfPoints(points: Array<[number, number]>): Bounds | null {
   return { minX, minY, maxX, maxY };
 }
 
+/**
+ * What the board editor fits the view to: the board outline's box, or, on a board with no outline yet (a new project's), the page, as KiCad 25ec2335
+ * `PCB_BASE_FRAME::GetBoardBoundingBox` falls back to the page when the board's box is empty (the drawing sheet is shown, so the page from its corner).
+ * `pageNm` is the board's paper (`BoardState.page.size_nm`), A4 landscape when unknown.
+ */
+export function boardFitBounds(outline: Array<[number, number]> | null | undefined, pageNm?: readonly [number, number] | null): Bounds {
+  const b = boundsOfPoints(outline ?? []);
+  if (b && (b.maxX > b.minX || b.maxY > b.minY)) return b;
+  const [w, h] = pageNm ?? [297_000_000, 210_000_000];
+  return { minX: 0, minY: 0, maxX: w, maxY: h };
+}
+
 /** A view transform that fits `bounds` inside `width`x`height` screen pixels, with `padPx` margin. Matches ACTIONS::zoomFitScreen/zoomFitObjects's intent (common_tools.cpp's own fit code computes a similar center+scale from a bounding box and the canvas size); there is no separate "page" vs "objects" distinction here since this app has no fixed worksheet page the way KiCad's zoomFitScreen targets. */
 export function fitTransform(bounds: Bounds, width: number, height: number, padPx = 30): ViewTransform {
   const w = Math.max(bounds.maxX - bounds.minX, 1);

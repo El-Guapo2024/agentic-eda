@@ -326,6 +326,21 @@ never edited as masters.
   failures: instant. The CLI's `--strict` also compares KiCad's gates on the
   board before and after through kicad-cli (seconds).
 
+## Workspace
+
+- **Several projects, one open at a time** (2026-11-17, `task-v22-workspace`; `crates/cli/src/workspace.rs`, PARITY-common §33):
+  `eda board serve --workspace <dir> [-C <project>]` serves a folder whose subfolders holding a board (`board.json` + `design.json`)
+  are projects. The server has one project open and switches it in place, on the same port and address (the page's title names
+  the project): `POST /api/workspace/open|new` closes the open project, `studio::Session::close` dropping all the server held
+  for it (the routing job, router session and its pending drops, schematic picture, 3D export slot, parts indexer, supplementary
+  clipboard, library-editor buffers in memory, length tuner, edit notices, the api-server), then opens the next (`Session::open`:
+  loaded first, so a broken project leaves the open one; the symbol preload and the parts indexer for its own tables). What
+  stays is keyed by a path of the project's folder and checked against the file's stamp (text variables, embedded files,
+  previews, the project's library tables), or is not the project's (library indexes and verdicts, 3D models, fonts). The page
+  loads again after a switch; another page sees the switch by `GET /api/workspace` and loads again. Projects are named, never
+  given as paths (a browser cannot browse the server's disk); `<workspace>/.eda-workspace.json` keeps the projects opened, most
+  recent first. Without `--workspace` the server serves its one `-C` folder as always.
+
 ## Parts cache
 
 - **One SQLite index of the installed libraries** (2026-11-16, `task-v21-parts`;

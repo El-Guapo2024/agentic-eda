@@ -13,6 +13,8 @@ import { makeVersionEnv } from "./versionEnv";
 import { openUpdateDialog } from "./updatePcbAction";
 import { isCanvasTab } from "./editorAdapter";
 import type { ActionHandler, CommonActionContext } from "./commonActions";
+import { inWorkspace, openWorkspaceDialog, switchToProject } from "../state/workspace";
+import { OPEN_RECENT_ACTION } from "../kicad-port/workspace";
 
 /** `wxLaunchDefaultBrowser`: the page in a new browser tab, which the opener cannot reach (`noopener`). */
 export function openExternal(url: string): void {
@@ -55,6 +57,18 @@ export function registerSuiteActions(m: Map<string, ActionHandler>, ctx: CommonA
   // ACTIONS::showFootprintEditor / showSymbolEditor -- COMMON_CONTROL::ShowPlayer: `Kiway().Player( FRAME_FOOTPRINT_EDITOR / FRAME_SCH_SYMBOL_EDITOR )`
   // opens the editor's window and raises it. One window with a tab per editor here (as `pcbnew.EditorControl.showEeschema` does), so the
   // tab is the window.
+  // ACTIONS::doNew / ACTIONS::open in the board and schematic editors, when the studio serves a workspace (`eda board serve --workspace`): the editors run
+  // under the project manager, so they are its File > New Project... and Open Project... (KICAD_MANAGER_CONTROL::NewProject / OpenProject, state/workspace.ts,
+  // components/WorkspaceDialogs.tsx) and File > Open Recent reopens a project of the history. Only on those two tabs: the library editors' Ctrl+N is
+  // their own New Footprint / New Symbol (actionTabGate.ts). Without a workspace the studio serves one project and they stay unregistered.
+  if (inWorkspace() && (tab === "pcb" || tab === "schematic")) {
+    m.set("common.Control.new", () => openWorkspaceDialog("new"));
+    m.set("common.Control.open", () => openWorkspaceDialog("open"));
+    m.set(OPEN_RECENT_ACTION, (name) => {
+      if (typeof name === "string") void switchToProject(name);
+    });
+  }
+
   m.set("common.Control.showFootprintEditor", () => dispatch({ type: "SET_TAB", tab: "footprint" }));
   m.set("common.Control.showSymbolEditor", () => dispatch({ type: "SET_TAB", tab: "symbol" }));
 

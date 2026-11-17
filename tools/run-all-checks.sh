@@ -16,7 +16,7 @@
 #
 # Which board a check needs is written in its header, on a line of its own:
 #
-#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files|legacy]
+#   // run-all-checks: board=<kind> [minutes=<m>] [ui=import-foreign|import-files|legacy] [workspace=1]
 #
 # and the kinds are made here (see make_board): mcu30 (examples/mcu_board_30plus.yaml, unplaced), mcu30-nofp (the same with no package on R1..R8 and D1..D8), mcu30-new (the same where `eda board new` puts a new board,
 # in the middle of its page; every other kind is made with `--origin 0,0`, the page's corner, which the checks' coordinates were written for), mcu30-few (U1, R1 and R2 placed), mcu30-placed (`eda place`),
@@ -31,7 +31,8 @@
 # `gps.lbr` (an Eagle library), for Migrate Libraries and the libraries kicad-cli converts (needs $KICAD_SRC_DIR); `fixtures=broken-symdir` a folder symbol library
 # `Broken.kicad_symdir` with a good file and a cut-off one (a library KiCad 10 loads with errors); `fixtures=cvpcb` e2e/cvpcb.equ as `cvpcb-check.equ` (a footprint
 # association file for cvpcb.check.js); `fixtures=rescue-on-open` the mark `eda import-kicad` leaves for Rescue Symbols at the studio's opening. Several are joined by commas. `fixtures=cvpcb` puts
-# web/studio/e2e/cvpcb.equ (a footprint association file) in the board's folder as `cvpcb-check.equ`, for cvpcb.check.js.
+# web/studio/e2e/cvpcb.equ (a footprint association file) in the board's folder as `cvpcb-check.equ`, for cvpcb.check.js. `workspace=1` serves the board as
+# the project "board" of a workspace folder of its own (`eda board serve --workspace <dir> -C <dir>/board`: workspace-v22.check.js).
 #
 # Needs: Playwright with Chromium ($PLAYWRIGHT_MODULE, default ~/tools/pw/node_modules/playwright/index.mjs), kicad-cli on the PATH
 # (or $EDA_KICAD_CLI), ngspice for the simulator check.
@@ -321,7 +322,10 @@ run_one() { # run_one <check> <port>: prints the check's line; its logs are in $
     if [ "$(meta "$c" fixtures none)" = cvpcb ]; then
         cp "$e2e/cvpcb.equ" "$r/board/cvpcb-check.equ" || { printf 'FAIL %-22s %s is missing\n' "$c" "$e2e/cvpcb.equ"; return 1; }
     fi
-    env "${served[@]}" "$eda" board serve -C "$r/board" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
+    # `workspace=1`: the board is the project "board" of a workspace folder of its own (`serve --workspace`), where the check makes and opens others
+    local where=(-C "$r/board")
+    if [ "$(meta "$c" workspace 0)" = 1 ]; then mkdir -p "$r/ws" && mv "$r/board" "$r/ws/board" && where=(--workspace "$r/ws" -C "$r/ws/board"); fi
+    env "${served[@]}" "$eda" board serve "${where[@]}" --port "$port" --ui "$uidir" > "$r/serve.log" 2>&1 &
     pid=$!
     url=""
     for _ in $(seq 1 100); do

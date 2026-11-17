@@ -46,7 +46,7 @@ import { reshapeCmds } from "../../kicad-port/shapeFill";
 import { applyCommands } from "../../actions/pcbSweepKit";
 import { useImportPreview, type ImportPreview } from "../../state/importPreview";
 import { picker } from "../../actions/pcbPicker";
-import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
+import { boardFitBounds, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { boardDashRatios, paintBoard, type PaintOptions } from "./painter";
 import { buildPaintAppearance } from "./appearancePaint";
 import { netsContext } from "../../kicad-port/appearanceNets";
@@ -470,9 +470,10 @@ export function Canvas() {
   // against a too-small box.
   const userMovedRef = useRef(false);
   useEffect(() => {
-    if (!board?.outline || userMovedRef.current) return;
-    const bounds = boundsOfPoints(board.outline);
-    if (!bounds || containerSize.width < 50 || containerSize.height < 50) return;
+    if (!board || userMovedRef.current) return;
+    // the outline's box, or the page on a board with no outline yet (`boardFitBounds`: PCB_BASE_FRAME::GetBoardBoundingBox)
+    const bounds = boardFitBounds(board.outline?.length ? board.outline : (board.outline_polys ?? []).flatMap((p) => p.outer), board.page?.size_nm);
+    if (containerSize.width < 50 || containerSize.height < 50) return;
     dispatch({ type: "SET_VIEW", view: fitTransform(bounds, containerSize.width, containerSize.height) });
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
   }, [board, containerSize, dispatch]);
