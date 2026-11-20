@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { fetchFootprintLibraryNames } from "../../api/client";
+import { useLibrariesGeneration } from "../../state/liveLibraries";
 import { fetchAnyFootprint, fetchAnySymbol } from "../../api/libraryClient";
 import { autoAssociate, fetchCvpcbFootprint, type CvpcbFootprint } from "../../api/cvpcbClient";
 import type { Cmd } from "../../api/types";
@@ -79,6 +80,7 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
   const [autoBusy, setAutoBusy] = useState(false);
 
   const current = (r: Row) => staged[r.ref] ?? r.footprint;
+  const generation = useLibrariesGeneration();
 
   useEffect(() => {
     let alive = true;
@@ -89,7 +91,8 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
     return () => {
       alive = false;
     };
-  }, []);
+    // asked again when the libraries changed on disk (PARITY-common.md section 34)
+  }, [generation]);
 
   // The first selected symbol's own footprint filters and pin count (`GetFootprintFilters`, `GetPinCount`).
   const firstRow = rows.find((r) => r.ref === selected[0]);

@@ -57,6 +57,7 @@ mod library_buffer;
 mod library_convert;
 mod http_lib;
 mod library_index;
+mod library_live;
 mod library_place;
 mod library_save_api;
 mod library_search;

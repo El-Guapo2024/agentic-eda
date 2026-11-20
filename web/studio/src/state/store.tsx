@@ -21,7 +21,8 @@ import { revisionOf } from "../kicad-port/checkRevision";
 import { getCheckerView } from "./checkerView";
 import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, refilterDrc, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, setRequestVariants, setSchCmdPrefs, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, setRouterStrict, type CarryStep, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersionAndLibraries, fetchView, postCarry, setRequestVariants, setSchCmdPrefs, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, routeCancel, setRouterStrict, type CarryStep, type SharedView } from "../api/client";
+import { noteLibraryStamp } from "./liveLibraries";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -2294,8 +2295,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const tick = async () => {
       try {
         fetchView().then(applyRemoteView).catch(() => {});
-        const v = await fetchVersion();
+        const { version: v, libraries } = await fetchVersionAndLibraries();
         if (stopped) return;
+        // a library table or library file changed on disk (an agent, the CLI, another tab): what the page kept of the libraries is dropped and the choosers
+        // and trees on screen ask again (state/liveLibraries.ts; PARITY-common.md section 34)
+        noteLibraryStamp(libraries);
         if (v !== lastVersion) {
           lastVersion = v;
           dispatch({ type: "VERSION", version: v });

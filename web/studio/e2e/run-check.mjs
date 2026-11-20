@@ -7,7 +7,7 @@
 //   - the older ones that are one expression resolving to their results (a list of { name, ok, detail }, an object { ok, results }, or that as a
 //     JSON string): the expression's promise is awaited, and a global with `.results` (if the script has one) shows the progress.
 // The before-run screenshot goes to $RUN_CHECK_SHOT (default /tmp/run-check-start.png).
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname } from "node:path";
 
@@ -21,11 +21,13 @@ const global = (src.match(/window\.(__\w+Check)\s*=/) || [])[1] ?? null;
 const { open } = await import(resolve(dirname(file), "browser.mjs"));
 const { b, p, errors, shot } = await open();
 // A check that needs a library file changed on disk by something else than the studio (UI-LEFT-2 LL3: a library edited outside is offered for reloading) asks
-// the runner: `window.__runCheckWriteFile(path, text)` writes a `.kicad_sym`, `.kicad_mod` or legacy `.lib` file under the system's temporary folder (where the checks' boards
-// are served from), and nothing else.
+// the runner: `window.__runCheckWriteFile(path, text)` writes a `.kicad_sym`, `.kicad_mod` or legacy `.lib` file, or a project's `sym-lib-table` / `fp-lib-table`
+// (an agent adding a library: livelibs-v23.check.js), under the system's temporary folder (where the checks' boards are served from), and nothing else. A
+// library folder it is written into (`X.pretty/`) is made first.
 await p.exposeFunction("__runCheckWriteFile", (path, text) => {
   const full = resolve(String(path));
-  if (!/\.(kicad_sym|kicad_mod|lib)$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
+  if (!/(\.(kicad_sym|kicad_mod|lib)|\/(sym|fp)-lib-table)$/.test(full) || !(full.startsWith(resolve(tmpdir()) + "/") || full.startsWith("/tmp/"))) return `refused: ${full}`;
+  mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, String(text));
   return "ok";
 });

@@ -24,6 +24,7 @@ import { FootprintPreview } from "./chooser/ChooserPreview";
 import { ModelPreview3D } from "./footprint/ModelPreview3D";
 import { LibChooserTree } from "./chooser/LibChooserTree";
 import { chooserFocusGuard, useChooser } from "./chooser/useChooser";
+import { useLibrariesGeneration } from "../state/liveLibraries";
 import "../styles/chooser.css";
 
 export type FootprintPick = { kind: "footprint"; name: string } | { kind: "unplaced"; ref: string };
@@ -121,6 +122,7 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
   // The selected footprint's drawing and description, loaded for this one only.
   const chosen = chosenOf(chooser.selectedRow);
   const selectedId = chosen && !chosen.item.id.startsWith("ref:") ? chosen.item.id : null;
+  const generation = useLibrariesGeneration();
   const [details, setDetails] = useState<{ id: string; info: FootprintDetails | null; drawing: LibraryFootprint | null; error: string | null } | null>(null);
   useEffect(() => {
     if (!selectedId) {
@@ -138,7 +140,8 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+    // and again when the libraries changed on disk (PARITY-common.md section 34)
+  }, [selectedId, generation]);
   const shown = details && details.id === selectedId ? details : null;
   // The 3D view of the selected footprint: its own geometry under its models, the way the tab of Footprint Properties shows them.
   const [preview3d, setPreview3d] = useState<{ id: string; part: Part | null } | null>(null);

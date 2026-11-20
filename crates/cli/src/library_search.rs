@@ -507,6 +507,15 @@ fn footprint_cache() -> &'static FootprintCache {
     C.get_or_init(Default::default)
 }
 
+/// Forget the index of the library at `path` (`crate::library_live`: it changed on disk): the next ask reads it again. A footprint written in place leaves
+/// its folder's time, which is all the cache compares.
+pub(crate) fn forget(kind: Kind, path: &Path) {
+    match kind {
+        Kind::Symbol => drop(lock(symbol_cache()).remove(path)),
+        Kind::Footprint => drop(lock(footprint_cache()).remove(path)),
+    }
+}
+
 /// The file (or folder library, KiCad 10's `.kicad_symdir`) of symbol library `lib`.
 fn symbol_path<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<PathBuf, String> {
     src.lib_path(Kind::Symbol, lib)

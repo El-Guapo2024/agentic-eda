@@ -208,6 +208,7 @@ const footprintDetails = new Map<string, Promise<FootprintDetails>>();
 /** Forget the items and drawings read so far: the library tables changed, so a nickname may lead to another file. */
 export function resetChooserCaches(): void {
   entriesCache.clear();
+  allEntriesCache.clear();
   symbolDetails.clear();
   footprintDetails.clear();
   footprintSelections.clear();

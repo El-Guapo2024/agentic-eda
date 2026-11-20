@@ -144,6 +144,10 @@ pub(crate) fn cached_footprints(dir: &Path, stamp: SystemTime) -> Option<(Vec<St
         if files != list.len() {
             return None;
         }
+        // and each of them as the rows were read from (a footprint written in place leaves the folder's time: `crate::library_live`), or the folder is read
+        if row.files_stamp.as_deref() != Some(refresh::files_stamp(&refresh::list_files(Kind::Footprint, dir)).as_str()) {
+            return None;
+        }
         list.sort_by(|a, b| crate::library_search::natural_cmp(&a.0, &b.0).then_with(|| a.0.cmp(&b.0)));
         Some(list.into_iter().unzip())
     })

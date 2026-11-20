@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchEntries, searchInstalled, warmUpSearch, type ChooserFilter, type SearchAnswer } from "../../api/libraryChooserClient";
 import { fetchInstalledLibraries, type InstalledLibrary } from "../../api/libraryIndexClient";
+import { useLibrariesGeneration } from "../../state/liveLibraries";
 import {
   composeGroups,
   initialSelection,
@@ -87,6 +88,10 @@ const POWER_LIBS_POLL_MS = 500;
 export function useChooser(o: ChooserOptions): Chooser {
   const { kind, active } = o;
   const pinned = useLibraryTree(kind).pinned;
+  // the page's library answers were dropped (a table or a library changed on disk, state/liveLibraries.ts): the open chooser asks again in place
+  const generation = useLibrariesGeneration();
+  const generationRef = useRef(generation);
+  generationRef.current = generation;
   const [query, setQueryState] = useState("");
   const [debounced, setDebounced] = useState("");
   const [installed, setInstalled] = useState<InstalledLibrary[]>([]);
@@ -173,7 +178,7 @@ export function useChooser(o: ChooserOptions): Chooser {
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, kind, onlyPower]);
+  }, [active, kind, onlyPower, generation]);
   const shownInstalled = useMemo(() => (onlyPower ? installed.filter((l) => powerLibs?.has(l.name)) : installed), [installed, onlyPower, powerLibs]);
 
   // The search text, after the debounce.
@@ -217,13 +222,30 @@ export function useChooser(o: ChooserOptions): Chooser {
       ctl.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, kind, debounced, searching, filterKey, searchKey]);
+  }, [active, kind, debounced, searching, filterKey, searchKey, generation]);
 
   // A narrower filter changes what a library holds: forget what was loaded.
   useEffect(() => {
     setLoaded(new Map());
     setLoading(new Set());
   }, [filterKey, kind]);
+
+  // The libraries changed on disk (PARITY-common.md section 34): the list of libraries and the items of the open ones are asked again, the search and
+  // the selection kept.
+  useEffect(() => {
+    if (generation === 0) return;
+    setLoaded(new Map());
+    setLoading(new Set());
+    if (!active) return;
+    let cancelled = false;
+    fetchInstalledLibraries(kind)
+      .then((libs) => !cancelled && setInstalled(libs))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generation]);
 
   // An open installed library gets its items.
   const installedNames = useMemo(() => new Set(installed.map((l) => l.name)), [installed]);
@@ -233,8 +255,10 @@ export function useChooser(o: ChooserOptions): Chooser {
     for (const lib of new Set([...openGroups].map((g) => sourceLibrary(installed, g)))) {
       if (!installedNames.has(lib) || loaded.has(lib) || loading.has(lib)) continue;
       setLoading((prev) => new Set(prev).add(lib));
+      const asked = generationRef.current;
       fetchEntries(kind, lib, o.filter)
-        .then((items) => setLoaded((prev) => new Map(prev).set(lib, items)))
+        // an answer asked before the libraries changed is not the library's now
+        .then((items) => asked === generationRef.current && setLoaded((prev) => new Map(prev).set(lib, items)))
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() =>
           setLoading((prev) => {

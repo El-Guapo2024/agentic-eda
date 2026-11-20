@@ -835,7 +835,9 @@ fn handle(stream: &mut TcpStream, (method, target, body): (String, String, Vec<u
             Some(root) => serve_file(stream, root, "index.html"),
             None => respond(stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
         },
-        ("GET", "/api/version") => respond(stream, "200 OK", "application/json", version(dir, job).to_string().as_bytes()),
+        // The stamp of the board's libraries rides along (`crate::library_live`, PARITY-common.md section 34): the page's poll drops what it kept of the
+        // libraries when it moves. A header, so the version the page and the checks compare stays the design's own.
+        ("GET", "/api/version") => respond_with(stream, "200 OK", "application/json", &[("X-Library-Stamp", &crate::library_live::stamp(dir))], version(dir, job).to_string().as_bytes()),
         // The pixels of a board's reference image and of a schematic's image (the state describes them; crates/cli/src/image_api.rs).
         ("GET", "/api/pcb_image") => {
             let r = crate::image_api::pcb_image(dir, target);
@@ -1514,7 +1516,13 @@ fn request_domain(body: &[u8]) -> Option<eda_ops::Domain> {
 }
 
 fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> Result<(), String> {
-    let head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len());
+    respond_with(stream, status, kind, &[], body)
+}
+
+/// [`respond`] with headers of its own (`GET /api/version`'s library stamp).
+fn respond_with(stream: &mut TcpStream, status: &str, kind: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<(), String> {
+    let extra: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    let head = format!("HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{extra}Connection: close\r\n\r\n", body.len());
     stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body)).map_err(|e| e.to_string())
 }
 
