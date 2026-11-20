@@ -15,6 +15,7 @@
 // dock layout's (the Libraries column folds to its handle).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchAllEntries, fetchEntries } from "../../api/libraryChooserClient";
+import { useLibrariesGeneration } from "../../state/liveLibraries";
 import type { ChooserItem } from "../../kicad-port/libChooser";
 import { availableColumns, cellText, columnsTemplate, columnsWidth, extraFieldsOf, SELECT_COLUMNS_ACTION, SELECT_COLUMNS_LABEL, treeColumns } from "../../kicad-port/libTreeColumns";
 import { closeSelectColumns, openSelectColumns, setLibTreeColumns, useLibTreeColumnWidths, useLibTreeColumns, useSelectColumnsOpen } from "../../state/libTreeColumns";
@@ -92,6 +93,13 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
   const choosing = useSelectColumnsOpen(treeId);
   const columns = useMemo(() => treeColumns(shown), [shown]);
   const extra = columns.slice(1);
+  // the libraries changed on disk (PARITY-common.md section 34): the columns are read again
+  const generation = useLibrariesGeneration();
+  const [seenGeneration, setSeenGeneration] = useState(generation);
+  if (seenGeneration !== generation) {
+    setSeenGeneration(generation);
+    setDetails(new Map());
+  }
   useEffect(() => {
     let alive = true;
     const merge = (libs: ReadonlyMap<string, readonly ChooserItem[]>) =>
@@ -104,7 +112,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
     return () => {
       alive = false;
     };
-  }, [kind]);
+  }, [kind, generation]);
   const openInstalled = groups.filter((g) => g.installed && isOpen(g)).map((g) => g.lib);
   const openKey = openInstalled.join("\u0001");
   useEffect(() => {
@@ -120,7 +128,7 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
     return () => {
       alive = false;
     };
-  }, [openKey, extra.length, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openKey, extra.length, kind, generation]); // eslint-disable-line react-hooks/exhaustive-deps
   const available = useMemo(() => availableColumns([...details.values()].map(extraFieldsOf)), [details]);
   // each column at its kept width (`column_widths`, dragged in the header; Item 300 and Description 600 at first), the last one filling the rest
   // (`FinishTreeInitialization`); the tree scrolls sideways when they are wider than the pane, as KiCad's does (UI-LEFT-2 LL4)

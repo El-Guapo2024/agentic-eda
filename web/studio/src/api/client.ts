@@ -17,6 +17,7 @@ import type { SchCmdPrefs } from "../kicad-port/schCmdPrefs";
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
 import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
 import { withDefaults } from "../kicad-port/libraryDefaults";
+import { LIBRARY_STAMP_HEADER } from "../kicad-port/libraryStamp";
 
 export class ApiError extends Error {}
 
@@ -51,6 +52,16 @@ export function postView(patch: Partial<Pick<SharedView, "tab" | "selection" | "
 /** Changes whenever the board, activity.jsonl, or the routing job does. Poll this; refetch state only when it changes. */
 export function fetchVersion(): Promise<string> {
   return getJson<string>("/api/version");
+}
+
+/**
+ * [`fetchVersion`] with the stamp of the board's libraries the answer carries (`X-Library-Stamp`, crates/cli/src/library_live.rs; PARITY-common.md section 34):
+ * another stamp than the last one is a library table or a library file changed on disk. `null` from a server that does not say.
+ */
+export async function fetchVersionAndLibraries(): Promise<{ version: string; libraries: string | null }> {
+  const r = await fetch("/api/version", { cache: "no-store" });
+  if (!r.ok) throw new ApiError(`/api/version: HTTP ${r.status}`);
+  return { version: (await r.json()) as string, libraries: r.headers.get(LIBRARY_STAMP_HEADER) };
 }
 
 /**

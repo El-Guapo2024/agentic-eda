@@ -35,6 +35,7 @@ import {
   type SymbolDetails,
 } from "../api/libraryChooserClient";
 import { fetchInstalledLibraries } from "../api/libraryIndexClient";
+import { useLibrariesGeneration } from "../state/liveLibraries";
 import type { LibraryFootprint, LibrarySymbol } from "../api/types";
 import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
 import { bodyStyleCount, bodyStyleDescription } from "../kicad-port/symBodyStyles";
@@ -112,6 +113,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
   const [project, setProject] = useState<ProjectSymbol[]>([]);
   const [installedNames, setInstalledNames] = useState<ReadonlySet<string>>(new Set());
   const [loadError, setLoadError] = useState<string | null>(null);
+  const generation = useLibrariesGeneration();
   useEffect(() => {
     let cancelled = false;
     fetchProjectSymbols()
@@ -123,7 +125,8 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
     return () => {
       cancelled = true;
     };
-  }, []);
+    // asked again when the libraries changed on disk (PARITY-common.md section 34): a library added to the project's table is one of the installed ones
+  }, [generation]);
 
   const recent = recentItems(power ? "power" : "symbol");
   const wanted = pick ? anySymbol : power ? isPower : notPower;
@@ -177,7 +180,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
     return () => {
       cancelled = true;
     };
-  }, [id, installedNames]);
+  }, [id, installedNames, generation]);
   const shown = loaded && loaded.id === id ? loaded : null;
   const info = shown?.info ?? null;
   const units = Math.max(1, info?.units ?? shown?.symbol?.unit_count ?? chosen?.item.units ?? 1);
@@ -218,7 +221,7 @@ function SymbolChooser({ power, at, pick }: { power: boolean; at?: [number, numb
     return () => {
       cancelled = true;
     };
-  }, [footprintName]);
+  }, [footprintName, generation]);
   const fpShown = footprint && footprint.name === footprintName ? footprint : null;
 
   // The footprint selector (`populateFootprintSelector`): the symbol's pin count (`GetGraphicalPins( 0, 1 )`; here its distinct pin numbers, the same unless two

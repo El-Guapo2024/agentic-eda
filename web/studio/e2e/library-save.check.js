@@ -30,6 +30,9 @@
   const dialog = (label) => document.querySelector(`[role=dialog][aria-label="${label}"]`);
   const button = (scope, label) => [...(scope?.querySelectorAll("button") ?? [])].find((b) => b.textContent.trim() === label);
   const treeRow = (id) => document.querySelector(`[role=treeitem][data-name="${CSS.escape(id)}"]`);
+  // a row's Item column alone (its name and the modified mark): the Description column follows the library's file, read again once it is saved
+  // (live libraries, PARITY-common.md section 34)
+  const itemText = (row) => { if (!row) return undefined; const c = row.cloneNode(true); c.querySelectorAll("[data-column]").forEach((e) => e.remove()); return c.textContent.trim(); };
   // the library's row by the name it carries: its text ends in the count (and " *" when modified), and a name that ends in a digit -- the base-36 time in these
   // checks' names does, 10 times in 36 -- read as part of the count once the digits were stripped from the text
   const libRow = (lib) => document.querySelector(`.library-tree-group[data-library="${CSS.escape(lib)}"]`);
@@ -115,7 +118,7 @@
     const m = await modified("symbol");
     t(m.items.includes(id) && m.libraries.includes(SYM_A), `modified before the save: ${JSON.stringify(m)}`);
     await itemRow(id);
-    t(await until(() => treeRow(id)?.textContent.trim() === "LsR *", 5000), `the tree marks it: "${treeRow(id)?.textContent.trim()}"`);
+    t(await until(() => itemText(treeRow(id)) === "LsR *", 5000), `the tree marks it: "${itemText(treeRow(id))}"`);
     t(await until(() => /\*/.test(libRow(SYM_A)?.textContent ?? ""), 3000), "and its library");
     t((await savedSymbol(id)) === null, "the file has no LsR yet");
     // Save (Ctrl+S) with the symbol selected in the tree: the library's file
@@ -127,7 +130,7 @@
     t(file && file.pins.length === 2 && file.description === "Saved by the browser check", `the file holds the edited symbol: ${file && file.pins.length} pins, "${file && file.description}"`);
     t((await modified("symbol")).items.length === 0, "nothing is modified after the save");
     await itemRow(id);
-    t(await until(() => treeRow(id)?.textContent.trim() === "LsR", 5000), `the mark is gone: "${treeRow(id)?.textContent.trim()}"`);
+    t(await until(() => itemText(treeRow(id)) === "LsR", 5000), `the mark is gone: "${itemText(treeRow(id))}"`);
   });
 
   await scenario("symbol: Save As into another table library asks before it overwrites, in any case, and the copy is saved there", async (t) => {
@@ -239,7 +242,7 @@
     await cmd({ op: "put_library_footprint", footprint: { ...fp, description: "Saved by the browser check" }, overwrite: true });
     t((await modified("footprint")).items.includes(id), "the edit is not saved yet");
     await itemRow(id);
-    t(await until(() => treeRow(id)?.textContent.trim() === "LsFp1 *", 5000), `the tree marks it: "${treeRow(id)?.textContent.trim()}"`);
+    t(await until(() => itemText(treeRow(id)) === "LsFp1 *", 5000), `the tree marks it: "${itemText(treeRow(id))}"`);
     await selectItem(id);
     const r = await run("common.Control.save");
     t(r.ok, `Save: ${JSON.stringify(r.toast ?? r.error)}`);
